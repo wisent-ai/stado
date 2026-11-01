@@ -277,6 +277,30 @@ final class DatabaseCopyStore: ObservableObject {
         }
     }
 
+    /// `stado database tls reissue NAME --json`: a new server certificate
+    /// signed by the database's own authority, its unit restarted.
+    func reissueTLS(name: String) async {
+        guard !isRunning else { return }
+        isRunning = true
+        defer { isRunning = false }
+        do {
+            let reissued = try await cli.json(
+                TLSReissued.self, arguments: ["database", "tls", "reissue", name, "--json"], confirmsMutation: true
+            )
+            report = ["\(name): a new certificate for \(reissued.address) at \(reissued.certificate); \(reissued.unit) restarted on \(reissued.host); the authority is unchanged"]
+            problem = nil
+        } catch {
+            problem = error.localizedDescription
+        }
+    }
+
+    private struct TLSReissued: Codable {
+        let unit: String
+        let host: String
+        let address: String
+        let certificate: String
+    }
+
     /// One row of `stado database backup --json`: a kept backup, or the
     /// cause it was not taken.
     private struct BackupRow: Codable {

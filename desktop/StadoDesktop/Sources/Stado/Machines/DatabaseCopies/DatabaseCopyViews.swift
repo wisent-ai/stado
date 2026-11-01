@@ -56,6 +56,10 @@ struct DatabaseCopyMenuItems: View {
             Task { await store.retireAuth(name: database) }
         }
         .disabled(store.isRunning)
+        Button("Reissue TLS certificate") {
+            Task { await store.reissueTLS(name: database) }
+        }
+        .disabled(store.isRunning)
     }
 }
 

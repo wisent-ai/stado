@@ -14,7 +14,7 @@ use crate::cli::CmdError;
 use super::owner_vault::Owner;
 use crate::cli::database::dump::tools::program;
 
-mod tls;
+pub(super) mod tls;
 
 /// The role every fleet Postgres is initialised with.
 const SUPERUSER: &str = "postgres";

@@ -22,6 +22,7 @@ use super::supabase::owner_vault;
 
 mod destroy;
 mod postgres;
+pub(super) mod reissue;
 
 pub(super) use destroy::destroy;
 

@@ -32,6 +32,30 @@ pub(super) fn certificates(
             .arg(&authority),
         "openssl req (authority)",
     )?;
+    restrict(&authority_key)?;
+    server_certificate(directory, data, address, policy)?;
+    std::fs::read_to_string(&authority).map_err(|error| {
+        CmdError::click(format!("read {}: {error}", authority.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })
+}
+
+/// A new server key and certificate for `address` and loopback, signed by
+/// the database's authority in `directory`, written into `data` where the
+/// server reads them: what `certificates` issues at placement and `stado
+/// database tls reissue` issues again, so consumers keep the authority they
+/// verify against.
+pub(in crate::cli::database) fn server_certificate(
+    directory: &Path,
+    data: &Path,
+    address: &str,
+    policy: &PostgresTls,
+) -> Result<(), CmdError> {
+    let openssl = program("openssl", None)?;
+    let days = policy.certificate_days.to_string();
+    let key = format!("rsa:{}", policy.rsa_bits);
+    let authority_key = directory.join("ca.key");
+    let authority = directory.join("ca.crt");
     let request = directory.join("server.csr");
     let server_key = data.join("server.key");
     run(
@@ -50,11 +74,16 @@ pub(super) fn certificates(
     } else {
         format!("DNS:{address}")
     };
+    // The routable address and loopback by IP only. A `DNS:localhost` entry
+    // made libpq before 15 check an IP-address connection against the DNS
+    // names alone (`server certificate for "localhost" does not match host
+    // name "<address>"`), so `stado database backup` of a PostgreSQL 14
+    // fleet server, which runs that release's own client, was refused.
     let extensions = directory.join("server.ext");
     write_private(
         &extensions,
         &format!(
-            "basicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\nsubjectAltName={subject},IP:{},DNS:localhost\n",
+            "basicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\nsubjectAltName={subject},IP:{}\n",
             std::net::Ipv4Addr::LOCALHOST
         ),
     )?;
@@ -79,11 +108,5 @@ pub(super) fn certificates(
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     }
-    for key in [&authority_key, &server_key] {
-        restrict(key)?;
-    }
-    std::fs::read_to_string(&authority).map_err(|error| {
-        CmdError::click(format!("read {}: {error}", authority.display()))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-    })
+    restrict(&server_key)
 }

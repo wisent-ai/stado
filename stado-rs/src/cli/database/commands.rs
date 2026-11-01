@@ -156,6 +156,12 @@ pub(crate) enum DatabaseCommands {
         #[command(subcommand)]
         command: super::auth::AuthCommands,
     },
+    /// The TLS of a fleet Postgres: `reissue` signs a new server certificate
+    /// with the authority it was placed with and restarts its unit.
+    Tls {
+        #[command(subcommand)]
+        command: super::TlsCommands,
+    },
     /// What a provider bills for the databases it hosts, read from its API:
     /// per project add-ons, prices, the month's total and gateway traffic.
     Cost {

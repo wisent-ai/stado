@@ -32,6 +32,16 @@ pub(crate) use self::dump::files::BackupsArgs;
 pub(crate) use self::dump::migrate::MigrateArgs;
 pub(crate) use self::dump::BackupArgs;
 
+/// `stado database tls <verb>`.
+#[derive(Debug, clap::Subcommand)]
+pub(crate) enum TlsCommands {
+    /// Sign a new server certificate for a fleet Postgres with the authority
+    /// it was placed with (its loopback named by IP only, which every libpq
+    /// release verifies) and restart `<name>-database`; consumers keep the
+    /// item's `ca_certificate`.
+    Reissue(fleet::reissue::ReissueArgs),
+}
+
 use self::reads::{list, resolve};
 use self::verbs::{change_consumers, declare, remove};
 
@@ -161,6 +171,9 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
         DatabaseCommands::Auth { command } => match command {
             auth::AuthCommands::Place(args) => auth::place(args).await,
             auth::AuthCommands::Retire(args) => auth::retire::retire(args).await,
+        },
+        DatabaseCommands::Tls { command } => match command {
+            TlsCommands::Reissue(args) => fleet::reissue::reissue(args).await,
         },
         DatabaseCommands::Cost { provider, json } => match provider {
             DatabaseProvider::Supabase => supabase::cost::cost(json).await,
