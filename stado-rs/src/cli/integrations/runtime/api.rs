@@ -92,23 +92,37 @@ impl PreparedApi {
                         CmdError::usage(format!("dashboard.port is not a port: {error}"))
                     })?,
             };
-            // Under the host Stado unit, a renamed predecessor holds this port
-            // and runs the only reconciler that would otherwise retire it; it
-            // is retired only when it serves the very root this store serves.
-            crate::deploy::service::take_over_on_start(store.local_storage_path())
-                .await
-                .map_err(|error| {
-                    CmdError::click(format!("serve {error}"))
-                        .stating(crate::primitives::failure::FailureCode::InfraDown)
-                })?;
-            crate::dashboard::PreparedListener::bind(&bind, port)
-                .await
-                .map_err(|error| {
-                    let mut wrapped =
-                        CmdError::click(format!("API listener preparation failed: {error}"));
-                    wrapped.failure = CmdError::from(error).failure;
-                    wrapped
-                })?
+            // Under the host Stado unit, a renamed predecessor may hold this
+            // port and run the only reconciler that would otherwise retire
+            // it; it is retired only when it serves the very root this store
+            // serves. Finding it reads every loaded unit of the host, which
+            // took minutes on a Mac while the API did not listen, so it runs
+            // only when the port is held: the listener binds first, and only
+            // a bind that fails retires what holds the port and binds again.
+            let listener_failed = |error: crate::dashboard::DashboardError| {
+                let mut wrapped =
+                    CmdError::click(format!("API listener preparation failed: {error}"));
+                wrapped.failure = CmdError::from(error).failure;
+                wrapped
+            };
+            match crate::dashboard::PreparedListener::bind(&bind, port).await {
+                Ok(listener) => listener,
+                Err(held) => {
+                    eprintln!(
+                        "serve: the API listener {bind}:{port} did not bind ({held}); retiring \
+                         the units that hold it before binding again"
+                    );
+                    crate::deploy::service::take_over_on_start(store.local_storage_path())
+                        .await
+                        .map_err(|error| {
+                            CmdError::click(format!("serve {error}"))
+                                .stating(crate::primitives::failure::FailureCode::InfraDown)
+                        })?;
+                    crate::dashboard::PreparedListener::bind(&bind, port)
+                        .await
+                        .map_err(listener_failed)?
+                }
+            }
         };
         Ok(Self {
             listener,
