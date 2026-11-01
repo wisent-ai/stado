@@ -55,7 +55,10 @@ pub fn swift_without_keychain() -> Option<i32> {
         forwarded.insert(1, OsString::from("--disable-keychain"));
     }
     let error = Command::new(&real).args(&forwarded).exec();
-    eprintln!("stado: the real swift {} could not start: {error}", Path::new(&real).display());
+    eprintln!(
+        "stado: the real swift {} could not start: {error}",
+        Path::new(&real).display()
+    );
     Some(127)
 }
 
@@ -124,7 +127,11 @@ pub fn desktop(
             .env("WISENT_WORKSPACE", &runtime.workspace)
             // ... and creates a package dependency's checkout the workspace
             // lacks, as this installation creates its own source's.
-            .envs(runtime.create_checkouts.then_some((crate::native::workspace::CREATES_CHECKOUTS, "installation")))
+            .envs(
+                runtime
+                    .create_checkouts
+                    .then_some((crate::native::workspace::CREATES_CHECKOUTS, "installation")),
+            )
             .envs(manifest::secrets(&[&document])?),
     );
     if let Err(error) = built {

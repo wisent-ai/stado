@@ -187,10 +187,7 @@ async fn record(
     unrecorded: &mut Vec<String>,
 ) -> Vec<String> {
     let (product, repository) = (step.product, step.repository);
-    let evidence = format!(
-        "Every refusal of the run:\n{}",
-        refused.refusals.join("\n")
-    );
+    let evidence = format!("Every refusal of the run:\n{}", refused.refusals.join("\n"));
     let found = format!("{repository}@{}", refused.revision);
     let owners: Vec<Option<&String>> = match authors.is_empty() {
         true => vec![None],

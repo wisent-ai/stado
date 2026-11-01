@@ -127,7 +127,13 @@ pub fn commit(
             }
             .fingerprint()?;
             if actual != fingerprint {
-                let owners = ownership::owners_of(runtime, product, surface, recipe, &placement.destination)?;
+                let owners = ownership::owners_of(
+                    runtime,
+                    product,
+                    surface,
+                    recipe,
+                    &placement.destination,
+                )?;
                 bail!(
                     "installation would change {}, which {} still owns; finish, install or remove that surface first",
                     placement.destination.display(),

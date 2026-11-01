@@ -104,7 +104,11 @@ pub fn failure(host: &str, report: &ServingReport, ports: &[PortVerdict]) -> Opt
              {}, pid {}); `stado service logs {} --host {host}` says why it is not running",
             report.unit,
             report.loaded,
-            if report.launchd_pid.is_empty() { "none" } else { &report.launchd_pid },
+            if report.launchd_pid.is_empty() {
+                "none"
+            } else {
+                &report.launchd_pid
+            },
             report.unit
         )),
         SERVING_UNKNOWN => Some(format!(

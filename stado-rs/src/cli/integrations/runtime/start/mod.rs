@@ -113,7 +113,10 @@ pub(super) async fn start_roles(
     // The roles below read the store; when it is behind this process's own
     // resolver they start once it serves.
     supervisor
-        .during_startup(step("this process's resolver serving", own_route::await_own_resolver(args.resolver)))
+        .during_startup(step(
+            "this process's resolver serving",
+            own_route::await_own_resolver(args.resolver),
+        ))
         .await?;
     if let Some(interval) = args.release_interval_seconds {
         let release_target = identity::required_name(&target)?;
@@ -237,9 +240,7 @@ pub(super) async fn start_roles(
         // and that ending, or a handoff to an installed release, is this
         // process's success.
         if idle_shutdown {
-            supervisor.spawn_finite("worker", move || async move {
-                worker().await.map(|_| ())
-            })?;
+            supervisor.spawn_finite("worker", move || async move { worker().await.map(|_| ()) })?;
         } else {
             // A resident worker hands off to the release installed over it
             // once its slots are finished: the service ends as replaced, so

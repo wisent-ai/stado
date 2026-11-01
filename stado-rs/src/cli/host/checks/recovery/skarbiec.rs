@@ -35,7 +35,12 @@ async fn run_recovery(
             // daemon or lock it could not act on; a failure keeps all of it.
             // The failure detail is stderr, or stdout when stderr is empty;
             // stdout is added only when the detail is not already it.
-            let found: Vec<&str> = ran.stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+            let found: Vec<&str> = ran
+                .stdout
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect();
             let found = match found.is_empty() || ran.stderr.trim().is_empty() {
                 true => String::new(),
                 false => format!("; it printed: {}", found.join(" | ")),

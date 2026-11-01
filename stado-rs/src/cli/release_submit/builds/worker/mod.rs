@@ -126,7 +126,11 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     // A release runs the tests its product declares and nothing that only
     // says whether the source is formatted or lints: whether code compiles
     // is learned from the tests that compile it.
-    for gate in recipe.quality.iter().filter(|gate| gate.kind == GateKind::Test) {
+    for gate in recipe
+        .quality
+        .iter()
+        .filter(|gate| gate.kind == GateKind::Test)
+    {
         let step = execute(&gate.name, &gate.argv, &source, &environment)?;
         let passed = step.status == StepStatus::Passed;
         quality.push(step);

@@ -60,7 +60,10 @@ pub fn validate(root: &Path, expected: Option<&str>) -> Result<PathBuf> {
     }
     let branch = canonical_branch(&root)?;
     if git(&root, &["branch", "--show-current"])? != branch {
-        bail!("{} is not on {branch}; no branch was switched", root.display());
+        bail!(
+            "{} is not on {branch}; no branch was switched",
+            root.display()
+        );
     }
     if let Some(expected) = expected {
         let origin = origin(&root)?;

@@ -23,7 +23,10 @@ pub fn hold(root: &Path, revision: &str) -> Result<()> {
     git(root, &["fetch", "--quiet", "origin"])
         .with_context(|| format!("fetching {}'s origin to read {revision}", root.display()))?;
     if !holds() {
-        bail!("{revision} is not a commit of {} even after fetching its origin", root.display());
+        bail!(
+            "{revision} is not a commit of {} even after fetching its origin",
+            root.display()
+        );
     }
     Ok(())
 }

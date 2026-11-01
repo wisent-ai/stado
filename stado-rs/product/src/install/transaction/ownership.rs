@@ -66,7 +66,11 @@ pub fn sibling(other: &state::ProductState, product: &str, surface: &str, recipe
 /// surface, and not a service surface placed on another host (its receipt
 /// names this machine's staging paths as its source, and an unfinished one
 /// would hold this machine's own binary against every later install here).
-fn other_surfaces(runtime: &Runtime, product: &str, surface: &str) -> Result<Vec<state::ProductState>> {
+fn other_surfaces(
+    runtime: &Runtime,
+    product: &str,
+    surface: &str,
+) -> Result<Vec<state::ProductState>> {
     let mut others = Vec::new();
     for state in state::all(runtime)? {
         let this = state.product == product && state.surface == surface;
@@ -115,7 +119,13 @@ pub fn shared_for_install(
 
 /// The surfaces, as `<product>/<surface> (<status>)`, owning a path that
 /// overlaps `path` which this install may not change: what a refusal names.
-pub fn owners_of(runtime: &Runtime, product: &str, surface: &str, recipe: &Value, path: &Path) -> Result<Vec<String>> {
+pub fn owners_of(
+    runtime: &Runtime,
+    product: &str,
+    surface: &str,
+    recipe: &Value,
+    path: &Path,
+) -> Result<Vec<String>> {
     Ok(other_surfaces(runtime, product, surface)?
         .into_iter()
         .filter(|state| !sibling(state, product, surface, recipe))

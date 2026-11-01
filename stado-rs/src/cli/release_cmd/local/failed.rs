@@ -44,10 +44,17 @@ fn record(version: &str) -> Result<PathBuf, CmdError> {
 /// refused a build any host published as failed in its beacon
 /// (`failed_releases`); a restore is not, because it runs while this host's
 /// services may be down and reinstalls a release that ran here before.
-pub(super) async fn refuse_failed(version: &str, program: &Path, delivery: bool) -> Result<(), CmdError> {
+pub(super) async fn refuse_failed(
+    version: &str,
+    program: &Path,
+    delivery: bool,
+) -> Result<(), CmdError> {
     let revision = build_revision(program)?;
     let same_build = |record: &Value| {
-        record.get("revision").and_then(Value::as_str).is_none_or(|failed| failed == revision)
+        record
+            .get("revision")
+            .and_then(Value::as_str)
+            .is_none_or(|failed| failed == revision)
     };
     let path = record(version)?;
     match std::fs::read_to_string(&path) {
@@ -103,12 +110,23 @@ pub(super) async fn refuse_failed(version: &str, program: &Path, delivery: bool)
 /// (rev <revision>)`), or the refusal naming what it said instead.
 fn build_revision(program: &Path) -> Result<String, CmdError> {
     let output = crate::wait::output(std::process::Command::new(program).arg("--version"))
-        .map_err(|error| CmdError::click(format!("{} --version could not run: {error}", program.display())))?;
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{} --version could not run: {error}",
+                program.display()
+            ))
+        })?;
     let said = String::from_utf8_lossy(&output.stdout).into_owned();
     said.split_once("(rev ")
         .and_then(|(_, rest)| rest.split_once(')'))
         .map(|(revision, _)| revision.to_owned())
-        .ok_or_else(|| CmdError::refused(format!("{} --version names no source revision: {}", program.display(), said.trim())))
+        .ok_or_else(|| {
+            CmdError::refused(format!(
+                "{} --version names no source revision: {}",
+                program.display(),
+                said.trim()
+            ))
+        })
 }
 
 /// The releases this host recorded as failed, as its beacon publishes them

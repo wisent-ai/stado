@@ -44,13 +44,13 @@ pub(in crate::install::recipes::build) fn newest_of_revision(
     let entries = match fs::read_dir(&records) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error).with_context(|| format!("listing {}", records.display()))
-        }
+        Err(error) => return Err(error).with_context(|| format!("listing {}", records.display())),
     };
     let mut newest: Option<(String, PathBuf)> = None;
     for entry in entries {
-        let path = entry.with_context(|| format!("listing {}", records.display()))?.path();
+        let path = entry
+            .with_context(|| format!("listing {}", records.display()))?
+            .path();
         let record = read(&path)?;
         if record["product"] != product || record["revision"] != revision {
             continue;
