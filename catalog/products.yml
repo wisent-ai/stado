@@ -685,6 +685,31 @@ products:
     for_surface: service
     alternative: STADO_CREDENTIALS_STORE=file://<owner-only path> (persisted as credentials.store) selects the owner-only file credential store; alert channels and every other credential read then answer from it without Skarbiec
     alternative_source: stado/stado-rs/src/credential_store/mod.rs
+  - product: oko
+    surface: cli
+    for_surface: cli
+    alternative: without Oko the quality check and the submit queue read no ruling and run every gate, a change run and the billing watch say Oko is not installed and leave the review, defect or notice unrecorded while the rest of the pass runs, and the runtime stops tell an absent Oko from one that refused; only the prose judgements (judged quality commands, provider mail, quota replies, the operator console's families, the macOS host link) refuse, naming oko as what they could not reach
+    alternative_source: stado/stado-rs/src/cli/integrations/runtime/stops/mod.rs
+  - product: tama
+    surface: cli
+    for_surface: cli
+    alternative: without Tama a push or submit names its session from PI_SESSION_FILE, and a change run waits for a review round recorded with `stado change review` instead of Tama's harsh review; a scheduled build whose approval lives in Tama's registry is refused, naming Tama as what could not be asked
+    alternative_source: stado/stado-rs/src/cli/release_loop/allowed.rs
+  - product: brama
+    surface: service
+    for_surface: cli
+    alternative: only `stado inference routes` runs a host's Brama, and it answers brama_absent on a host without one; nothing else Stado does needs Brama
+    alternative_source: stado/stado-rs/src/deploy/inference/routes.rs
+  - product: jeden
+    surface: cli
+    for_surface: cli
+    alternative: only the Jeden workload runner runs Jeden, and it refuses a run on a host without the managed Jeden, saying it is missing; every other workload runner and all of Stado run without it
+    alternative_source: stado/stado-rs/src/cli/workload/runners/jeden/detached.rs
+  - product: weles
+    surface: cli
+    for_surface: cli
+    alternative: only Stado's Weles release activation, browser runtime and placement policy act on a host's Weles checkout, and each refuses saying there is no release checkout on a host without one; nothing else Stado does runs Weles
+    alternative_source: stado/stado-rs/src/deploy/weles_browser_runtime/remote.rs
 - id: lem
   name: Lem
   status: active
