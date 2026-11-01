@@ -150,14 +150,10 @@ pub fn perform(
         let dependencies = dependencies::install(
             dependencies::Request {
                 runtime,
-                document,
                 product,
                 id,
                 surface,
-                host,
                 without: &without,
-                with_prerequisites,
-                lock: &lock,
             },
             stack,
         )?;
