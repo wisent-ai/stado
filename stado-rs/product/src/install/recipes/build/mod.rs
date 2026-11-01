@@ -12,7 +12,7 @@ use crate::{
     signing, source,
 };
 use anyhow::{bail, Context, Result};
-pub use desktop::desktop;
+pub use desktop::{desktop, swift_without_keychain};
 use execution::step;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, fs, path::Path};

@@ -7,7 +7,8 @@
 //! now. The time is not read from `/bin/ps`: `ps` is setuid, and a process
 //! tree that may not start one is refused it with EPERM.
 
-/// The kernel's birth second for `pid`, or absence when no process holds it.
+/// The kernel's birth second for `pid`, or absence when no process of this
+/// account holds it.
 #[cfg(target_os = "macos")]
 pub fn birth_seconds(pid: i32) -> Result<Option<u64>, String> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
@@ -39,6 +40,15 @@ pub fn birth_seconds(pid: i32) -> Result<Option<u64>, String> {
         Err(_negative) => false,
     };
     if error.raw_os_error() == Some(libc::ESRCH) || !exists {
+        return Ok(None);
+    }
+    // The kernel refuses another account's process (EPERM) and answers every
+    // process of this one. Every record read against a birth (a wait, a
+    // holding, a product lock) names a process this account started, so a
+    // pid now held by another account's process is not the recorded one: it
+    // was reused, as a lock left by a removal days ago named a pid a root
+    // daemon holds now, and every install of that surface was refused.
+    if error.raw_os_error() == Some(libc::EPERM) {
         return Ok(None);
     }
     Err(format!(

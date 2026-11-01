@@ -7,7 +7,7 @@ pub mod operation;
 pub use operation::perform;
 pub mod plan;
 pub(crate) mod policy;
-mod recipes;
+pub(crate) mod recipes;
 mod services;
 mod settle;
 pub mod status;

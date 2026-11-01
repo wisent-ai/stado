@@ -53,6 +53,10 @@ pub use source::checkout as canonical_checkout;
 /// a recipe declares any.
 pub use install::{declares as installation_declares, redeclare as redeclare_installation};
 
+/// When this process was started as `swift` by a desktop build, the real
+/// SwiftPM run without the keychain, and its exit status.
+pub use install::recipes::build::swift_without_keychain;
+
 /// The committed tree of a revision as plain files, the tree an install
 /// builds; `stado quality check` reads its gates there too.
 pub use source::export as export_committed_source;

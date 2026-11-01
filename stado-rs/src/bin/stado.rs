@@ -30,6 +30,10 @@ use tracing_subscriber::EnvFilter;
 const ENTRY_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 fn main() {
+    // A desktop build's PATH starts this Stado as its `swift`.
+    if let Some(code) = stado_product::swift_without_keychain() {
+        std::process::exit(code);
+    }
     // Log filter from $RUST_LOG, warn when it says nothing (Python logs to
     // stderr at WARNING). Installed on the real main thread: the writer is
     // process-global and outlives the entry thread.
