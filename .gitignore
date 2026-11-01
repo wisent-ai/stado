@@ -16,6 +16,13 @@ wisent_compute/targets/registry.json
 .alert-watcher-*
 stado-rs/target/
 stado-rs/target-*/
+# Every crate's own Cargo target directory: Cargo writes it beside the
+# manifest a build names, and a host Cargo run exports the committed source
+# under `<manifest directory>/target/host-cargo/` (deploy/host_run/cargo).
+# Unignored, that export's manifests read as second copies of every
+# canonical package, and every later Cargo operation on any product that
+# resolves a Stado crate refused with "has 2 manifests".
+stado-rs/**/target/
 # A real-test package under tests/<area>/ is its own Cargo workspace (the
 # product manifest refuses new test entries from a gate), so Cargo builds it
 # under that area unless CARGO_TARGET_DIR says otherwise, and writes the
