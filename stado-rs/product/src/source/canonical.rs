@@ -7,8 +7,26 @@
 //! failure attributed to the request, never as an unknown failure.
 
 use super::{git, repository};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
+
+/// Make sure `root` holds `revision`: a commit pushed after the checkout's
+/// last fetch is fetched from its origin first, and one origin does not
+/// carry either is refused naming the checkout, instead of a read at it that
+/// answers "names no commit" or "exists on disk, but not in <revision>".
+pub fn hold(root: &Path, revision: &str) -> Result<()> {
+    let commit = format!("{revision}^{{commit}}");
+    let holds = || git(root, &["cat-file", "-e", &commit]).is_ok();
+    if holds() {
+        return Ok(());
+    }
+    git(root, &["fetch", "--quiet", "origin"])
+        .with_context(|| format!("fetching {}'s origin to read {revision}", root.display()))?;
+    if !holds() {
+        bail!("{revision} is not a commit of {} even after fetching its origin", root.display());
+    }
+    Ok(())
+}
 
 /// The branch a canonical checkout works on: `main` for a repository of
 /// Wisent's organization, whose one checkout works on main, and for another's

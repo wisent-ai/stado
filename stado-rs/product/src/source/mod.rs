@@ -1,6 +1,6 @@
 mod canonical;
 use canonical::canonical_branch;
-pub use canonical::NotCanonical;
+pub use canonical::{hold, NotCanonical};
 mod index;
 pub(crate) use index::WorkspaceIndex;
 mod provenance;

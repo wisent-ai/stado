@@ -107,6 +107,11 @@ pub fn for_installation(
             .to_string_lossy()
             .into_owned(),
     };
+    // A Stado installed at a revision pushed after its checkout's last fetch
+    // reads the catalog at that revision, so it is fetched first.
+    if matches!(chosen, Choice::InstalledRevision) {
+        crate::source::hold(root, wanted)?;
+    }
     let commit = git(
         root,
         &["rev-parse", "--verify", &format!("{wanted}^{{commit}}")],

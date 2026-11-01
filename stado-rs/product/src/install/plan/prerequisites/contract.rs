@@ -37,26 +37,8 @@ fn path_beside(release: &str) -> String {
     path.display().to_string()
 }
 
-/// Make sure `root` holds `revision`: a commit pushed after the checkout's
-/// last fetch is fetched from its origin first, and one origin does not
-/// carry either is refused naming the checkout, instead of a manifest
-/// read that answers "exists on disk, but not in <revision>".
-fn held(root: &Path, revision: &str) -> Result<()> {
-    let commit = format!("{revision}^{{commit}}");
-    let holds = || source::git(root, &["cat-file", "-e", &commit]).is_ok();
-    if holds() {
-        return Ok(());
-    }
-    source::git(root, &["fetch", "--quiet", "origin"])
-        .with_context(|| format!("fetching {}'s origin to read {revision}", root.display()))?;
-    if !holds() {
-        bail!("{revision} is not a commit of {} even after fetching its origin", root.display());
-    }
-    Ok(())
-}
-
 pub(super) fn manifest(root: &Path, revision: &str, release_path: &str) -> Result<Manifest> {
-    held(root, revision)?;
+    source::hold(root, revision)?;
     let reference = format!("{revision}:{release_path}");
     let content = source::git(root, &["show", &reference])
         .with_context(|| format!("reading release manifest {release_path} at {revision}"))?;
