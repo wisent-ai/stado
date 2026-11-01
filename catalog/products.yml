@@ -392,7 +392,8 @@ products:
   - product: jeden
     surface: cli
     for_surface: service
-    bound_because: 'Weles asks every model question by running the jeden program (callJeden): the agent loop and its observation step, vision escalation and recorded vision, capture diagnosis, the trajectory writer and the trajectories that ask a model; Jeden then reaches Brama or the provider WELES_MODEL_ENDPOINT names, and no model path without Jeden exists'
+    alternative: 'callJeden runs no Jeden for a model question: the agent loop, vision, the trajectory writer and the trajectories ask Brama, the provider WELES_MODEL_ENDPOINT names, or the alternative Stado resolves when Brama does not answer, directly; only capture diagnosis asks for the Jeden agent runtime with its tools (modelOnly: false) and runs the jeden program, so only that diagnosis stops without Jeden'
+    alternative_source: weles/src/agent/jeden.ts
 - id: skarbiec
   name: Skarbiec
   status: active
