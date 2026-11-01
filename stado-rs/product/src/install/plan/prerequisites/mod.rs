@@ -148,31 +148,36 @@ pub fn tested(runtime: &Runtime, product: &str, surface: &str, revision: &str) -
     })?;
     let runs = record["steps"][&key].as_array();
     let checked = runs.and_then(|runs| runs.iter().rev().find(|run| run["revision"] == revision));
-    let last_green = runs
+    // What the operator can install instead: the last revision its declared
+    // gates passed on, or, when none ever did, that no install is possible
+    // before one does.
+    let instead = match runs
         .and_then(|runs| runs.iter().rev().find(|run| run["green"] == true))
         .and_then(|run| run["revision"].as_str())
-        .map_or("none".to_owned(), str::to_owned);
+    {
+        Some(green) => format!(
+            "the last being {green}; install it with --source-commit {green}"
+        ),
+        None => "and no revision of it ever passed them, so none installs until one does".to_owned(),
+    };
     match checked {
         Some(run) if run["green"] == true => Ok(()),
         Some(run) => {
-            let refusals: Vec<&str> = run["refusals"]
-                .as_array()
-                .map(|all| all.iter().filter_map(Value::as_str).collect())
-                .unwrap_or_default();
+            let refusals = match run["refusals"].as_array() {
+                Some(all) => all.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; "),
+                None => format!("its run records no refusals: {run}"),
+            };
             bail!(
-                "{key} at {revision} failed its declared gates in the main check ({}): {}; it \
-                 installs only a revision they passed on, the last being {last_green}. Repair \
-                 the refusals, or install the last green one with --source-commit {last_green}. \
+                "{key} at {revision} failed its declared gates in the main check ({}): {refusals}; \
+                 it installs only a revision they passed on, {instead}. Repair the refusals. \
                  Nothing was built",
                 path.display(),
-                refusals.join("; ")
             )
         }
         None => bail!(
             "{key} at {revision} was never checked by the main check ({}), so no test of it \
-             passed; it installs only a revision its declared gates passed on, the last being \
-             {last_green}. `stado ci run` checks new commits of main, or install the last green \
-             one with --source-commit {last_green}. Nothing was built",
+             passed; `stado ci run` checks new commits of main. It installs only a revision its \
+             declared gates passed on, {instead}. Nothing was built",
             path.display()
         ),
     }
