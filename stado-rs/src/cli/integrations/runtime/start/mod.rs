@@ -199,7 +199,7 @@ pub(super) async fn start_roles(
     }
     if args.run_worker {
         let idle_shutdown = args.worker.idle_shutdown;
-        let worker = move || {
+        let worker = move || async move {
             agent::run(
                 args.worker.gpu_type,
                 idle_shutdown,
@@ -211,13 +211,34 @@ pub(super) async fn start_roles(
                 args.worker.vast_idle_window_s,
                 args.worker.poll_seconds,
             )
+            .await
         };
         // An ephemeral machine's worker ends when no eligible work remains,
-        // and that ending is this process's success.
+        // and that ending, or a handoff to an installed release, is this
+        // process's success.
         if idle_shutdown {
-            supervisor.spawn_finite("worker", worker)?;
+            supervisor.spawn_finite("worker", move || async move {
+                worker().await.map(|_| ())
+            })?;
         } else {
-            supervisor.spawn("worker", worker)?;
+            // A resident worker hands off to the release installed over it
+            // once its slots are finished: the service ends as replaced, so
+            // the init system starts that release, and the handoff never
+            // reads as this release failing (which once asked for the
+            // previous release to be reinstalled). Returning without a
+            // handoff is a stop.
+            supervisor.spawn_replacing("worker", move || async move {
+                match worker().await? {
+                    agent::AgentEnd::Handoff(detail) => {
+                        eprintln!("stado serve component=worker: {detail}");
+                        Ok(())
+                    }
+                    agent::AgentEnd::Idle => Err(CmdError::unreachable(
+                        "the resident worker returned without handing off to an installed \
+                         release, so it no longer serves",
+                    )),
+                }
+            })?;
         }
     }
     // A serve line without a worker target or resolver needs no registry

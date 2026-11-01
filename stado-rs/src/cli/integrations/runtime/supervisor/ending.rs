@@ -42,13 +42,14 @@ impl Supervisor {
     ) -> Result<Served, CmdError> {
         drop(self.sender.take());
         let delivering = self.delivering.clone();
+        let replacing = self.replacing.clone();
         match self.next().await {
             Some(End {
                 component,
                 how: Ended::Finished(detail),
             }) => {
                 eprintln!("{detail}");
-                if delivering.contains(&component) {
+                if delivering.contains(&component) || replacing.contains(&component) {
                     Ok(Served::Replaced)
                 } else {
                     Ok(Served::Finished)

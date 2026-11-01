@@ -80,6 +80,8 @@ pub(super) struct Supervisor {
     components: Vec<&'static str>,
     /// Delivery components still running.
     delivering: Vec<&'static str>,
+    /// Components whose `Ok` hands the process over to an installed release.
+    replacing: Vec<&'static str>,
 }
 
 impl Supervisor {
@@ -90,6 +92,7 @@ impl Supervisor {
             ended,
             components: Vec::new(),
             delivering: Vec::new(),
+            replacing: Vec::new(),
         }
     }
 
@@ -108,6 +111,25 @@ impl Supervisor {
     {
         self.start(name, true, make_future)?;
         self.delivering.push(name);
+        Ok(())
+    }
+
+    /// A resident component whose `Ok` hands this process over to the
+    /// release installed over its program (the worker, once its slots are
+    /// finished): it ends the service as replaced, so the init system starts
+    /// the installed release, and never counts as this release failing. Any
+    /// error it returns is a stop as for any resident component.
+    pub(super) fn spawn_replacing<F, E>(
+        &mut self,
+        name: &'static str,
+        make_future: impl FnOnce() -> F + Send + 'static,
+    ) -> Result<(), CmdError>
+    where
+        F: Future<Output = Result<(), E>> + 'static,
+        E: Display + 'static,
+    {
+        self.start(name, true, make_future)?;
+        self.replacing.push(name);
         Ok(())
     }
 

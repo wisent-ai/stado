@@ -12,6 +12,9 @@ use crate::deploy::local_install::{label, systemd_unit, InstallPlan, LocalOs};
 use crate::deploy::{production_runner, CommandSpec};
 use crate::targets::ComputeTarget;
 
+mod moved;
+pub(crate) use moved::move_off_replaced;
+
 /// The unit's name under Stado's label prefix.
 const UNIT: &str = "stado-network";
 
@@ -38,7 +41,8 @@ fn account(home: &Path) -> Result<String, CmdError> {
 /// The node's own copy of Stado, which its unit runs. A Stado install
 /// replaces `~/.stado/bin/stado`; the node keeps running this copy, so macOS
 /// keeps judging the node by the code identity it already decided Local
-/// Network for, and only `network up` places a new one.
+/// Network for. `network up` places a new one, and an install places one
+/// only for a node unit still running the program it replaced (`moved`).
 fn pinned_program(home: &Path) -> PathBuf {
     home.join(".stado").join("libexec").join("stado-network")
 }
@@ -90,15 +94,10 @@ pub(super) fn identity_change() -> Result<Identity, CmdError> {
     })
 }
 
-/// Place this binary as the node's program: staged beside it, then renamed
+/// Place `incoming` as the node's program: staged beside it, then renamed
 /// over it, so a running node keeps the image it started from.
-fn place(home: &Path) -> Result<PathBuf, CmdError> {
+fn place(home: &Path, incoming: &Path) -> Result<PathBuf, CmdError> {
     let placed = pinned_program(home);
-    let incoming = std::env::current_exe().map_err(|error| {
-        CmdError::declaration(format!(
-            "this binary cannot name its own path for the node to run: {error}"
-        ))
-    })?;
     let failed = |error: std::io::Error| {
         CmdError::click(format!(
             "the node's program {} could not be placed: {error}",
@@ -151,8 +150,19 @@ fn plan(target: &ComputeTarget) -> Result<(InstallPlan, PathBuf), CmdError> {
 /// Place this binary as the node's program, then write and load the unit,
 /// restarting a node already running.
 pub(super) async fn install(target: &ComputeTarget) -> Result<String, CmdError> {
+    let incoming = std::env::current_exe().map_err(|error| {
+        CmdError::declaration(format!(
+            "this binary cannot name its own path for the node to run: {error}"
+        ))
+    })?;
+    install_from(target, &incoming).await
+}
+
+/// Place `incoming` as the node's program, then write and load the unit,
+/// restarting a node already running.
+async fn install_from(target: &ComputeTarget, incoming: &Path) -> Result<String, CmdError> {
     let (plan, home) = plan(target)?;
-    place(&home)?;
+    place(&home, incoming)?;
     execute_plan(
         &plan,
         &home,

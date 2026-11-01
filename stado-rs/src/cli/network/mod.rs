@@ -10,7 +10,7 @@ use crate::cli::CmdError;
 
 mod down;
 mod status;
-mod unit;
+pub(crate) mod unit;
 mod up;
 
 #[derive(Debug, Subcommand)]

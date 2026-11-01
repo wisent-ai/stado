@@ -10,8 +10,8 @@
 /// here is here because a path comparison cannot see it — which is why
 /// [`RunningProgram::matches_process`], which compares paths and then
 /// timestamps, reports a unit whose binary was swapped underneath it as
-/// matching, and why `recycle_launchd` decides what to restart by string
-/// equality on `argv[0]`.
+/// matching, and why `recycle_launchd` compares the image a unit runs with
+/// the installed file rather than the paths that name them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageIdentity {
     /// Where the identity was read: the declared path for an installed file,

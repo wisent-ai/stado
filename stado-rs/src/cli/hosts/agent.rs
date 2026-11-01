@@ -117,6 +117,13 @@ pub(crate) async fn apply_registry_target(
     Ok((gpu_type, resolved))
 }
 
+/// How the worker ended without failing: its idle shutdown, or a handoff to
+/// the Stado release installed over it, which its supervisor starts.
+pub enum AgentEnd {
+    Idle,
+    Handoff(String),
+}
+
 /// The worker. `serve` resolved the host's registry target, GPU type and
 /// environment before it started this role.
 #[allow(clippy::too_many_arguments)]
@@ -130,7 +137,7 @@ pub async fn run(
     vast_max_duration_s: Option<i64>,
     vast_idle_window_s: Option<i64>,
     poll_seconds: Option<u64>,
-) -> Result<(), CmdError> {
+) -> Result<AgentEnd, CmdError> {
     let poll = std::time::Duration::from_secs(poll_seconds.ok_or_else(|| {
         CmdError::usage(
             "the worker needs --poll-seconds: the seconds between queue polls when a poll \
@@ -264,8 +271,11 @@ pub async fn run(
         () = crate::providers::local::host_routines::run(poll) => agent.await,
     };
     match result {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(AgentEnd::Idle),
         Err(error) => {
+            if let Some(handoff) = error.downcast_ref::<local_agent::ReleaseHandoff>() {
+                return Ok(AgentEnd::Handoff(handoff.to_string()));
+            }
             let message = error.to_string();
             let mut refusal = format!("agent loop failed: {message}");
             // Namespace policy can refuse a required key even when the

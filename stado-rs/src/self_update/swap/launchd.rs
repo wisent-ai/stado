@@ -31,6 +31,14 @@ pub(super) async fn recycle_launchd(
         .lookup_self(&hostname)
         .map_err(|error| format!("{context}: cannot identify this host: {error}"))?
         .ok_or_else(|| format!("{context}: no registry target names this machine ({hostname})"))?;
+    // A network node unit still running the program this install replaced
+    // is moved onto the node's own copy first, so the recycle below does not
+    // restart it onto a file macOS has not allowed the local network.
+    if let Some(moved) = crate::cli::network::unit::move_off_replaced(target, paths).await {
+        match moved {
+            Ok(line) | Err(line) => log_fn(&format!("{context}: {line}")),
+        }
+    }
     let runner = crate::deploy::production_runner();
     let units = crate::deploy::service::loaded_image_units(target, &runner)
         .await

@@ -62,6 +62,27 @@ pub fn sibling(other: &state::ProductState, product: &str, surface: &str, recipe
         && same("manifest")
 }
 
+/// Every other surface whose files are on this machine: not absent, not this
+/// surface, and not a service surface placed on another host (its receipt
+/// names this machine's staging paths as its source, and an unfinished one
+/// would hold this machine's own binary against every later install here).
+fn other_surfaces(runtime: &Runtime, product: &str, surface: &str) -> Result<Vec<state::ProductState>> {
+    let mut others = Vec::new();
+    for state in state::all(runtime)? {
+        let this = state.product == product && state.surface == surface;
+        if state.status == crate::state::InstallStatus::Absent || this {
+            continue;
+        }
+        if let Some(host) = state.host.as_deref() {
+            if !runtime.is_this_host(host)? {
+                continue;
+            }
+        }
+        others.push(state);
+    }
+    Ok(others)
+}
+
 /// Paths other surfaces own, split into those a sibling installed from the
 /// same recipe owns (which this install may replace, re-recording the
 /// sibling) and every other owned path (which it may not change).
@@ -73,21 +94,7 @@ pub fn shared_for_install(
 ) -> Result<(BTreeSet<PathBuf>, Vec<state::ProductState>)> {
     let mut strict = BTreeSet::new();
     let mut siblings = Vec::new();
-    for state in state::all(runtime)? {
-        if state.status == crate::state::InstallStatus::Absent
-            || (state.product == product && state.surface == surface)
-        {
-            continue;
-        }
-        // A service surface installed on another host placed its files there;
-        // its receipt records this machine's staging paths as the source it
-        // delivered from, and an unfinished one would otherwise hold this
-        // machine's own binary against every later install here.
-        if let Some(host) = state.host.as_deref() {
-            if !runtime.is_this_host(host)? {
-                continue;
-            }
-        }
+    for state in other_surfaces(runtime, product, surface)? {
         if sibling(&state, product, surface, recipe) {
             siblings.push(state);
             continue;
@@ -104,6 +111,17 @@ pub fn shared_for_install(
         }
     }
     Ok((strict, siblings))
+}
+
+/// The surfaces, as `<product>/<surface> (<status>)`, owning a path that
+/// overlaps `path` which this install may not change: what a refusal names.
+pub fn owners_of(runtime: &Runtime, product: &str, surface: &str, recipe: &Value, path: &Path) -> Result<Vec<String>> {
+    Ok(other_surfaces(runtime, product, surface)?
+        .into_iter()
+        .filter(|state| !sibling(state, product, surface, recipe))
+        .filter(|state| overlaps(path, &state.protected_paths().cloned().collect()))
+        .map(|state| format!("{}/{} ({:?})", state.product, state.surface, state.status))
+        .collect())
 }
 
 /// Whether a sibling surface records `path` among its installed files.

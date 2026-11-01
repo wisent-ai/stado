@@ -1,8 +1,13 @@
 //! `stado network status`: this host's node and every peer the registry
 //! declares, each asked now over the network itself. A peer is `reached`
 //! with the way that carried the question (an endpoint or a relay) or
-//! `unreached` with every way's answer. The command exits non-zero when this
-//! host's own node is not serving, after printing what it found.
+//! `unreached` with every way's answer. The peers are asked by this command's
+//! own process, not by the node: a node left executing a Stado image an
+//! install has since replaced was refused every LAN peer while this command
+//! reached them all, so the node's image is compared with the installed file
+//! and a replaced one is named. The command exits non-zero when this host's
+//! own node is not serving, or serves a replaced image, after printing what
+//! it found.
 
 use serde_json::{json, Value};
 
@@ -22,6 +27,10 @@ pub(super) async fn status(json_output: bool) -> Result<(), CmdError> {
                 .is_some_and(|state| state.port == serving.port)
             && crate::providers::local::helpers::pid_alive(serving.pid as i32)
     });
+    let replaced = match (&published, node_serving) {
+        (Some(node), true) => replaced_image(node.pid),
+        _ => Ok(None),
+    };
     let this_host = state.as_ref().map(|state| state.host.clone());
     let declared: Vec<(String, crate::network::NetworkNode)> = registry
         .targets
@@ -71,6 +80,8 @@ pub(super) async fn status(json_output: bool) -> Result<(), CmdError> {
         "port": state.as_ref().map(|state| state.port),
         "node": published,
         "serving": node_serving,
+        "replaced_image": replaced.as_ref().ok().cloned().flatten(),
+        "image_unread": replaced.as_ref().err(),
         "peers": peers,
         "not_on_network": undeclared,
     });
@@ -83,7 +94,16 @@ pub(super) async fn status(json_output: bool) -> Result<(), CmdError> {
                 node.pid,
                 node.port,
                 if node_serving {
-                    "serving".to_string()
+                    match &replaced {
+                        Ok(None) => "serving".to_string(),
+                        Ok(Some(program)) => format!(
+                            "serving, but on a Stado image an install has since replaced at \
+                             {program}; `stado release local converge` restarts it"
+                        ),
+                        Err(cause) => format!(
+                            "serving; whether it executes the installed Stado cannot be read: {cause}"
+                        ),
+                    }
                 } else {
                     format!(
                         "not serving: {}",
@@ -97,6 +117,9 @@ pub(super) async fn status(json_output: bool) -> Result<(), CmdError> {
             (None, _) => {
                 println!("this host has not joined the Stado network; `stado network up` joins it")
             }
+        }
+        if !peers.is_empty() {
+            println!("  peers, as this command reaches them:");
         }
         for row in &peers {
             let host = row["host"].as_str().map_or("?", |host| host);
@@ -116,6 +139,13 @@ pub(super) async fn status(json_output: bool) -> Result<(), CmdError> {
             println!("  not on the network: {}", undeclared.join(", "));
         }
     }
+    if let (true, Ok(Some(program)), Some(host)) = (node_serving, &replaced, &this_host) {
+        return Err(CmdError::unreachable(format!(
+            "{host}'s Stado network node executes a Stado image an install has since replaced at \
+             {program}, and macOS refuses such a process the local network while it allows the \
+             installed file; `stado release local converge` restarts it"
+        )));
+    }
     if node_serving {
         Ok(())
     } else {
@@ -124,4 +154,21 @@ pub(super) async fn status(json_output: bool) -> Result<(), CmdError> {
             None => "this host has not joined the Stado network; `stado network up` joins it".to_string(),
         }))
     }
+}
+
+/// The program node `pid` was started as, when the file there is no longer
+/// the image the node executes (an install placed another file there since
+/// the node started); none while it is.
+fn replaced_image(pid: u32) -> Result<Option<String>, String> {
+    let program = crate::deploy::service::process_arguments(pid)?
+        .into_iter()
+        .next()
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| format!("node pid {pid} has no program in its arguments"))?;
+    let running = crate::deploy::service::running_images(&[pid])?
+        .remove(&pid)
+        .ok_or_else(|| format!("the image node pid {pid} executes could not be read"))?;
+    let (installed, _) = crate::deploy::service::installed_image(&program)
+        .map_err(|error| format!("{} cannot be read: {error}", program.display()))?;
+    Ok((!running.is_same_file(&installed)).then(|| program.display().to_string()))
 }

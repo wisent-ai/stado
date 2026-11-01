@@ -38,6 +38,31 @@ pub(crate) async fn local_network(error: &io::Error, addresses: &[SocketAddr]) -
     }
     let peer = addresses.iter().find(|address| local(&address.ip()))?;
     let lan = format!("{peer} is on this machine's local network");
+    // The decision below is read for the file at this process's path, which
+    // an install may have replaced since the process started: a network node
+    // left on the replaced image was refused every LAN peer for days while
+    // the installed file, and every fresh process, reached them, and this
+    // answer blamed the peer.
+    match replaced_program() {
+        Ok(Some(program)) => {
+            return Some(format!(
+                "{lan}, and this process still executes a Stado image an install has since \
+                 replaced at {program}: macOS keeps its Local Network answer per executable, and a \
+                 process left on a replaced image is refused the local network while a fresh \
+                 process of the installed file reaches {peer}; `stado release local converge` \
+                 restarts every unit still executing a replaced image"
+            ))
+        }
+        Ok(None) => {}
+        Err(cause) => {
+            return Some(format!(
+                "{lan}, and whether this process still executes the file it started from cannot \
+                 be read ({cause}); a process left on a replaced image is refused the local network, \
+                 and a peer that is off or asleep answers the same: nc reaching {peer} from the \
+                 same shell tells the two apart"
+            ))
+        }
+    }
     let read = match running_binary(&crate::deploy::production_runner()).await {
         Ok(read) => read,
         Err(cause) => {
@@ -74,4 +99,19 @@ pub(crate) async fn local_network(error: &io::Error, addresses: &[SocketAddr]) -
             read.placed
         ),
     })
+}
+
+/// The path of this process's program when the file there is no longer the
+/// image this process executes (an install placed another one since it
+/// started); none while it still is.
+fn replaced_program() -> Result<Option<String>, String> {
+    let program = std::env::current_exe()
+        .map_err(|error| format!("which binary this is cannot be read: {error}"))?;
+    let pid = std::process::id();
+    let running = crate::deploy::service::running_images(&[pid])?
+        .remove(&pid)
+        .ok_or_else(|| format!("the image pid {pid} executes could not be read"))?;
+    let (installed, _) = crate::deploy::service::installed_image(&program)
+        .map_err(|error| format!("{} cannot be read: {error}", program.display()))?;
+    Ok((!running.is_same_file(&installed)).then(|| program.display().to_string()))
 }
