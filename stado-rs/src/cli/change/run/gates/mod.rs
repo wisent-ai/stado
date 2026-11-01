@@ -263,19 +263,16 @@ pub struct Admission<'a> {
     pub resident: bool,
 }
 
-/// Oko's admission of `action` of `product` for `admission`: Ok, or the
-/// refusal naming every answer Oko gave and what would admit it.
-async fn admitted(action: &str, product: &str, admission: &Admission<'_>) -> Result<(), String> {
+/// Oko's decision on `action` of `product` for `admission`: `None` when it
+/// is admitted, `Some` naming every answer Oko gave and what would admit it
+/// when the operator's rulings rule it out, and the error when no decision
+/// could be read.
+async fn admitted(action: &str, product: &str, admission: &Admission<'_>) -> Result<Option<String>, String> {
     let ask = |session| {
-        crate::cli::release_loop::allowed::refusal_as(
-            action,
-            Some(product),
-            admission.purposes,
-            session,
-        )
+        crate::cli::release_loop::allowed::decided_as(action, Some(product), admission.purposes, session)
     };
     if !admission.resident {
-        return ask(admission.session).await.map(drop).map_err(|refused| {
+        return Ok(ask(admission.session).await?.err().map(|refused| {
             format!(
                 "{refused}; this run was started inside an agent session, so its gates were \
                  asked as {}'s work and never as the fleet's daily build, which only a run under \
@@ -283,21 +280,30 @@ async fn admitted(action: &str, product: &str, admission: &Admission<'_>) -> Res
                  routine running `stado change run`)",
                 admission.session.unwrap_or("the operator")
             )
-        });
+        }));
     }
-    let fleet = match ask(None).await {
-        Ok(_) => return Ok(()),
+    let fleet = match ask(None).await? {
+        Ok(_) => return Ok(None),
         Err(refused) => refused,
     };
     let Some(session) = admission.session else {
-        return Err(fleet_refusal(action, product, &fleet));
+        return Ok(Some(fleet_refusal(action, product, &fleet)));
     };
-    ask(Some(session)).await.map(drop).map_err(|own| {
+    Ok(ask(Some(session)).await?.err().map(|own| {
         format!(
             "{}; nor as the work of its submitter, session {session}: {own}",
             fleet_refusal(action, product, &fleet)
         )
-    })
+    }))
+}
+
+/// The action class a gate of `kind` takes, as a ruling names it.
+fn action(kind: GateKind) -> &'static str {
+    match kind {
+        GateKind::Format => crate::cli::release_loop::allowed::FORMAT,
+        GateKind::Lint => crate::cli::release_loop::allowed::COMPILE,
+        GateKind::Test => crate::cli::release_loop::allowed::TEST,
+    }
 }
 
 /// The resident pass's refusal: what Oko said for a run no session asked,
@@ -315,7 +321,10 @@ fn fleet_refusal(action: &str, product: &str, said: &str) -> String {
 /// Every compiling shard of `plan` over `commit` (tree `tree`) of
 /// `checkout`, run or answered by the action cache on the pool of `hosts`
 /// once Oko admitted each action they take for `admission`, and the
-/// refusal naming every shard that refused with the end of its report.
+/// refusal naming every shard that refused with the end of its report. The
+/// gates of an action the operator's rulings rule out are left out, each
+/// action said with the ruling; which kinds of work run is the
+/// installation's decision, made once in its rulings.
 pub async fn compiling(
     checkout: &Path,
     commit: &str,
@@ -329,25 +338,34 @@ pub async fn compiling(
     // session that pushed), never as the work of a session running the
     // pass; the resident pass is asked first as itself ([`Admission`]).
     let mut asked = BTreeSet::new();
+    let mut ruled_out = BTreeSet::new();
     for planned in &plan.compiling {
-        let action = if planned.kind == GateKind::Test {
-            crate::cli::release_loop::allowed::TEST
-        } else {
-            crate::cli::release_loop::allowed::COMPILE
-        };
+        let action = action(planned.kind);
         if !asked.insert(action) {
             continue;
         }
-        admitted(action, &plan.product, admission)
-            .await
-            .map_err(|refused| {
-                CmdError::refused(format!(
-                    "{refused}; gate {} ({}) for {} was not run",
-                    planned.gate, planned.kind, planned.platform
-                ))
-            })?;
+        let decided = admitted(action, &plan.product, admission).await.map_err(|unread| {
+            CmdError::refused(format!(
+                "{unread}; gate {} ({}) for {} was not run",
+                planned.gate, planned.kind, planned.platform
+            ))
+        })?;
+        if let Some(ruling) = decided {
+            eprintln!("stado change run: {ruling}; every {action} gate of {} is left out", plan.product);
+            ruled_out.insert(action);
+        }
     }
-    let remote = remote::run(checkout, commit, tree, plan, hosts).await?;
+    let kept = Plan {
+        product: plan.product.clone(),
+        version: plan.version.clone(),
+        compiling: plan
+            .compiling
+            .iter()
+            .filter(|planned| !ruled_out.contains(&action(planned.kind)))
+            .cloned()
+            .collect(),
+    };
+    let remote = remote::run(checkout, commit, tree, &kept, hosts).await?;
     let refusal = remote
         .iter()
         .filter(|shard| shard.exit_code != 0)

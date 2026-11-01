@@ -28,7 +28,7 @@ pub async fn refusal_as(
 /// Oko's decision on `action` as work `session` asked for: `Ok(Ok(reason))`
 /// when it may run, `Ok(Err(refusal))` when the operator's rulings rule it
 /// out, naming the ruling, and `Err` when no decision was read at all.
-async fn decided_as(
+pub async fn decided_as(
     action: &str,
     product: Option<&str>,
     purposes: &[&str],

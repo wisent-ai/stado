@@ -8,13 +8,9 @@
 //! in every product's release declaration. The operation that started the
 //! check passes its admission down (`allowed`).
 
-use crate::cli::release_loop::allowed::{refusal, ruling, BUILD, COMPILE, TEST};
+use crate::cli::release_loop::allowed::{refusal, ruling, BUILD, COMPILE, FORMAT, TEST};
 use crate::cli::CmdError;
 use crate::release_pipeline::GateKind;
-
-/// The action class a ruling constrains that checking source against its
-/// formatter is (a `format` quality gate).
-const FORMAT: &str = "format";
 
 /// The action a gate of `kind` takes.
 fn action(kind: GateKind) -> &'static str {

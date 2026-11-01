@@ -29,7 +29,7 @@ use crate::cli::CmdError;
 use crate::deploy::host_exec::{installed_program, OKO_CLI, TAMA_CLI};
 
 mod asked;
-pub use asked::{refusal_as, ruling};
+pub use asked::{decided_as, refusal_as, ruling};
 use asked::scope;
 
 /// The action class a ruling constrains that compiling a product is.
@@ -41,6 +41,9 @@ pub const INSTALL: &str = "install";
 /// The action class a ruling constrains that a static check compiling or
 /// analysing the source without building it is (a `lint` quality gate).
 pub const COMPILE: &str = "compile";
+/// The action class a ruling constrains that checking source against its
+/// formatter is (a `format` quality gate).
+pub const FORMAT: &str = "format";
 /// The action class a ruling constrains that running a product's tests is
 /// (a `test` quality gate).
 pub const TEST: &str = "test";
