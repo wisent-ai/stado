@@ -99,6 +99,7 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
             return Ok(serde_json::json!({
                 "product": id,
                 "surface": surface,
+                "catalog": building.catalog_read,
                 "chain": super::plan::prerequisites::chain(
                     &building, &document, product, surface, &revision, &without
                 )?,

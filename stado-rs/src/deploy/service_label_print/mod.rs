@@ -107,14 +107,17 @@ fn first_window() -> String {
 
 /// Ask one host what it holds under one label, refusing an inconclusive
 /// negative observation so internal lifecycle callers cannot treat a failed
-/// domain read as proof that the unit is absent.
+/// domain read as proof that the unit is absent. Every caller decides by the
+/// unit's state and shows no events, so launchd's event log is not read: on
+/// a busy host `log show` over that window ran for many minutes inside each
+/// restart, a unit recycle after an install among them.
 pub async fn print_label(
     target: &ComputeTarget,
     label: &str,
     scope: BootoutScope,
     runner: &Runner,
 ) -> Result<LabelState, DeployError> {
-    let state = inspect_label(target, label, scope, runner).await?;
+    let state = inspect_label_state(target, label, scope, runner).await?;
     if !state.loaded() {
         if let Some(detail) = state.read_failure_detail() {
             return Err(DeployError::unreachable(format!(

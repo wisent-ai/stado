@@ -82,9 +82,7 @@ pub(super) async fn recycle_launchd(
             .map_err(|error| format!("{context}: {} {}: {error}", unit.label, unit.path))?
         };
         let declared_program = declaration.as_ref().map(|unit| unit.program.as_str());
-        let directly_declared = paths
-            .iter()
-            .any(|path| declared_program == Some(path.as_str()));
+        let directly_declared = paths.iter().any(|path| declares(declared_program, path));
         if directly_declared && running.is_none() {
             // A process whose mapped image no longer names an inode on disk is
             // one executing the file this install just replaced. When it is a
@@ -113,11 +111,11 @@ pub(super) async fn recycle_launchd(
         let selected = if directly_declared && running.is_none() {
             installed_images
                 .iter()
-                .find(|(path, _)| declared_program == Some(path.as_str()))
+                .find(|(path, _)| declares(declared_program, path))
         } else {
             running.and_then(|running| {
                 installed_images.iter().find(|(path, installed)| {
-                    (declared_program == Some(path.as_str())
+                    (declares(declared_program, path)
                         || running.path.trim_end_matches(" (deleted)") == path)
                         && !running.is_same_file(installed)
                 })
@@ -212,6 +210,24 @@ pub(super) async fn recycle_launchd(
         restarted.push(service.to_string());
     }
     Ok(restarted)
+}
+
+/// Whether a unit declaring `declared` runs the installed file at `path`:
+/// named by that path, or by a link that resolves to it. A unit that starts
+/// the program through a link (`~/.local/bin/stado`, which installs point at
+/// `~/.stado/bin/stado`) was never recycled once the image it ran was gone,
+/// and kept serving the replaced release until something else ended it.
+fn declares(declared: Option<&str>, path: &str) -> bool {
+    let Some(declared) = declared else {
+        return false;
+    };
+    if declared == path {
+        return true;
+    }
+    match (std::fs::canonicalize(declared), std::fs::canonicalize(path)) {
+        (Ok(declared), Ok(path)) => declared == path,
+        _ => false,
+    }
 }
 
 /// The pid launchd holds for a label: none when the listing leaves it empty,
