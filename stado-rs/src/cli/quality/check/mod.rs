@@ -251,8 +251,9 @@ async fn check_tree(
     ));
     for gate in &declared.gates {
         report.say(&format!("stado quality check: {}", gate.argv.join(" ")));
-        // A format gate compiles nothing; every other kind compiles the tree,
-        // and runs only as work the operator's rulings admit (`admitted`).
+        // A format gate compiles nothing; every other kind compiles the tree.
+        // Every kind runs only as work the operator's rulings admit, and one
+        // they rule out is left out and said (`admitted`).
         let diagnostics = match gate.kind {
             GateKind::Format => Diagnostics::Text,
             _ => Diagnostics::Compiled,
@@ -262,7 +263,12 @@ async fn check_tree(
             "stado quality check: asking Oko to admit gate {:?} ({}) of {product} at {revision}",
             gate.name, gate.kind
         ));
-        admitted::gate(gate.kind, &gate.name, product, revision, exported.purposes).await?;
+        if let Some(ruled_out) =
+            admitted::gate(gate.kind, &gate.name, product, revision, exported.purposes).await?
+        {
+            report.say(&format!("stado quality check: {ruled_out}"));
+            continue;
+        }
         run(&gate.argv, tree, &contract, report, diagnostics).map_err(|error| {
             let refused = error.within(format!(
                 "stado quality check: gate {:?} ({}) of {} refuses {revision} of {}",
