@@ -59,6 +59,9 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     let (document, read) = catalog::committed::for_installation(runtime, "", None)?;
     let mut runtime = runtime.clone();
     runtime.catalog_read = Some(read);
+    // A pass waits for an installation already under way, never supersedes
+    // it: an operator's explicit installation is not stopped by a sync.
+    runtime.wait_for_writer = true;
     let runtime = &runtime;
     // `--clone-missing`: a workspace Stado owns starts empty, and each product's
     // source is cloned into it the first time the product is reconciled.
