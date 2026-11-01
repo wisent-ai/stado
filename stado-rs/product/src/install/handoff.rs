@@ -145,8 +145,16 @@ impl HandOff {
                 "--source-commit",
             ])
             .arg(&self.revision)
+            // The retained build and the receipt are found under this
+            // installation's workspace; without it the binary looked in its
+            // default workspace and found nothing to finish.
+            .arg("--workspace")
+            .arg(&runtime.workspace)
             .args(runtime.signing.arguments())
             .stdin(Stdio::null());
+        if !runtime.embedded_catalog {
+            command.arg("--catalog").arg(&runtime.catalog);
+        }
         if !enclosing.is_empty() {
             command.env(ENCLOSING_ENV, serde_json::to_string(enclosing)?);
         }
