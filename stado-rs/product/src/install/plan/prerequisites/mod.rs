@@ -108,7 +108,8 @@ pub fn revision(
     Ok(revision)
 }
 
-fn green(runtime: &Runtime, product: &str, surface: &str) -> Result<String> {
+/// The main check record, from `STADO_CI_MAIN_RECORD` or `~/.stado`.
+fn ci_record(runtime: &Runtime) -> Result<(PathBuf, Value)> {
     let path = match std::env::var_os(CI_RECORD_ENV) {
         Some(path) => PathBuf::from(path),
         None => runtime.home.join(".stado").join(CI_RECORD),
@@ -116,13 +117,65 @@ fn green(runtime: &Runtime, product: &str, surface: &str) -> Result<String> {
     let record: Value = serde_json::from_slice(
         &fs::read(&path)
             .with_context(|| format!("reading CI main check record {}", path.display()))?,
-    )?;
+    )
+    .with_context(|| format!("the CI main check record {} is not JSON", path.display()))?;
+    Ok((path, record))
+}
+
+fn green(runtime: &Runtime, product: &str, surface: &str) -> Result<String> {
+    let (path, record) = ci_record(runtime)?;
     let key = format!("{product}:{surface}");
     record["steps"][&key].as_array()
         .and_then(|runs| runs.iter().rev().find(|run| run["green"] == true))
         .and_then(|run| run["revision"].as_str())
         .map(str::to_owned)
         .with_context(|| format!("{key} has no qualified last-green revision in {}; `stado ci delivery` names each step's last checked and last green commit and why", path.display()))
+}
+
+/// Refuse `revision` of `product` on `surface` unless the main check
+/// recorded that exact commit green: every gate the product declares, its
+/// tests among them, passed over its committed tree. Asked only for a
+/// product this host's update policy marks `tested`
+/// (`stado product policy set PRODUCT --tested`), so a host that declared
+/// nothing installs as before and Stado still runs without a CI record.
+pub fn tested(runtime: &Runtime, product: &str, surface: &str, revision: &str) -> Result<()> {
+    let key = format!("{product}:{surface}");
+    let (path, record) = ci_record(runtime).with_context(|| {
+        format!(
+            "{key} installs only a revision its declared gates passed on, and which revisions \
+             passed cannot be read; `stado ci run` writes the record. Nothing was built"
+        )
+    })?;
+    let runs = record["steps"][&key].as_array();
+    let checked = runs.and_then(|runs| runs.iter().rev().find(|run| run["revision"] == revision));
+    let last_green = runs
+        .and_then(|runs| runs.iter().rev().find(|run| run["green"] == true))
+        .and_then(|run| run["revision"].as_str())
+        .map_or("none".to_owned(), str::to_owned);
+    match checked {
+        Some(run) if run["green"] == true => Ok(()),
+        Some(run) => {
+            let refusals: Vec<&str> = run["refusals"]
+                .as_array()
+                .map(|all| all.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            bail!(
+                "{key} at {revision} failed its declared gates in the main check ({}): {}; it \
+                 installs only a revision they passed on, the last being {last_green}. Repair \
+                 the refusals, or install the last green one with --source-commit {last_green}. \
+                 Nothing was built",
+                path.display(),
+                refusals.join("; ")
+            )
+        }
+        None => bail!(
+            "{key} at {revision} was never checked by the main check ({}), so no test of it \
+             passed; it installs only a revision its declared gates passed on, the last being \
+             {last_green}. `stado ci run` checks new commits of main, or install the last green \
+             one with --source-commit {last_green}. Nothing was built",
+            path.display()
+        ),
+    }
 }
 
 /// What each verb `product` requires at `revision` needs. A verb whose

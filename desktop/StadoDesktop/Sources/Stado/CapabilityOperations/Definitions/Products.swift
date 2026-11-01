@@ -98,6 +98,7 @@ enum NativeProductOperations {
             .init(id: "mode", label: "Mode", option: "--mode", required: true, choices: ["automatic", "held"], initial: "automatic"),
             .init(id: "window", label: "Local hours HH:MM-HH:MM (automatic only)", option: "--window"),
             .init(id: "reason", label: "Reason (required for held)", option: "--reason"),
+            .init(id: "tested", label: "Install only a revision the main check recorded green", option: "--tested", flag: true),
         ]),
         .init(id: "policy-remove", title: "Remove a product's own update rule, so it follows the default", path: ["product", "policy", "remove"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),

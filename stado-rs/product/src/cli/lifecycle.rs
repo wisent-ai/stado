@@ -215,6 +215,12 @@ pub fn policy() -> Command {
                 "reason",
                 "Why the product is held or limited; required for held",
             ))
+            .arg(flag(
+                "tested",
+                "Every installation of the product on this host, by sync or by hand, builds \
+                 only a revision the main check (`stado ci run`) recorded green: one whose \
+                 declared gates, its tests among them, passed on that commit",
+            ))
     };
     Command::new("policy")
         .about(

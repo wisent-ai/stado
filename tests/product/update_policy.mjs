@@ -21,6 +21,9 @@ import { fileURLToPath } from 'node:url';
 // - an update whose `health` command fails is rolled back to the installation
 //   before it, the failed revision is not installed again on the next pass,
 //   and the next commit is;
+// - a product the policy marks tested is installed, by sync or by hand, only
+//   at a revision the main check record holds green: one it never checked
+//   and one it recorded red are refused naming the last green one;
 // - a policy file that cannot be followed refuses the pass with exit 1 and a
 //   sentence naming the file and what to write.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -238,6 +241,43 @@ try {
   assert.equal(row.decision, 'installed', row.detail);
   assert.equal(row.source_revision, repaired);
   assert.equal(version(), 'v5');
+
+  // 6b. A product the policy marks tested installs only a revision the main
+  // check recorded green, by sync or by hand; this journey's record is its own.
+  const ciRecord = join(output, 'ci-main.json');
+  environment.STADO_CI_MAIN_RECORD = ciRecord;
+  success(product('policy', 'set', 'fixture-tool', '--mode', 'automatic', '--tested'));
+  const untested = commit('v6', true);
+  writeFileSync(ciRecord, JSON.stringify({ steps: { 'fixture-tool:cli': [
+    { revision: repaired, at: new Date().toISOString(), green: true, refusals: [] },
+  ] } }));
+  ({ answer, row } = sync());
+  step('untested revision refused', { exit: answer.status, row, stderr: answer.stderr });
+  assert.equal(answer.status, 1, answer.stderr);
+  assert.equal(row.decision, 'failed', row.detail);
+  assert.match(row.detail,
+    new RegExp(`fixture-tool:cli at ${untested} was never checked by the main check .*the last being ${repaired}`));
+  assert.equal(version(), 'v5', 'an untested revision was installed');
+  writeFileSync(ciRecord, JSON.stringify({ steps: { 'fixture-tool:cli': [
+    { revision: repaired, at: new Date().toISOString(), green: true, refusals: [] },
+    { revision: untested, at: new Date().toISOString(), green: false, refusals: ['test fixture failed'] },
+  ] } }));
+  answer = product('install', 'fixture-tool', '--surface', 'cli', '--source-commit', untested);
+  step('red revision refused by hand', { exit: answer.status, stderr: answer.stderr });
+  assert.notEqual(answer.status, 0);
+  assert.match(answer.stderr, new RegExp(`fixture-tool:cli at ${untested} failed its declared gates in the main check .*test fixture failed`));
+  assert.equal(version(), 'v5', 'a red revision was installed');
+  writeFileSync(ciRecord, JSON.stringify({ steps: { 'fixture-tool:cli': [
+    { revision: repaired, at: new Date().toISOString(), green: true, refusals: [] },
+    { revision: untested, at: new Date().toISOString(), green: true, refusals: [] },
+  ] } }));
+  ({ answer, row } = sync());
+  step('green revision installed', { exit: answer.status, row });
+  assert.equal(row.decision, 'installed', row.detail);
+  assert.equal(row.source_revision, untested);
+  assert.equal(version(), 'v6');
+  success(product('policy', 'remove', 'fixture-tool'));
+  delete environment.STADO_CI_MAIN_RECORD;
 
   // 7. Refusals: a policy that cannot be followed, and a held rule with no reason.
   const policyFile = join(home, '.stado/products/update-policy.json');

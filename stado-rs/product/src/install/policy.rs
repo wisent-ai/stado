@@ -91,6 +91,10 @@ pub struct Rule {
     pub mode: Mode,
     pub window: Option<Window>,
     pub reason: Option<String>,
+    /// Every installation of the product on this host, `sync` or by hand,
+    /// builds only a revision the main check recorded green
+    /// (`plan::prerequisites::tested`).
+    pub tested: bool,
 }
 
 impl Rule {
@@ -98,6 +102,7 @@ impl Rule {
         mode: Mode::Automatic,
         window: None,
         reason: None,
+        tested: false,
     };
 
     fn parse(value: &Value, at: &str) -> Result<Self> {
@@ -108,10 +113,10 @@ impl Rule {
             )
         })?;
         for key in object.keys() {
-            if !["mode", "window", "reason"].contains(&key.as_str()) {
+            if !["mode", "window", "reason", "tested"].contains(&key.as_str()) {
                 bail!(
                     "{at} names {key:?}, which no update rule has, so the policy may mean \
-                     something this Stado does not do; keep only mode, window and reason"
+                     something this Stado does not do; keep only mode, window, reason and tested"
                 );
             }
         }
@@ -153,10 +158,19 @@ impl Rule {
                  by itself, so the window would mean nothing; remove the window or make it automatic"
             );
         }
+        let tested = match object.get("tested") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(tested)) => *tested,
+            Some(other) => bail!(
+                "{at}: tested {other} is not true or false, so whether the product installs only \
+                 a revision its gates passed on cannot be read; write true, false, or remove it"
+            ),
+        };
         Ok(Self {
             mode,
             window,
             reason,
+            tested,
         })
     }
 
@@ -168,6 +182,9 @@ impl Rule {
         }
         if let Some(reason) = &self.reason {
             object.insert("reason".into(), json!(reason));
+        }
+        if self.tested {
+            object.insert("tested".into(), json!(true));
         }
         Value::Object(object)
     }
@@ -355,6 +372,7 @@ fn apply(
                     "mode": args.required("--mode")?,
                     "window": args.optional("--window")?,
                     "reason": args.optional("--reason")?,
+                    "tested": args.has("--tested"),
                 }),
                 "stado product policy set",
             )?;

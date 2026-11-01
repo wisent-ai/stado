@@ -73,6 +73,13 @@ pub fn perform(
     let is_dependency = !stack.is_empty();
     let enclosing = stack.clone();
     let revision = plan::prerequisites::revision(runtime, product, surface, coordinate)?;
+    // A product this host's policy marks tested installs only a revision its
+    // declared gates passed on, whoever started the installation, before
+    // anything is built.
+    let policy = super::super::policy::Policy::load(&runtime.home)?;
+    if policy.rule(id).0.tested {
+        plan::prerequisites::tested(runtime, id, surface, &revision)?;
+    }
     // An unpinned source build builds the revision chosen above, never the
     // canonical checkout's head; finishing a retained build keeps the build
     // it retained.
