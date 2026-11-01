@@ -1392,7 +1392,8 @@ products:
   - product: brama
     surface: service
     for_surface: cli
-    bound_because: 'Brama is the being model cognition: every decision cycle calls BRAMA_BASE_URL signed with the Brama HMAC secret and authorized with the Brama bearer, and both are required at start'
+    alternative: 'BRAMA_BASE_URL is optional: unnamed, a being asks `stado capabilities resolve inference --consumer singularity` and, when Brama does not answer, uses the OpenAI-compatible endpoint declared in its place (capabilities.inference.endpoint.url and model, key from the role key_role names) with no Brama bearer, HMAC secret or signature; when no alternative answers, the launch is refused naming each route it tried'
+    alternative_source: singularity/src/config/model_service.rs
   - product: las
     surface: cli
     for_surface: cli
