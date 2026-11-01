@@ -1,26 +1,19 @@
 //! A Stado release that failed on this host, and the way back from it.
 //!
-//! An installed Stado whose stop proves its install failed — its own rules
-//! refuse the configuration the release before it served, or the same build
-//! stops again on this host (`runtime::stops::failed_install`) — cannot
-//! serve on this host however often its supervisor restarts it, and every
-//! adapter of the host goes down with it until something puts the previous
-//! release back. So the failing
-//! release records itself as failed on this host, beside its retained
-//! archive, and reinstalls the release that ran before it (the one whose
-//! retained copy is byte for byte `~/.stado/bin/stado.previous`) through
-//! the same checked install as `release local restore --previous`. A release
-//! recorded as failed is never installed here again, by a delivery or a
-//! restore, until the record is removed; so two releases that both refuse
-//! the configuration do not restore each other in turn, and product sync
-//! does not reinstall the release that just failed. Each health pass
-//! publishes the failed releases in the host's beacon, and a delivery to any
-//! host refuses a release another host published as failed, so it does not
-//! spread. `stado release local list` reads every retained release with what
-//! it is to this host: the installed one, the rollback target, and any that
-//! failed with its record.
+//! An installed Stado whose stop proves its install failed (its rules refuse
+//! the configuration the release before it served, or the same build stops
+//! again here: `runtime::stops::failed_install`) cannot serve on this host,
+//! and every adapter of the host goes down with it. So the failing build
+//! records itself as failed beside its retained archive, with its source
+//! revision, and reinstalls the release that ran before it (byte for byte
+//! `~/.stado/bin/stado.previous`) as `release local restore --previous`
+//! does. That build is never installed here again until the record is
+//! removed, so two failing builds do not restore each other in turn; each
+//! health pass publishes the failed builds in the beacon, and a delivery to
+//! any host refuses one another host published. `stado release local list`
+//! reads every retained release with what it is to this host.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Args;
 use serde_json::{json, Value};
@@ -43,23 +36,30 @@ fn record(version: &str) -> Result<PathBuf, CmdError> {
         .join(FAILED_RECORD))
 }
 
-/// Refuse a release this host recorded as failed, naming the record and why
-/// it failed. A `delivery` is also refused a release any host of the fleet
-/// published as failed in its beacon (`failed_releases`), so a release that
-/// crash-looped on one host does not spread to the next; a restore is not,
-/// because it runs when this host's own services, the beacon store among
-/// them, may be down, and it reinstalls a release that ran here before.
-pub(super) async fn refuse_failed(version: &str, delivery: bool) -> Result<(), CmdError> {
+/// Refuse the build `program` (an incoming Stado of `version`) when this
+/// host recorded that build as failed, naming the record and why. Records
+/// name the failed build's revision: every revision shares the version, so
+/// a refusal by version refused every later repair too; a record written
+/// before records named one refuses the version. A `delivery` is also
+/// refused a build any host published as failed in its beacon
+/// (`failed_releases`); a restore is not, because it runs while this host's
+/// services may be down and reinstalls a release that ran here before.
+pub(super) async fn refuse_failed(version: &str, program: &Path, delivery: bool) -> Result<(), CmdError> {
+    let revision = build_revision(program)?;
+    let same_build = |record: &Value| {
+        record.get("revision").and_then(Value::as_str).is_none_or(|failed| failed == revision)
+    };
     let path = record(version)?;
     match std::fs::read_to_string(&path) {
-        Ok(text) => {
+        Ok(text) if serde_json::from_str::<Value>(&text).map_or(true, |record| same_build(&record)) => {
             return Err(CmdError::refused(format!(
-                "Stado {version} failed on this host and is not installed here again: {}; the record is {} \
+                "Stado {version} (rev {revision}) failed on this host and is not installed here again: {}; the record is {} \
                  — remove it once the cause is repaired",
                 text.trim(),
                 path.display()
             )))
         }
+        Ok(_another_build) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(CmdError::click(format!(
@@ -86,10 +86,10 @@ pub(super) async fn refuse_failed(version: &str, delivery: bool) -> Result<(), C
         let Some(Value::Array(failed)) = beacon.get("failed_releases") else {
             continue;
         };
-        if let Some(record) = failed
-            .iter()
-            .find(|failed| failed.get("version").and_then(Value::as_str) == Some(version))
-        {
+        if let Some(record) = failed.iter().find(|failed| {
+            failed.get("version").and_then(Value::as_str) == Some(version)
+                && failed.get("record").is_none_or(same_build)
+        }) {
             return Err(CmdError::refused(format!(
                 "Stado {version} failed on {host} and is not delivered to another host: {record}; \
                  {host} drops it from its beacon once its record is removed there"
@@ -97,6 +97,18 @@ pub(super) async fn refuse_failed(version: &str, delivery: bool) -> Result<(), C
         }
     }
     Ok(())
+}
+
+/// The source revision `program` says it was built from (`stado <version>
+/// (rev <revision>)`), or the refusal naming what it said instead.
+fn build_revision(program: &Path) -> Result<String, CmdError> {
+    let output = crate::wait::output(std::process::Command::new(program).arg("--version"))
+        .map_err(|error| CmdError::click(format!("{} --version could not run: {error}", program.display())))?;
+    let said = String::from_utf8_lossy(&output.stdout).into_owned();
+    said.split_once("(rev ")
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(revision, _)| revision.to_owned())
+        .ok_or_else(|| CmdError::refused(format!("{} --version names no source revision: {}", program.display(), said.trim())))
 }
 
 /// The releases this host recorded as failed, as its beacon publishes them
@@ -135,6 +147,7 @@ pub(crate) async fn roll_back_failed_release(cause: &str) -> Result<String, CmdE
         "pid": std::process::id(),
         "at": chrono::Utc::now().to_rfc3339(),
         "cause": cause,
+        "revision": crate::binary::build_identity::SOURCE_REVISION,
     });
     std::fs::write(&path, format!("{written}\n")).map_err(|error| {
         CmdError::click(format!(

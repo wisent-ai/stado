@@ -118,9 +118,6 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     announced_identity: Option<&str>,
 ) -> Result<(), CmdError> {
     use sha2::Digest as _;
-    if let Some(version) = stado_version.as_deref() {
-        super::failed::refuse_failed(version, declare).await?;
-    }
     let home = crate::config_file::expand_tilde("~");
     if stado_version.is_some()
         && !std::fs::symlink_metadata(archive)
@@ -228,6 +225,11 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     } else {
         &staged
     };
+    // A build recorded as failed is refused by the revision the staged binary names.
+    if let Some(version) = stado_version.as_deref() {
+        let refused = super::failed::refuse_failed(version, candidate, declare).await;
+        refused.inspect_err(|_| discard_stages(&staged, release_version_stage.as_deref()))?;
+    }
     // macOS keeps every privacy decision under the program's signing
     // identity. An ad-hoc build is a new program to it on every install, so
     // each one asks the person at the keyboard every question again; only a
