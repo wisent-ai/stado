@@ -9,9 +9,10 @@ mod readiness;
 mod role;
 mod state;
 mod units;
+mod vault_fence;
 
 pub(in crate::cli::placement) use execution::{
-    execute_move, prepare_move, release_claim, rollback,
+    execute_move, prepare_move, release_claim, retire_after_commit, rollback,
 };
 pub(in crate::cli::placement) use journal::{
     forget as forget_progress, recorded as recorded_progress, running_pid as running_move_pid,
@@ -22,6 +23,7 @@ pub(in crate::cli::placement) use role::{
     apply_role, ensure_runs_on, move_role, prepare_role, store_fence,
 };
 pub(in crate::cli::placement) use state::{discard_staging, settle_state_backup};
+pub(in crate::cli::placement) use vault_fence::write_fenced;
 
 use std::sync::Arc;
 
@@ -65,6 +67,9 @@ pub(in crate::cli::placement) struct StepTiming {
 #[derive(Default)]
 pub(in crate::cli::placement) struct Progress {
     source_stopped: bool,
+    /// The source's vault holds writes for this transaction
+    /// ([`vault_fence`]); its units still run.
+    source_write_fenced: bool,
     pub(in crate::cli::placement) destination_written: Vec<PlacementState>,
     route_applied: bool,
     destination_started: bool,
@@ -82,6 +87,7 @@ impl Progress {
     pub(in crate::cli::placement) fn every_step(profile: &PlacementProfile) -> Self {
         Self {
             source_stopped: true,
+            source_write_fenced: true,
             destination_written: profile.state.clone(),
             route_applied: true,
             destination_started: true,

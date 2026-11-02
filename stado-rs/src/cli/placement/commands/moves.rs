@@ -13,7 +13,8 @@ use crate::cli::placement::candidates::{
 };
 use crate::cli::placement::transfer::{
     discard_staging, execute_move, forget_progress, prepare_move, production_committer,
-    release_claim, rollback, settle_state_backup, MoveContext, Progress, StepTiming,
+    release_claim, retire_after_commit, rollback, settle_state_backup, write_fenced, MoveContext,
+    Progress, StepTiming,
 };
 use crate::cli::{registry, CmdError};
 use crate::deploy::production_runner;
@@ -55,6 +56,9 @@ pub(super) struct MoveReceipt {
     /// Each state whose backup could not be settled, with why; its backup
     /// stays where the transaction put it.
     unsettled_state: Vec<String>,
+    /// For a write-fenced source retired after the commit, each step of that
+    /// retirement that failed, with what still stands on the source.
+    unretired_source: Vec<String>,
     /// Every step the move ran, with its host and time, so a move that ran
     /// long says where the time went.
     steps: Vec<StepTiming>,
@@ -72,6 +76,7 @@ impl MoveReceipt {
             "registry_generation": self.registry_generation,
             "kept_replaced_state": self.kept_replaced_state,
             "unsettled_state": self.unsettled_state,
+            "unretired_source": self.unretired_source,
             "steps": self.steps,
         })
     }
@@ -123,6 +128,7 @@ pub(super) async fn relocate(
             registry_generation: None,
             kept_replaced_state: Vec::new(),
             unsettled_state: Vec::new(),
+            unretired_source: Vec::new(),
             steps: Vec::new(),
         });
     }
@@ -207,6 +213,11 @@ pub(super) async fn relocate(
             // The commit ends the transaction: no release will read how far
             // it got.
             forget_progress(&context.transaction.id);
+            let unretired_source = if write_fenced(&context.profile) {
+                retire_after_commit(&context, &mut progress, &runner).await
+            } else {
+                Vec::new()
+            };
             // Each state's backup is its own file on the destination, so all
             // are settled at once; the receipt keeps the profile's order.
             let mut kept_replaced_state = Vec::new();
@@ -236,6 +247,7 @@ pub(super) async fn relocate(
                 registry_generation: Some(committed_generation),
                 kept_replaced_state,
                 unsettled_state,
+                unretired_source,
                 steps: progress.steps,
             })
         }
@@ -330,6 +342,9 @@ pub(super) async fn move_services(
             "  {}: the backup of {unsettled}; it stays under its .pre-stado-placement- name",
             receipt.to_host
         );
+    }
+    for unretired in &receipt.unretired_source {
+        eprintln!("  {unretired}");
     }
     for line in timeline(&receipt.steps) {
         println!("  {line}");

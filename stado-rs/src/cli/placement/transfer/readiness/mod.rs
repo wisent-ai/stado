@@ -261,5 +261,8 @@ pub(in crate::cli::placement) async fn preflight(
             .stating(crate::primitives::failure::FailureCode::NotFound));
         }
     }
+    if super::vault_fence::write_fenced(&context.profile) {
+        super::vault_fence::ensure_fenceable(context, runner).await?;
+    }
     Ok(())
 }

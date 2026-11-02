@@ -1,8 +1,10 @@
 //! The ordered steps of one move: preflight and a copy of every state before
 //! the transaction is claimed ([`prepare_move`]), then under the claim fence,
-//! copy what changed, install, route, start, probe, retire, commit. The
-//! reverse of every step that already happened, run on any failure before
-//! the commit, is [`rollback`].
+//! copy what changed, install, route, start, probe, retire, commit. A
+//! profile carrying the fleet vault holds the vault's writes instead of
+//! stopping it and retires it after the commit ([`retire_after_commit`]).
+//! The reverse of every step that already happened, run on any failure
+//! before the commit, is [`rollback`].
 
 use std::time::Instant;
 
@@ -152,21 +154,42 @@ pub(in crate::cli::placement) async fn execute_move(
     // Every step counts as taken, in memory and in the journal on this host,
     // before it starts: a rollback or a later release then undoes a step that
     // was cut short, and never one that did not begin.
-    progress.source_stopped = true;
-    super::journal::keep(&context.transaction.id, progress);
-    for logical in &context.profile.stop_order {
-        let spec = unit(source_profile, logical)?;
-        let fence = act_on_unit(&context.source, spec, UnitAction::Stop, runner);
-        let what = format!("fence {logical}");
+    let write_fenced = super::vault_fence::write_fenced(&context.profile);
+    if write_fenced {
+        // The fleet vault keeps answering reads, the registry authority's
+        // among them, until the commit; only its writes are held.
+        progress.source_write_fenced = true;
+        super::journal::keep(&context.transaction.id, progress);
+        let fence = super::vault_fence::arm(context, runner);
         step(
             context,
             &mut progress.steps,
             &context.source.name,
-            what,
+            "hold the vault's writes",
             fence,
         )
         .await?;
-        println!("  fenced {}:{}", context.source.name, logical);
+        println!(
+            "  {}: the vault holds its writes for {} and keeps answering reads",
+            context.source.name, context.transaction.id
+        );
+    } else {
+        progress.source_stopped = true;
+        super::journal::keep(&context.transaction.id, progress);
+        for logical in &context.profile.stop_order {
+            let spec = unit(source_profile, logical)?;
+            let fence = act_on_unit(&context.source, spec, UnitAction::Stop, runner);
+            let what = format!("fence {logical}");
+            step(
+                context,
+                &mut progress.steps,
+                &context.source.name,
+                what,
+                fence,
+            )
+            .await?;
+            println!("  fenced {}:{}", context.source.name, logical);
+        }
     }
 
     // Every state is its own file or tree on the source and on the
@@ -273,20 +296,25 @@ pub(in crate::cli::placement) async fn execute_move(
         return Err(error);
     }
 
-    progress.source_retired = true;
-    super::journal::keep(&context.transaction.id, progress);
-    for logical in &context.profile.stop_order {
-        let spec = unit(source_profile, logical)?;
-        let retire = act_on_unit(&context.source, spec, UnitAction::Retire, runner);
-        let what = format!("retire {logical}");
-        step(
-            context,
-            &mut progress.steps,
-            &context.source.name,
-            what,
-            retire,
-        )
-        .await?;
+    // A write-fenced source keeps serving reads through the commit, the
+    // registry authority's own among them, and is retired after it
+    // ([`retire_after_commit`]).
+    if !write_fenced {
+        progress.source_retired = true;
+        super::journal::keep(&context.transaction.id, progress);
+        for logical in &context.profile.stop_order {
+            let spec = unit(source_profile, logical)?;
+            let retire = act_on_unit(&context.source, spec, UnitAction::Retire, runner);
+            let what = format!("retire {logical}");
+            step(
+                context,
+                &mut progress.steps,
+                &context.source.name,
+                what,
+                retire,
+            )
+            .await?;
+        }
     }
 
     let committed = committer(
@@ -301,4 +329,82 @@ pub(in crate::cli::placement) async fn execute_move(
         committed,
     )
     .await
+}
+
+/// The write-fenced source's units, retired once the move committed: first
+/// the source host's own resolver is asked to follow the committed registry,
+/// so every consumer there that reads the service through its adapter is
+/// sent to the destination, then each unit is retired, then the retired
+/// copy's fence is lifted. The move is committed whatever this answers, so
+/// nothing here rolls back; each failure is returned, said with what stands:
+/// a source unit still running keeps answering reads with every write held,
+/// so a consumer still sent there reads what was moved and writes nothing
+/// that would be lost.
+pub(in crate::cli::placement) async fn retire_after_commit(
+    context: &MoveContext,
+    progress: &mut Progress,
+    runner: &Runner,
+) -> Vec<String> {
+    let source = &context.source.name;
+    let followed = crate::cli::host::remote_stado_output(source, &["resolver", "follow"]);
+    if let Err(error) = step(
+        context,
+        &mut progress.steps,
+        source,
+        "the source's resolver follows the commit",
+        followed,
+    )
+    .await
+    {
+        return vec![format!(
+            "{source}'s resolver did not follow the committed registry ({error}), so its units \
+             were not retired: they keep answering reads with every write held; retire them with \
+             `stado service retire` once `stado host exec {source} -- stado resolver status \
+             --json` holds the new generation"
+        )];
+    }
+    let source_profile = match profile_host(&context.profile, source) {
+        Ok(profile) => profile,
+        Err(error) => return vec![error.to_string()],
+    };
+    let mut failures = Vec::new();
+    for logical in &context.profile.stop_order {
+        let retired = match unit(source_profile, logical) {
+            Ok(spec) => {
+                let retire = act_on_unit(&context.source, spec, UnitAction::Retire, runner);
+                step(context, &mut progress.steps, source, format!("retire {logical}"), retire)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(error) = retired {
+            failures.push(format!(
+                "{source}: {logical} was not retired after the commit: {error}; it keeps \
+                 answering reads with every write held"
+            ));
+        }
+    }
+    // With no unit left serving the source's copy, its fence holds nothing
+    // back and would refuse every write to the vault there if the vault ever
+    // moved back to that host; a unit still running keeps its fence.
+    if failures.is_empty() {
+        let lifted = super::vault_fence::lift(context, runner);
+        if let Err(error) = step(
+            context,
+            &mut progress.steps,
+            source,
+            "lift the retired copy's fence",
+            lifted,
+        )
+        .await
+        {
+            failures.push(format!(
+                "{source}: the retired copy's fence was not lifted ({error}); a move of the vault \
+                 back to {source} finds it standing: lift it with `skarbiec fence lift \
+                 --transaction {}` there",
+                context.transaction.id
+            ));
+        }
+    }
+    failures
 }

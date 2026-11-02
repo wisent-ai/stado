@@ -97,5 +97,13 @@ pub(in crate::cli::placement) async fn rollback(
             }
         }
     }
+    // A write-fenced vault never stopped: its writes are let through again,
+    // with no restart of a unit that kept serving. A release that counts
+    // every step as taken asks this only of the profile that fences so.
+    if progress.source_write_fenced && super::super::vault_fence::write_fenced(&context.profile) {
+        if let Err(error) = super::super::vault_fence::lift(context, runner).await {
+            errors.push(error.to_string());
+        }
+    }
     errors
 }

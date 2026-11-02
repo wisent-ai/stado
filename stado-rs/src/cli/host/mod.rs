@@ -58,7 +58,7 @@ pub use crate::cli::host::machine::config::config_set;
 pub use crate::cli::host::machine::config::config_show;
 pub use crate::cli::host::machine::config::config_unset;
 pub(crate) use crate::cli::host::machine::config::remote::{
-    remote_stado_build_output, remote_stado_output,
+    remote_stado_build_output, remote_stado_output, remote_stado_verdict,
 };
 pub(crate) use crate::cli::host::machine::config::write_host_config;
 pub use crate::cli::host::machine::releases::activate::activate_staged_release;

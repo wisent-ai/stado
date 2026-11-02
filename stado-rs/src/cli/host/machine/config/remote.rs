@@ -253,8 +253,9 @@ pub(crate) async fn remote_stado_build_output(
     remote_stado(target, &prelude, arguments).await
 }
 
-async fn remote_stado(target: &str, prelude: &str, arguments: &[&str]) -> Result<String, CmdError> {
-    let resolved = crate::cli::canonical_host(target).await?;
+/// The host script that runs the host's own installed Stado with
+/// `arguments`, each carried base64 encoded into its own argv word.
+fn remote_stado_script(prelude: &str, arguments: &[&str]) -> String {
     let mut script = CONFIG_SCRIPT_PREFIX.to_string();
     script.push_str(prelude);
     let mut words = Vec::with_capacity(arguments.len());
@@ -266,6 +267,31 @@ async fn remote_stado(target: &str, prelude: &str, arguments: &[&str]) -> Result
         words.push(format!("\"$a{index}\""));
     }
     script.push_str(&format!("\"$binary\" {}\n", words.join(" ")));
+    script
+}
+
+/// The host's own installed Stado run with a verdict command — one that
+/// answers with findings and exits non-zero when it found any, such as
+/// `registry doctor` — and its whole output whatever its exit code: the
+/// caller reads the verdict from its stdout. Refused only when it could not
+/// be run on the host.
+pub(crate) async fn remote_stado_verdict(
+    target: &ComputeTarget,
+    arguments: &[&str],
+    runner: &Runner,
+) -> Result<CommandOutput, CmdError> {
+    crate::deploy::host_channel::run_script_to_completion(
+        target,
+        &remote_stado_script("", arguments),
+        runner,
+    )
+    .await
+    .map_err(CmdError::from)
+}
+
+async fn remote_stado(target: &str, prelude: &str, arguments: &[&str]) -> Result<String, CmdError> {
+    let resolved = crate::cli::canonical_host(target).await?;
+    let script = remote_stado_script(prelude, arguments);
     let output = crate::deploy::host_channel::run_script_to_completion(
         &resolved,
         &script,

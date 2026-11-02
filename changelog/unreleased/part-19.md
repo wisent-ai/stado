@@ -56,3 +56,18 @@ The version bump gathers them into the release's own file and removes this one.
   another checkout reported that checkout's HEAD with `-dirty`. Git is now asked only when the
   package's parent is the root of its own work tree; otherwise the build embeds the revision
   `STADO_SOURCE_REVISION` states, or `unknown`.
+- **A move of the fleet vault can commit:** the move stopped the vault's unit as its fence, and
+  the registry authority asks that vault for its store bearer's version on every write, so a move
+  of the vault off the authority's host copied every state and then failed at `commit the
+  placement` and rolled back. The profile carrying `skarbiec` now holds the vault's writes with
+  `skarbiec fence arm --transaction <T>` (step `hold the vault's writes`), so every read keeps
+  answering through the commit. After the commit the source host's resolver is asked to follow
+  and the source's units are retired, then the retired copy's fence is lifted so a later move back
+  finds no fence standing; each of those that fails is listed under
+  `unretired_source` and does not roll back a committed move. A move that fails before the commit
+  lifts the fence instead of restarting units that never stopped. The preflight refuses a source
+  whose Skarbiec has no write fence, a source whose `skarbiec` unit does not run that Skarbiec or
+  whose own `registry doctor` reports the unit's process as not executing its installed file (an
+  old process ignores the fence on its writes), and a source whose own Stado reads the vault at
+  the unit the move retires, naming the configuration that sends it through its resolver adapter
+  instead.

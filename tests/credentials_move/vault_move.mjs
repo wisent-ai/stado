@@ -15,7 +15,10 @@ import { fileURLToPath } from 'node:url';
 // its known fixture values, checked against actual decrypted field digests.
 // Each keyring must hold the other owner's public key; the source vault must
 // register the destination recipient. STADO_BIN and SKARBIEC_BIN name genuine
-// same-platform product binaries.
+// same-platform product binaries; SKARBIEC_BIN must have `skarbiec fence`,
+// and the source's unit must run it. The source's own Stado must read the
+// vault through its resolver adapter, not at the unit's port, or the move's
+// preflight refuses it.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 mkdirSync(join(root, '.build'), { recursive: true });
 const build = realpathSync(join(root, '.build'));
@@ -223,6 +226,21 @@ try {
   report.resumed = resumed;
   const receipt = JSON.parse(success(move(destination.host, destination.owner_uid, true)));
   report.move = receipt;
+  // The vault was held behind Skarbiec's write fence, not stopped, so the
+  // commit was authorized while it answered; once the source was retired its
+  // copy's fence was lifted, so a move back finds none standing.
+  const moveSteps = receipt.moved.placement.steps.map(({ step }) => step);
+  for (const expected of ["hold the vault's writes", 'commit the placement',
+    "the source's resolver follows the commit", "lift the retired copy's fence"]) {
+    assert.ok(moveSteps.includes(expected), `the move ran ${expected}: ${moveSteps.join(', ')}`);
+  }
+  assert.ok(moveSteps.indexOf('commit the placement') < moveSteps.indexOf('retire skarbiec'),
+    `the source is retired after the commit: ${moveSteps.join(', ')}`);
+  assert.deepEqual(receipt.moved.placement.unretired_source, []);
+  const fenceAfter = JSON.parse(success(run(skarbiec, ['fence', 'show'], {
+    ...environment, SKARBIEC_VAULT_FILE: source.vault,
+  })));
+  assert.equal(fenceAfter.fence, null, `no fence stands on the retired copy: ${JSON.stringify(fenceAfter)}`);
   const after = document(existing(destination.vault));
   assert.equal(after.owner, destination.owner_uid);
   assert.deepEqual(Object.keys(after.items).sort(), inventory);

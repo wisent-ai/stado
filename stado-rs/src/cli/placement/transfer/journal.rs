@@ -35,6 +35,10 @@ struct Journal {
     /// work from one whose process ended without committing.
     pid: u32,
     source_stopped: bool,
+    /// The source's vault holds writes for the transaction; a record kept
+    /// before this was recorded says nothing of it, read as no fence.
+    #[serde(default)]
+    source_write_fenced: bool,
     /// The state paths the move began writing on the destination, in the
     /// order it began them.
     destination_written: Vec<String>,
@@ -66,6 +70,7 @@ pub(in crate::cli::placement) fn keep(transaction_id: &str, progress: &Progress)
         transaction_id: transaction_id.to_string(),
         pid: std::process::id(),
         source_stopped: progress.source_stopped,
+        source_write_fenced: progress.source_write_fenced,
         destination_written: progress
             .destination_written
             .iter()
@@ -127,6 +132,7 @@ pub(in crate::cli::placement) fn recorded(
     }
     Ok(Some(Progress {
         source_stopped: journal.source_stopped,
+        source_write_fenced: journal.source_write_fenced,
         destination_written,
         route_applied: journal.route_applied,
         destination_started: journal.destination_started,
@@ -173,7 +179,7 @@ pub(in crate::cli::placement) fn summary(
         "apply routes"
     } else if !journal.destination_written.is_empty() {
         "write state on the destination"
-    } else if journal.source_stopped {
+    } else if journal.source_stopped || journal.source_write_fenced {
         "fence the source units"
     } else {
         "preflight"
