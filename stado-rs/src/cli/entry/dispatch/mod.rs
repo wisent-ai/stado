@@ -116,6 +116,10 @@ pub async fn main_entry() -> i32 {
                         "details": err.details,
                     }))
                 );
+                // The sentence on stderr too, as without --json: a caller
+                // that reports a refusal reads it there whichever form it
+                // asked for, instead of finding only what Stado logged.
+                eprintln!("Error: {message}");
             } else {
                 eprintln!("Error: {message}");
                 if let Some(declared) = declared {

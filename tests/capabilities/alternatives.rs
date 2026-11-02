@@ -189,6 +189,12 @@ fn a_down_first_alternative_is_named_and_the_next_one_serves() {
         !refused.status.success(),
         "a request nothing answers was answered"
     );
+    // A caller reads the sentence on stderr whichever form it asked for.
+    let said = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        said.contains("Error: no inference alternative answers oko: brama at "),
+        "{said}"
+    );
     let details = &envelope(&refused)["details"];
     let products: Vec<&str> = details["unreachable"]
         .as_array()
