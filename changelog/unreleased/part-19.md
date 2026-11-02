@@ -205,4 +205,7 @@ The version bump gathers them into the release's own file and removes this one.
   standby commit added the new host under the service's `standby` in the service directory
   without advancing its generation, so every resolver refused the store (`service directory
   changed without advancing generation <N>`) and kept the directory before it; the write landed
-  and reached no host. The commit now advances the generation whenever it writes the directory.
+  and reached no host. The commit now advances the generation whenever it writes the directory,
+  and every programmatic registry write that changes the directory under the generation the
+  registry already carries is refused before the store sees it (`this registry write changes the
+  service directory but leaves its generation at <N>; … nothing was written`), as uploads were.

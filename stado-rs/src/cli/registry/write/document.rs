@@ -43,6 +43,7 @@ where
         if next == document {
             return Ok(expected_generation);
         }
+        super::guards::refuse_unadvanced_directory(&document, &next)?;
         match push_document_if(&next, &expected_generation).await {
             Ok(generation) => return Ok(generation),
             Err(error) if error.code == REGISTRY_CONFLICT_EXIT => continue,

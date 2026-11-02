@@ -74,6 +74,34 @@ fn declares_targets(document: &Map<String, Value>) -> Option<bool> {
     Some(!document.get("targets")?.as_array()?.is_empty())
 }
 
+/// Refuse a programmatic write that changes the service directory under the
+/// generation `current` already carries. Every resolver refuses such a store
+/// (`service directory changed without advancing generation <N>`) and keeps
+/// the directory before it, so the write lands and reaches no host: a writer
+/// that forgot [`crate::service_resolution::advance_generation`] is told
+/// here, before the store sees the document, instead of by every resolver.
+pub(super) fn refuse_unadvanced_directory(current: &Value, next: &Value) -> Result<(), CmdError> {
+    let (Some(before), Some(after)) = (current.as_object(), next.as_object()) else {
+        return Ok(());
+    };
+    let (Some(before_generation), Some(after_generation)) =
+        (service_directory_generation(before), service_directory_generation(after))
+    else {
+        return Ok(());
+    };
+    if after_generation == before_generation
+        && service_directory_body(before) != service_directory_body(after)
+    {
+        return Err(CmdError::declaration(format!(
+            "this registry write changes the service directory but leaves its generation at \
+             {after_generation}; every resolver refuses that store and keeps the directory before \
+             it, so the write would reach no host. The command that wrote it must advance \
+             service_directory.generation with the change; nothing was written"
+        )));
+    }
+    Ok(())
+}
+
 /// Every refusal a whole-document replace earns on its own contents, run
 /// before anything is written and independently of whose generation the swap
 /// will spend.
