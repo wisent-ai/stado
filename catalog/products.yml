@@ -120,12 +120,12 @@ products:
   - product: brama
     surface: service
     for_surface: cli
-    alternative: JEDEN_MODEL_ENDPOINT (with JEDEN_MODEL_KEY when the provider takes one) names an OpenAI-compatible provider every model call then goes to, unsigned and without leases
+    alternative: with no BRAMA_URL exported, each model request is handed to `stado capabilities call inference --consumer jeden`, which asks the first alternative in Stado's selected order that answers it (Brama, or a statement the operator recorded for that exact request); JEDEN_MODEL_ENDPOINT (with JEDEN_MODEL_KEY when the provider takes one) instead names an OpenAI-compatible provider every model call goes to, unsigned and without leases
     alternative_source: jeden/rust/agent/credential/mod.rs
   - product: stado
     surface: cli
     for_surface: cli
-    alternative: a BRAMA_URL the caller exports, or JEDEN_MODEL_ENDPOINT, answers the model route without asking Stado's service directory
+    alternative: a BRAMA_URL the caller exports, or JEDEN_MODEL_ENDPOINT, answers the model route without Stado; with neither and no Stado, a provider in Jeden's token store or Jeden's own gateway on its subscription grants stands in
     alternative_source: jeden/rust/agent/credential/mod.rs
   - product: tama
     surface: cli
@@ -145,7 +145,7 @@ products:
   - product: wisent-app
     surface: service
     for_surface: cli
-    alternative: JEDEN_MODEL_ENDPOINT (with JEDEN_MODEL_KEY when the provider takes one) sends every model call to an OpenAI-compatible provider unsigned, so no wisent-app agent identity signs it
+    alternative: requests handed to `stado capabilities call inference --consumer jeden` and those JEDEN_MODEL_ENDPOINT names go unsigned, so no wisent-app agent identity signs them
     alternative_source: jeden/rust/agent/credential/mod.rs
   - product: weles
     surface: service
@@ -358,7 +358,7 @@ products:
   - product: brama
     surface: service
     for_surface: service
-    alternative: WELES_MODEL_ENDPOINT and WELES_MODEL name an OpenAI-compatible provider for Weles' model calls
+    alternative: a Brama that does not answer, or none named, falls to `stado capabilities call inference --consumer weles`, which asks the first alternative in Stado's selected order that answers each request (Brama, or a statement the operator recorded for that exact request); WELES_MODEL_ENDPOINT and WELES_MODEL instead name an OpenAI-compatible provider for Weles' model calls
     alternative_source: weles/src/agent/jeden.ts
   - product: skarbiec
     surface: service
@@ -392,7 +392,7 @@ products:
   - product: jeden
     surface: cli
     for_surface: service
-    alternative: 'callJeden runs no Jeden for a model question: the agent loop, vision, the trajectory writer and the trajectories ask Brama, the provider WELES_MODEL_ENDPOINT names, or the alternative Stado resolves when Brama does not answer, directly; only capture diagnosis asks for the Jeden agent runtime with its tools (modelOnly: false) and runs the jeden program, so only that diagnosis stops without Jeden'
+    alternative: 'callJeden runs no Jeden for a model question: the agent loop, vision, the trajectory writer and the trajectories ask Brama, the provider WELES_MODEL_ENDPOINT names, or Stado''s inference alternatives through `stado capabilities call inference`, directly; only capture diagnosis asks for the Jeden agent runtime with its tools (modelOnly: false) and runs the jeden program, so only that diagnosis stops without Jeden'
     alternative_source: weles/src/agent/jeden.ts
 - id: skarbiec
   name: Skarbiec
@@ -893,8 +893,8 @@ products:
   - product: brama
     surface: service
     for_surface: service
-    alternative: the failure intake needs no model; repair drafting (probierz repair) and the other authoring commands ask the model service STADO_MODEL_ROUTER_URL names, Brama or any other service answering /v1/chat/completions with the bearer STADO_MODEL_ROUTER_TOKEN carries, unsigned when no agent identity is declared; with none declared the repair is refused naming the setting
-    alternative_source: probierz/probierz-rs/src/authoring/spec/draft.rs
+    alternative: the failure intake needs no model; repair drafting (probierz repair) and the other authoring commands hand each request to `stado capabilities call inference --consumer probierz`, which asks the first alternative in Stado's selected order that answers it (Brama, or a statement the operator recorded for that exact request); a router STADO_MODEL_ROUTER_URL or the app's surface conditions name is asked as named instead
+    alternative_source: probierz/probierz-rs/src/authoring/router.rs
   - product: trends
     surface: cli
     for_surface: cli
@@ -998,8 +998,8 @@ products:
   - product: brama
     surface: service
     for_surface: cli
-    alternative: the judged hooks and review-push read the attestation each commit and each turn end carries against the standard tama attestation standard prints, with no model asked (tama model-provider set --none declares it); a hook that only asks a model a question about a text finds nothing and says so in its log
-    alternative_source: tama/rust/crates/tama-hook-tools/src/ports/task_attestation/mod.rs
+    alternative: with no model service declared, each judge request is handed to `stado capabilities call inference --consumer tama` (TAMA_BRAMA_ADAPTER_CONSUMER names another consumer), which asks the first alternative in Stado's selected order that answers it (Brama, or a statement the operator recorded for that exact request); with `tama model set --none` the judged hooks and review-push read the attestation each commit and each turn end carries against the standard tama attestation standard prints, with no model asked
+    alternative_source: tama/rust/crates/tama-hook-tools/src/brama/stado.rs
   - product: wisent-app
     surface: service
     for_surface: desktop
@@ -1309,7 +1309,7 @@ products:
   - product: brama
     surface: service
     for_surface: service
-    alternative: oko model set declares an OpenAI-compatible service every model call then asks; without any model service, what each message is, is recorded with oko tasks kind and a task is closed with oko tasks close or Close on Oko Desktop
+    alternative: with nothing declared, every model call is handed to `stado capabilities call inference --consumer oko`, which asks the first alternative in Stado's selected order that answers it (Brama, or a statement the operator recorded for that exact request); oko model set declares an OpenAI-compatible service every model call then asks instead; with oko model set --none, what each message is, is recorded with oko tasks kind and a task is closed with oko tasks close or Close on Oko Desktop
     alternative_source: oko/rust/src/tasks/judge/provider.rs
   - product: stado
     surface: cli
@@ -1393,7 +1393,7 @@ products:
   - product: brama
     surface: service
     for_surface: cli
-    alternative: 'BRAMA_BASE_URL is optional: unnamed, a being asks `stado capabilities resolve inference --consumer singularity` and, when Brama does not answer, uses the OpenAI-compatible endpoint declared in its place (capabilities.inference.endpoint.url and model, key from the role key_role names) with no Brama bearer, HMAC secret or signature; when no alternative answers, the launch is refused naming each route it tried'
+    alternative: 'BRAMA_BASE_URL is optional: unnamed, each model request of a being is handed to `stado capabilities call inference --consumer singularity`, which asks the first alternative in Stado''s selected order that answers it (Brama, or a statement the operator recorded for that exact request), with no Brama bearer, HMAC secret or signature read by Singularity; when no alternative answers, the call is refused with Stado''s sentence naming each one and the command that answers the kept request'
     alternative_source: singularity/src/config/model_service.rs
   - product: las
     surface: cli
@@ -1515,7 +1515,7 @@ products:
   - product: brama
     surface: service
     for_surface: cli
-    alternative: BRAMA_URL (or MODEL_ROUTER_URL) may name any OpenAI-compatible provider; with WISENT_APP_AGENT_ID unset the requests go unsigned, and BRAMA_API_KEY_ROLE names that provider bearer
+    alternative: with no BRAMA_URL exported, each request is handed to `stado capabilities call inference --consumer kronika`, which asks the first alternative in Stado's selected order that answers it (Brama, or a statement the operator recorded for that exact request); BRAMA_URL (or MODEL_ROUTER_URL) may instead name any OpenAI-compatible provider, unsigned with WISENT_APP_AGENT_ID unset, with BRAMA_API_KEY_ROLE naming its bearer
     alternative_source: kronika/src/cli.ts
   - product: wisent-app
     surface: service
@@ -1721,7 +1721,7 @@ products:
   - product: brama
     surface: service
     for_surface: cli
-    alternative: SKRYBA_MODEL_SERVICE_URL (--model-service-url) names an OpenAI-compatible model service and SKRYBA_MODEL_SERVICE_KEY_FILE an owner-only file holding its bearer; the quality judge, the rewrite generator and the prose walk over a folder then post to it unsigned in place of Brama
+    alternative: with no model service named, the quality judge, the rewrite generator and the prose walk over a folder hand each request to `stado capabilities call inference --consumer skryba`, which asks the first alternative in Stado's selected order that answers it (Brama, or a statement the operator recorded for that exact request); SKRYBA_MODEL_SERVICE_URL (--model-service-url) instead names an OpenAI-compatible model service and SKRYBA_MODEL_SERVICE_KEY_FILE an owner-only file holding its bearer, posted to unsigned
     alternative_source: skryba/src/app/brama/mod.rs
   - product: stado
     surface: cli
@@ -2299,8 +2299,8 @@ products:
   - product: brama
     surface: service
     for_surface: cli
-    alternative: run trains a job locally and evaluate --no-judge scores it without a model judge, so training and evaluation run without Brama; autolabel, discover, the evaluation judge, lifecycle and humanizer audits and goal audit prompts ask models through Brama and refuse naming the missing setting
-    alternative_source: transcript-label-trainer/src/cli/prog_group/prog.rs
+    alternative: run trains a job locally and evaluate --no-judge scores it without a model judge, so training and evaluation run without a model; with no BRAMA_URL named, autolabel, discover, the evaluation judge, lifecycle and humanizer audits and goal audit prompts hand each request to `stado capabilities call inference --consumer transcript-label-trainer`, which asks the first alternative in Stado's selected order that answers it (Brama, or a statement the operator recorded for that exact request)
+    alternative_source: transcript-label-trainer/src/brama/mod.rs
   - product: wisent-app
     surface: web
     for_surface: cli
