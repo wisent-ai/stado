@@ -10,6 +10,7 @@
 //! window has no decision to report.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use crate::deploy::{host_channel, shlex_quote, CommandOutput, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
@@ -192,10 +193,30 @@ pub struct RunningBinary {
     pub decision: Decision,
 }
 
+/// What this process last read for its own binary: the decision and up to
+/// when the log was read. Every refused connection to a LAN peer asks for
+/// the decision; read from the binary's placement each time, a burst of
+/// refusals (a network node that cannot reach its peers) ran dozens of
+/// `log show` scans over days of log at once and held the host's load in
+/// the hundreds, slowing every connection it made.
+struct Kept {
+    program: String,
+    placed: String,
+    decision: Decision,
+    read_to: String,
+}
+
+static KEPT: LazyLock<tokio::sync::Mutex<Option<Kept>>> = LazyLock::new(Default::default);
+
 /// [`RunningBinary`] for this process. The log is read from the moment the
 /// binary was placed, so an older binary's decision under the same code
 /// identifier does not stand in for this one's; a binary or placement time
 /// that cannot be read, or a log read that fails, is refused with its cause.
+///
+/// One read runs at a time in a process: callers that ask together wait for
+/// the read in flight, and each later read covers only what was logged since
+/// the previous one began, keeping the previous decision when nothing newer
+/// was logged.
 pub async fn running_binary(runner: &Runner) -> Result<RunningBinary, String> {
     let binary = std::env::current_exe()
         .map_err(|error| format!("which binary this is cannot be read: {error}"))?;
@@ -206,12 +227,31 @@ pub async fn running_binary(runner: &Runner) -> Result<RunningBinary, String> {
     let placed = chrono::DateTime::<chrono::Local>::from(placed)
         .format("%Y-%m-%d %H:%M:%S")
         .to_string();
-    let decision = decisions_here(std::slice::from_ref(&program), &placed, runner)
+    let mut kept = KEPT.lock().await;
+    let (start, previous) = match kept.as_ref() {
+        Some(earlier) if earlier.program == program && earlier.placed == placed => {
+            (earlier.read_to.clone(), Some(earlier.decision.clone()))
+        }
+        _ => (placed.clone(), None),
+    };
+    // Taken before the read, so what is logged while it runs is in the next.
+    let read_to = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let read = decisions_here(std::slice::from_ref(&program), &start, runner)
         .await
         .map_err(|error| error.to_string())?
         .into_iter()
         .next()
         .ok_or_else(|| format!("the Local Network read named nothing for {program}"))?;
+    let decision = match (read.state, previous) {
+        (LocalNetwork::NotMeasured, Some(previous)) => previous,
+        _ => read,
+    };
+    *kept = Some(Kept {
+        program: program.clone(),
+        placed: placed.clone(),
+        decision: decision.clone(),
+        read_to,
+    });
     Ok(RunningBinary {
         program,
         placed,

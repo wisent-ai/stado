@@ -170,3 +170,11 @@ The version bump gathers them into the release's own file and removes this one.
   host as `authorized_on`; `--to` naming TARGET itself, and the authority without `--to`, are
   refused with their cause. Stado Desktop's **Authorize this host's resolver public key** takes the
   host. Real journey: `tests/route/key_to.mjs`.
+- **A burst of refused LAN connections reads macOS's log once, not once per connection:** every
+  connection to a LAN peer refused `No route to host` read what `nehelper` decided about Local
+  Network for the running binary with a `log show` over the whole log since the binary was placed.
+  A network node that could not reach its peers ran dozens of those scans at once over days of
+  log, holding the host's load in the hundreds and slowing every connection through it, the
+  vault move's reach among them. One read now runs at a time in a process; callers that ask
+  together wait for it and take its answer, and each later read covers only what was logged since
+  the previous one began, keeping the earlier decision when nothing newer was logged.
