@@ -304,6 +304,12 @@ fn a_down_first_alternative_is_named_and_the_next_one_serves() {
     assert_eq!(answered["resolution"]["provider"], "attestation");
     let answer = &answered["answer"];
     assert_eq!(answer["model"], "attestation");
+    // A caller that accounts for every answer reads that a statement spent
+    // no model tokens.
+    assert_eq!(
+        answer["usage"],
+        json!({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+    );
     assert_eq!(
         answer["attestation"]["checked"],
         "read every slide against the application"

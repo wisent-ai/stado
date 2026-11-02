@@ -314,6 +314,9 @@ pub(crate) fn record(
         "created": Utc::now().timestamp(),
         "model": ATTESTED_MODEL,
         "choices": [{"index": 0, "message": message, "finish_reason": finish}],
+        // A statement spends no model tokens; a caller that accounts for
+        // every answer reads that from the field every chat completion has.
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "attestation": {"request": digest, "checked": checked.trim(), "at": at},
     });
     crate::primitives::document::write(&answer_file, &answer, WHAT)
