@@ -91,6 +91,39 @@ pub(crate) async fn authority_compare_and_swap(
     )))
 }
 
+/// The registry as its authority holds it now, with the store version a
+/// conditional write spends: read on the authority over its own SSH paths,
+/// as [`authority_compare_and_swap`] writes it, never from this host's
+/// resolver. `Ok(None)` when this host is the authority, so its store is the
+/// registry.
+///
+/// A placement commit whose receipt was lost is read back through this. The
+/// resolver on the caller froze at the claim while the authority's store was
+/// down, answered the claimed document, and a commit that had landed was
+/// taken for one that had not and rolled back under it. A copy can only lag
+/// the authority, so a copy never says a commit did not land; when the
+/// authority does not answer, the error says so and the outcome stays
+/// unknown.
+pub(crate) async fn authority_document() -> Result<Option<(Value, String)>, String> {
+    let copy = kept_last_good_document()?.ok_or_else(|| {
+        "this host keeps no registry copy naming its authority, so the authority cannot be \
+         asked"
+            .to_string()
+    })?;
+    let directory = crate::service_resolution::directory(&copy)?
+        .ok_or_else(|| "registry.service_directory is required".to_string())?;
+    let local_target = current_target(&copy)?;
+    if directory.authority.target == local_target {
+        return Ok(None);
+    }
+    let source = snapshot_source(None, &copy, &local_target)?;
+    let (document, store_version, _directory_generation) = source
+        .fetch(crate::monitor::host_silence::READER_CLI)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Some((document, store_version)))
+}
+
 /// The authority's answer: the generation its receipt names, the conflict its
 /// exit status declares, or its own refusal.
 fn swapped(target: &str, expected: &str, output: &Output) -> Result<String, StorageError> {

@@ -35,7 +35,9 @@ pub(crate) use crate::cli::resolver::directory::remembered::shared::{
     authority_store_elsewhere, store_on_silent_authority,
 };
 pub(crate) use crate::cli::resolver::directory::source::current_target;
-pub(crate) use crate::cli::resolver::directory::write::authority_compare_and_swap;
+pub(crate) use crate::cli::resolver::directory::write::{
+    authority_compare_and_swap, authority_document,
+};
 pub(crate) use crate::cli::resolver::directory::{read_local_document, read_local_snapshot};
 pub(crate) use crate::cli::resolver::report::readers::{
     host_resolver, not_serving_reason, published_adapter_url, readiness_marker, unserved_marker,

@@ -108,3 +108,14 @@ The version bump gathers them into the release's own file and removes this one.
   registry that does not hold it rolls back as before; one that cannot be read leaves the hosts
   as they are and says how to tell (`placement transactions`: the transaction still open means it
   did not land, and `placement release` undoes it).
+- **The read-back of a lost commit asks the registry authority itself:** it read the caller's
+  resolver copy, which had frozen at the move's claim while the authority's store was down, so a
+  commit that had landed was taken for one that had not and the hosts were rolled back under it
+  again. The read now goes to the authority over its own SSH paths, as the commit does; when the
+  authority does not answer, the outcome is unknown and nothing is rolled back, and the error
+  says to run `stado resolver follow` before `stado placement transactions`. A host that is the
+  authority reads its store as before.
+- **The vault move's refusal names the reload:** when the source's Stado reads the vault at the
+  unit the move retires, the refusal named `stado host config set … secrets.skarbiec.url …` as if
+  the value took effect alone. It now names `--reload-service stado`, run on the source, whose
+  owner vault holds the host account a system daemon's reload needs.

@@ -338,15 +338,23 @@ pub(in crate::cli::placement) async fn execute_move(
     // move's authority loses the vault the moment the resolver follows the
     // commit). Rolled back on that, the hosts were undone under a registry
     // that already placed the profile on the destination. So the registry
-    // is read back: this move's commit standing there is a commit; a
-    // registry that cannot be read leaves the outcome unknown, which is
-    // never rolled back.
-    let read = crate::cli::registry::fetch_versioned_document().await;
+    // is read back from the authority itself: this host's resolver froze at
+    // the claim while the authority's store was down, and its copy, read
+    // here, took a landed commit for none. This move's commit standing at the
+    // authority is a commit; an authority that does not answer leaves the
+    // outcome unknown, which is never rolled back.
+    let read = match crate::cli::resolver::authority_document().await {
+        Ok(Some(read)) => Ok(read),
+        Ok(None) => crate::cli::registry::fetch_versioned_document()
+            .await
+            .map_err(|error| error.to_string()),
+        Err(unread) => Err(unread),
+    };
     match read {
         Ok((document, generation)) if landed(context, &document) => {
             println!(
-                "  the registry holds this move's commit at generation {generation}; its \
-                 receipt was lost ({error})"
+                "  the registry authority holds this move's commit at generation {generation}; \
+                 its receipt was lost ({error})"
             );
             Ok(generation)
         }
@@ -354,10 +362,11 @@ pub(in crate::cli::placement) async fn execute_move(
         Err(unread) => {
             progress.commit_unknown = true;
             Err(error.also(format!(
-                "whether the commit landed is unknown: the registry could not be read back \
-                 ({unread}); nothing was rolled back, so read `stado placement transactions`: \
-                 transaction {} still open means it did not land and `stado placement release \
-                 {}` undoes the move; gone means it committed",
+                "whether the commit landed is unknown: the registry authority could not be read \
+                 back ({unread}); nothing was rolled back. Once the authority answers, `stado \
+                 resolver follow` brings this host's copy to its generation and `stado placement \
+                 transactions` then says it: transaction {} still open means it did not land and \
+                 `stado placement release {}` undoes the move; gone means it committed",
                 context.transaction.id, context.transaction.id
             )))
         }

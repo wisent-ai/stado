@@ -197,8 +197,9 @@ pub(super) async fn ensure_fenceable(
             "{source}: its Stado reads the fleet vault at {reads}, the {vault} unit this move \
              retires, so the registry authority and the object API there would lose the vault \
              after the commit; point it at its resolver adapter with `stado host config set \
-             {source} secrets.skarbiec.url stado://service/{vault}?consumer=stado` (a serving \
-             process reads it at its next start), or move the registry authority and the \
+             {source} secrets.skarbiec.url stado://service/{vault}?consumer=stado \
+             --reload-service stado` run on {source}, whose owner vault holds the host account \
+             the reload of a system daemon needs, or move the registry authority and the \
              stado-object-api role off {source} first"
         )));
     }
