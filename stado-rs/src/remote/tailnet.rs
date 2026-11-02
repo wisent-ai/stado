@@ -64,6 +64,10 @@ struct Tailnet {
     /// Each node's key as the tailnet states it, by every address of the
     /// node: whether it expired (`Expired`) and when it does (`KeyExpiry`).
     keys: BTreeMap<IpAddr, NodeKey>,
+    /// Why this machine's own node carries no traffic at all: its Tailscale
+    /// is not `Running`, or its own key expired. A connection through such a
+    /// node to any tailnet peer only times out, whatever the peer's key says.
+    own: Option<String>,
 }
 
 /// One node's key as `tailscale status --json` states it. `expiry` is absent
@@ -151,6 +155,7 @@ fn read(binary: &Path) -> Result<Tailnet, String> {
         .map_err(|error| format!("`status --json` is not JSON: {error}"))?;
     let mut addresses = Tailnet::default();
     record(status.get("Self"), &mut addresses)?;
+    addresses.own = own_cause(&status)?;
     match status.get("Peer") {
         None | Some(Value::Null) => {}
         Some(Value::Object(peers)) => {
@@ -165,6 +170,32 @@ fn read(binary: &Path) -> Result<Tailnet, String> {
         }
     }
     Ok(addresses)
+}
+
+/// Why this machine's own Tailscale carries no traffic, as its status says:
+/// a `BackendState` other than `Running` (logged out, stopped, waiting for a
+/// login), or the `Self` node's key expired.
+fn own_cause(status: &Value) -> Result<Option<String>, String> {
+    match status.get("BackendState") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(state)) if state == "Running" => {}
+        Some(Value::String(state)) => {
+            return Ok(Some(format!(
+                "this machine's Tailscale is {state}, not Running, so it carries no traffic"
+            )))
+        }
+        Some(other) => return Err(format!("`status --json` states BackendState as no text: {other}")),
+    }
+    let Some(own) = status.get("Self") else { return Ok(None) };
+    let key = NodeKey::of(own)?;
+    if !key.expired {
+        return Ok(None);
+    }
+    Ok(Some(match &key.expiry {
+        Some(at) => format!("this machine's own Tailscale node key expired at {at}"),
+        None => "this machine's own Tailscale node key expired; the status gives no KeyExpiry"
+            .to_string(),
+    }))
 }
 
 /// One node's MagicDNS name and the address the tailnet assigns it.
@@ -243,11 +274,19 @@ pub(crate) fn node_key(host: &str) -> Option<&'static NodeKey> {
 }
 
 /// Why this machine's tailnet cannot carry traffic to `host`, when the
-/// tailnet itself says so: the node's key expired. A connection to such a
-/// node only times out, and the expiry is the cause the tailnet's admin
-/// renews, so a failure names it.
+/// tailnet itself says so: this machine's own node carries none (its
+/// Tailscale not running or its own key expired), or the peer's key expired.
+/// A connection through either only times out, and the expiry is the cause
+/// the tailnet's admin renews, so a failure names it. Only a host the tailnet
+/// lists, or a MagicDNS name, is judged; any other host is not the tailnet's.
 pub(crate) fn unreachable_because(host: &str) -> Option<String> {
-    node_key(host).and_then(NodeKey::cause)
+    let key = node_key(host);
+    if key.is_some() || is_magicdns_name(host) {
+        if let Some(own) = &MAP.own {
+            return Some(own.clone());
+        }
+    }
+    key.and_then(NodeKey::cause)
 }
 
 /// Whether one host name belongs to a tailnet, judged by its suffix alone.

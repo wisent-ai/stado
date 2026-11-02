@@ -65,6 +65,8 @@ pub(crate) async fn vault_reach(host: &str, endpoint: &str) -> Result<Value, Cmd
     let mut paths_seconds: Option<f64> = None;
     let mut path_names: Vec<String> = Vec::new();
     let mut session_seconds: Option<f64> = None;
+    let mut attempts: Vec<Value> = Vec::new();
+    let mut connecting: Option<String> = None;
     let mut pending: Option<String> = None;
     let work = async {
         // Choosing the paths reads the tailnet's status, which the resolver
@@ -75,11 +77,46 @@ pub(crate) async fn vault_reach(host: &str, endpoint: &str) -> Result<Value, Cmd
             .iter()
             .map(|path| format!("{} ({})", path.name, path.destination))
             .collect();
-        let tunnel = Arc::new(
-            Tunnel::open(&paths)
-                .await
-                .map_err(|error| format!("no SSH session to {} opened: {error}", target.name))?,
-        );
+        // Each path is tried alone, in the order the resolver's tunnel tries
+        // them, so the receipt says what each answered and how long it took.
+        let mut opened = None;
+        for path in &paths {
+            let named = format!("{} ({})", path.name, path.destination);
+            connecting = Some(named.clone());
+            let attempt_started = Instant::now();
+            let attempt = Tunnel::open(std::slice::from_ref(path)).await;
+            let seconds = attempt_started.elapsed().as_secs_f64();
+            match attempt {
+                Ok(tunnel) => {
+                    attempts.push(json!({"path": named, "seconds": seconds, "opened": true}));
+                    opened = Some(tunnel);
+                    break;
+                }
+                Err(error) => attempts.push(json!({
+                    "path": named,
+                    "seconds": seconds,
+                    "opened": false,
+                    "error": error,
+                })),
+            }
+        }
+        connecting = None;
+        let tunnel = Arc::new(opened.ok_or_else(|| {
+            format!(
+                "no SSH session to {} opened over any of its paths: {}",
+                target.name,
+                attempts
+                    .iter()
+                    .map(|attempt| format!(
+                        "{} after {:.3}s: {}",
+                        attempt["path"].as_str().unwrap_or_default(),
+                        attempt["seconds"].as_f64().unwrap_or_default(),
+                        attempt["error"].as_str().unwrap_or_default()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })?);
         session_seconds = Some(started.elapsed().as_secs_f64());
         let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, u16::default()))
             .await
@@ -155,11 +192,20 @@ pub(crate) async fn vault_reach(host: &str, endpoint: &str) -> Result<Value, Cmd
                     target.name, bound.seconds, bound.declared
                 ),
                 (Some(chosen), None, _) => format!(
-                    "the SSH paths to {} were chosen after {chosen:.3}s ({}), and no SSH \
-                     session over them opened within {}s, the refresh interval {}; the \
-                     resolver gives up the object API's own read after it",
+                    "the SSH paths to {} were chosen after {chosen:.3}s; {}{} was still \
+                     connecting at {}s, the refresh interval {}; the resolver gives up the \
+                     object API's own read after it",
                     target.name,
-                    path_names.join(", "),
+                    attempts
+                        .iter()
+                        .map(|attempt| format!(
+                            "{} failed after {:.3}s: {}; ",
+                            attempt["path"].as_str().unwrap_or_default(),
+                            attempt["seconds"].as_f64().unwrap_or_default(),
+                            attempt["error"].as_str().unwrap_or_default()
+                        ))
+                        .collect::<String>(),
+                    connecting.as_deref().unwrap_or("no path"),
                     bound.seconds,
                     bound.declared
                 ),
@@ -186,6 +232,7 @@ pub(crate) async fn vault_reach(host: &str, endpoint: &str) -> Result<Value, Cmd
         "paths": path_names,
         "paths_seconds": paths_seconds,
         "session_seconds": session_seconds,
+        "attempts": attempts,
         "seconds": started.elapsed().as_secs_f64(),
         "reads": reads,
         "reached": reached,

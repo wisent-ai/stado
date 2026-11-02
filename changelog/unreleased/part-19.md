@@ -135,3 +135,13 @@ The version bump gathers them into the release's own file and removes this one.
   status), `session_seconds` (the SSH session opening) and, when the bound expires, a cause naming
   the phase it expired in: the path choice unfinished, no session over the named paths, or the
   read still unanswered with how many had answered.
+  The receipt's `attempts` lists each SSH path tried, alone and in the order the resolver's
+  tunnel tries them, with its seconds, whether it opened and its error; a bound that expires
+  while a path is connecting names that path and every earlier path's failure.
+- **A tailnet path is left out when this machine's own Tailscale carries no traffic:** a path was
+  left out only when the peer's node key had expired, so a host whose own key had expired, or
+  whose Tailscale was logged out or stopped, kept every tailnet path and its connection waited
+  with no end, holding a resolver's tunnel and a vault move's reach for their whole bound. Such a
+  path is now left out naming `this machine's own Tailscale node key expired at <T>` or `this
+  machine's Tailscale is <state>, not Running`; when no other path is left the connection fails
+  naming it, as for an expired peer.
