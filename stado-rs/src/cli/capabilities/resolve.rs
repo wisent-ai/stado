@@ -132,15 +132,26 @@ async fn directory(service: &str, consumer: &str, bound: Option<Duration>) -> Pr
         }
     };
     if !output.status.success() {
+        // The child answers `--json`, so its refusal is the envelope on
+        // stdout and stderr carries only what it logged; a child that died
+        // before printing one says why on stderr.
         let said = String::from_utf8_lossy(&output.stderr);
-        let cause = said
-            .lines()
-            .rev()
-            .find(|line| line.starts_with("Error: "))
-            .or_else(|| said.lines().rev().find(|line| !line.trim().is_empty()))
-            .unwrap_or("it exited without saying why")
-            .trim_start_matches("Error: ")
-            .to_owned();
+        let cause = serde_json::from_slice::<Value>(&output.stdout)
+            .ok()
+            .and_then(|envelope| envelope["message"].as_str().map(str::to_owned))
+            .or_else(|| {
+                said.lines()
+                    .rev()
+                    .find_map(|line| line.strip_prefix("Error: "))
+                    .map(str::to_owned)
+            })
+            .or_else(|| {
+                said.lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "it exited without saying why".to_owned());
         return Proven {
             route,
             outcome: Err(format!("{cause} ({})", output.status)),

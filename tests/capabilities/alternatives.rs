@@ -197,6 +197,13 @@ fn a_down_first_alternative_is_named_and_the_next_one_serves() {
         .map(|item| item["product"].as_str().unwrap())
         .collect();
     assert_eq!(products, ["brama", "attestation"]);
+    // Brama's cause is the directory's own refusal sentence, not a line the
+    // child logged on its way out.
+    let brama_cause = details["unreachable"][0]["cause"].as_str().unwrap();
+    assert!(
+        !brama_cause.contains("ERROR stado::primitives::failure"),
+        "{brama_cause}"
+    );
     let cause = details["unreachable"][1]["cause"].as_str().unwrap();
     assert!(
         cause.contains("stado capabilities attestation record inference --consumer oko"),

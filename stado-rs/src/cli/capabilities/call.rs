@@ -173,13 +173,23 @@ async fn brama(route: &str, consumer: &str, body: &str) -> Outcome {
         .and_then(|answer| answer["error"]["message"].as_str().map(str::to_owned))
         .unwrap_or_else(|| text.trim().to_owned());
     // A request Brama judged malformed fails at every alternative alike; any
-    // other status is this alternative unable to answer now.
+    // other status is this alternative unable to answer now. Brama's own
+    // body travels in the refusal's `details`, so a caller reads its
+    // `error.code` (`context_length_exceeded`: ask about less) as data.
     if status == reqwest::StatusCode::BAD_REQUEST
         || status == reqwest::StatusCode::UNPROCESSABLE_ENTITY
     {
-        return Outcome::Refused(CmdError::refused(format!(
-            "Brama at {route} refused the request itself ({status}): {said}"
-        )));
+        return Outcome::Refused(
+            CmdError::refused(format!(
+                "Brama at {route} refused the request itself ({status}): {said}"
+            ))
+            .detailing(json!({
+                "provider": "brama",
+                "route": route,
+                "status": status.as_u16(),
+                "answer": answer.unwrap_or_else(|| Value::String(text.trim().to_owned())),
+            })),
+        );
     }
     Outcome::Passed(format!("{url} answered {status}: {said}"))
 }
