@@ -155,8 +155,10 @@ The version bump gathers them into the release's own file and removes this one.
   are now refused before anything is built, naming that `--host` would be ignored, how to reach
   the named host (run the installation there, or deliver a release with `stado release prepare`
   and `stado release promote`) and that nothing was built or installed. The narrower refusal of a
-  CLI release coordinate with `--host` is folded into it. Real journey:
-  `tests/install/host_surface.mjs`.
+  CLI release coordinate with `--host` is folded into it. Stado Desktop's Products screen passes
+  the selected host only for a `service` surface, as it already runs every other surface on the
+  machine it sits on, and its sync operations label the host field as one for service surfaces.
+  Real journey: `tests/install/host_surface.mjs`.
 - **A vault move authorizes its source's resolver key on the destination:** a source that is the
   registry authority never opened a session to another host, so it held no resolver SSH key; the
   vault reach, and the resolver once the move would commit, failed with `SSH authentication

@@ -139,7 +139,9 @@ final class ProductsStore: ObservableObject {
                                    releaseVersion: String? = nil, sourceCommit: String? = nil,
                                    withPrerequisites: Bool = false) -> [String] {
         var values = ["product", verb, product, "--surface", surface]
-        if let host, !host.isEmpty { values += ["--host", host] }
+        // Only a service surface runs on a named host; every other surface
+        // installs on the machine running Stado, which refuses --host for it.
+        if surface == "service", let host, !host.isEmpty { values += ["--host", host] }
         if let releaseVersion { values += ["--release-version", releaseVersion] }
         if let sourceCommit { values += ["--source-commit", sourceCommit] }
         if withPrerequisites { values.append("--with-prerequisites") }

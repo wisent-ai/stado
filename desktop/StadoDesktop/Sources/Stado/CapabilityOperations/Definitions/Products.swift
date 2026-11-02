@@ -82,11 +82,11 @@ enum NativeProductOperations {
         ]),
         .init(id: "sync-plan", title: "Show what reconciling installed surfaces would do (changes nothing)", path: ["product", "sync"], hostPlacement: .none, fields: [
             .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
-            .init(id: "host", label: "Stado host for service surfaces", option: "--host"),
+            .init(id: "host", label: "Stado host for service surfaces (leave blank for cli or desktop)", option: "--host"),
         ], fixedArguments: ["--dry-run"], mutates: false),
         .init(id: "sync", title: "Reconcile installed surfaces against canonical origin/main, as the update policy allows", path: ["product", "sync"], hostPlacement: .none, fields: [
             .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
-            .init(id: "host", label: "Stado host for service surfaces", option: "--host"),
+            .init(id: "host", label: "Stado host for service surfaces (leave blank for cli or desktop)", option: "--host"),
             .init(id: "fetch", label: "Fetch canonical origins first", option: "--fetch", flag: true),
         ]),
         // The host's update policy the hourly product sync follows: which
