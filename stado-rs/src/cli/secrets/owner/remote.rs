@@ -278,6 +278,24 @@ pub(super) async fn placement_move(
     if !output.succeeded() {
         return Err(format!("{shown} failed: {}", output.stderr.trim()));
     }
-    serde_json::from_str(output.stdout.trim())
-        .map_err(|error| format!("{shown} printed no readable report: {error}"))
+    serde_json::from_str(output.stdout.trim()).map_err(|error| {
+        format!(
+            "{shown} exited 0 but printed no readable report ({error}); it printed {:?} on \
+             stdout and its stderr ended {:?}. The move may have committed: `stado placement \
+             history` holds its receipt and `stado placement holds <host>` where the registry \
+             places it",
+            output.stdout.trim().chars().take(PRINTED_CHARS).collect::<String>(),
+            last_chars(output.stderr.trim(), PRINTED_CHARS)
+        )
+    })
+}
+
+/// How much of an unreadable answer a refusal quotes: the start of stdout,
+/// where a stray line before the report stands, and the end of stderr, where
+/// the command's own cause stands.
+const PRINTED_CHARS: usize = 400;
+
+fn last_chars(text: &str, count: usize) -> String {
+    let skip = text.chars().count().saturating_sub(count);
+    text.chars().skip(skip).collect()
 }

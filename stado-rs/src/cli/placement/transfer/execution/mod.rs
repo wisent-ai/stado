@@ -132,7 +132,10 @@ pub(in crate::cli::placement) async fn execute_move(
     let source_profile = profile_host(&context.profile, &context.source.name)?;
     let destination_profile = profile_host(&context.profile, &context.destination.name)?;
 
-    println!(
+    // Progress goes to stderr: stdout carries only the command's report, and
+    // a line before a `--json` report made a committed move unreadable to
+    // the caller that ran it (`credentials vault move`).
+    eprintln!(
         "moving {}: {} -> {}",
         context.profile.name, context.source.name, context.destination.name
     );
@@ -146,7 +149,7 @@ pub(in crate::cli::placement) async fn execute_move(
     )
     .await?
     {
-        println!(
+        eprintln!(
             "  stopped the empty copy {}:{}",
             context.destination.name, logical
         );
@@ -169,7 +172,7 @@ pub(in crate::cli::placement) async fn execute_move(
             fence,
         )
         .await?;
-        println!(
+        eprintln!(
             "  {}: the vault holds its writes for {} and keeps answering reads",
             context.source.name, context.transaction.id
         );
@@ -188,7 +191,7 @@ pub(in crate::cli::placement) async fn execute_move(
                 fence,
             )
             .await?;
-            println!("  fenced {}:{}", context.source.name, logical);
+            eprintln!("  fenced {}:{}", context.source.name, logical);
         }
     }
 
@@ -231,7 +234,7 @@ pub(in crate::cli::placement) async fn execute_move(
     )
     .await?;
     for snapshot in &snapshots {
-        println!("  transferred {}", state_location(&snapshot.spec));
+        eprintln!("  transferred {}", state_location(&snapshot.spec));
     }
     discard_staging(&context.transaction.id)?;
 
@@ -260,7 +263,7 @@ pub(in crate::cli::placement) async fn execute_move(
             start,
         )
         .await?;
-        println!("  started {}:{}", context.destination.name, logical);
+        eprintln!("  started {}:{}", context.destination.name, logical);
     }
     // Each probe is already its own wait on its unit answering 2xx, so all of
     // them are asked at once once every unit has started; their times are
@@ -284,7 +287,7 @@ pub(in crate::cli::placement) async fn execute_move(
             succeeded: healthy.is_ok(),
         });
         match healthy {
-            Ok(_) => println!("  healthy {}:{}", context.destination.name, probe.service),
+            Ok(_) => eprintln!("  healthy {}:{}", context.destination.name, probe.service),
             Err(error) => {
                 if refusal.is_none() {
                     refusal = Some(error);
@@ -377,7 +380,7 @@ pub(in crate::cli::placement) async fn execute_move(
     };
     match read {
         Ok((document, generation)) if landed(context, &document) => {
-            println!(
+            eprintln!(
                 "  the registry authority holds this move's commit at generation {generation}; \
                  its receipt was lost ({error})"
             );

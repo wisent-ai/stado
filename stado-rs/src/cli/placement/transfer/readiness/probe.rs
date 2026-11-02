@@ -166,7 +166,7 @@ pub(in crate::cli::placement::transfer) async fn await_healthy(
                 .stating(FailureCode::InfraDown));
             }
             if previous.as_ref() != Some(&answer) {
-                println!(
+                eprintln!(
                     "  {}: unit {} runs; {url} answered {answer}; reading it again",
                     target.name, managed.unit
                 );
@@ -180,7 +180,7 @@ pub(in crate::cli::placement::transfer) async fn await_healthy(
             }
             let sockets = listening(target, spec, runner).await?;
             for row in &sockets.unread {
-                println!(
+                eprintln!(
                     "  {}: socket table of unit {}: {row}",
                     target.name, managed.unit
                 );
@@ -198,7 +198,7 @@ pub(in crate::cli::placement::transfer) async fn await_healthy(
                     Some(pid) => format!("process {pid}"),
                     None => "no process".to_string(),
                 };
-                println!(
+                eprintln!(
                     "  {}: unit {} restarted: process {was} is now {now}",
                     target.name, managed.unit
                 );

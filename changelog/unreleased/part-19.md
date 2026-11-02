@@ -186,3 +186,10 @@ The version bump gathers them into the release's own file and removes this one.
   each read now has the interval less the session's time, the request that opens the session.
   The receipt names it as `read_bound_seconds`, and a read past it names how long it was waited
   for. Real journey: `tests/placement/vault_reach.mjs`.
+- **`placement move --json` prints only its report on stdout:** a move printed its progress
+  (`moving <profile>: <from> -> <to>`, each step, each probe) on stdout before the JSON report, so
+  `credentials vault move`, which runs `placement move --json` and reads that report, refused a
+  move that had committed with `printed no readable report`, and its error hid why. Progress now
+  goes to stderr; a report that still cannot be read is quoted with the start of stdout and the
+  end of stderr, and the refusal names `stado placement history` and `stado placement holds` as
+  where to read whether the move committed.

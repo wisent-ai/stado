@@ -120,7 +120,7 @@ async fn ensure_empty_copies(
             )));
         }
     }
-    println!(
+    eprintln!(
         "  {}: unit(s) {units} run with none of the profile's required state; the move stops \
          them before it writes the state",
         context.destination.name
@@ -182,7 +182,7 @@ pub(in crate::cli::placement) async fn preflight(
             // Said, not hidden: the operator reading the move receipt has to
             // know the service was already down when it was relocated, and
             // the fencing step below is a no-op for it.
-            println!(
+            eprintln!(
                 "  {}: source unit {} is installed and not running; the move carries its \
                  declaration and its state",
                 context.source.name, source_unit.unit
