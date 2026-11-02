@@ -1,22 +1,24 @@
 //! The cross-product half of `stado quality check`: a line a revision adds
 //! that dials, itself, a service a capability family offers alternatives
 //! for — `stado service directory connect <service>`, the service's forward
-//! marker (`forwards/<service>`, `<service>.local`) — instead of asking
-//! `stado capabilities resolve <family>` is refused, naming the line.
+//! marker (`forwards/<service>`, `<service>.local`) — instead of going
+//! through Stado is refused, naming the line; and for a family a product
+//! calls (`inference`), so is a line that resolves it and would then reach
+//! what it was handed itself.
 //!
 //! A product that dials Brama or Skarbiec itself stops whole when it does
 //! not answer: it has no alternative to fall to and nothing records that it
-//! fell. Resolving the family hands it the alternative that answers, or a
-//! refusal naming each one's product, route and cause, so it keeps doing
-//! every part of its work that does not need it. Only the lines the
-//! revision adds against the published main are judged, so the base's lines
-//! are not every later push's refusal; prose, tests, documentation and the
-//! forge's automation are not read, and Stado, which serves the directory,
-//! is not judged by it.
+//! fell. A product that resolves a called family and reaches the answer
+//! itself carries code for each alternative, so one Stado adds is not used
+//! until every product changes; `stado capabilities call` reaches it for
+//! them. Only the lines the revision adds against the published main are
+//! judged, so the base's lines are not every later push's refusal; prose,
+//! tests, documentation and the forge's automation are not read, and Stado,
+//! which serves the directory, is not judged by it.
 
 use std::path::Path;
 
-use crate::capabilities::alternatives::{Reach, FAMILIES};
+use crate::capabilities::alternatives::{Family, Reach, FAMILIES};
 use crate::cli::CmdError;
 
 /// The product that serves the service directory and the resolution itself.
@@ -26,8 +28,17 @@ const PROSE: &[&str] = &["md", "mdx"];
 /// Top-level directories whose files are not the product running.
 const NOT_RUN: &[&str] = &["tests", "docs", ".github"];
 
+/// What a product reaches the family through, as the refusal names it.
+fn instead(family: &Family, product: &str) -> String {
+    let verb = if family.called { "call" } else { "resolve" };
+    format!(
+        "stado capabilities {verb} {} --consumer {product}",
+        family.id.as_str()
+    )
+}
+
 /// Every service a family reaches through the directory, with its family.
-fn dialled() -> Vec<(&'static str, &'static str)> {
+fn dialled() -> Vec<(&'static str, &'static Family)> {
     FAMILIES
         .iter()
         .flat_map(|family| {
@@ -35,7 +46,7 @@ fn dialled() -> Vec<(&'static str, &'static str)> {
                 .alternatives
                 .iter()
                 .filter_map(move |alternative| match alternative.reach {
-                    Reach::Directory { service } => Some((service, family.id.as_str())),
+                    Reach::Directory { service } => Some((service, family)),
                     _ => None,
                 })
         })
@@ -50,6 +61,16 @@ fn dials(line: &str, service: &str) -> bool {
         || line.contains(&format!("{service}.local"))
         || (line.contains("\"connect\"") || line.contains("'connect'"))
             && named.iter().any(|quoted| line.contains(quoted.as_str()))
+}
+
+/// Whether `line` resolves `family` to reach what it is handed itself:
+/// the command spelled out, or its words as program arguments.
+fn resolves(line: &str, family: &Family) -> bool {
+    let id = family.id.as_str();
+    let quoted = [format!("\"{id}\""), format!("'{id}'")];
+    line.contains(&format!("capabilities resolve {id}"))
+        || (line.contains("\"resolve\"") || line.contains("'resolve'"))
+            && quoted.iter().any(|quoted| line.contains(quoted.as_str()))
 }
 
 fn judged(path: &str) -> bool {
@@ -148,7 +169,8 @@ fn added(checkout: &Path, revision: &str) -> Result<Vec<Added>, CmdError> {
 
 /// Refuse `revision` of `checkout`, exported at `tree`, when a line it adds
 /// outside `product`'s own service directory dials a family's service
-/// itself, naming every such line and the resolution that replaces it.
+/// itself, or resolves a family products call, naming every such line and
+/// the command that replaces it.
 pub(super) fn check(
     tree: &Path,
     checkout: &Path,
@@ -174,7 +196,18 @@ pub(super) fn check(
             for (service, family) in &services {
                 if dials(line, service) {
                     found.push(format!(
-                        "{path}:{number} dials {service} itself; ask `stado capabilities resolve {family} --consumer {product}` and keep working on its refusal: {}",
+                        "{path}:{number} dials {service} itself; use `{}` and keep working on its refusal: {}",
+                        instead(family, product),
+                        line.trim()
+                    ));
+                }
+            }
+            for family in FAMILIES.iter().filter(|family| family.called) {
+                if resolves(line, family) {
+                    found.push(format!(
+                        "{path}:{number} resolves {} to reach an alternative itself, so one Stado adds is not used; hand the request to `{}` and read its answer: {}",
+                        family.id.as_str(),
+                        instead(family, product),
                         line.trim()
                     ));
                 }
@@ -194,11 +227,14 @@ pub(super) fn check(
 
 #[cfg(test)]
 mod tests {
-    use super::{dialled, dials, judged};
+    use super::{dialled, dials, judged, resolves};
+    use crate::capabilities::alternatives::family;
 
     #[test]
     fn a_family_service_dialled_itself_is_found() {
-        assert!(dialled().contains(&("brama", "inference")));
+        assert!(dialled()
+            .iter()
+            .any(|(service, family)| *service == "brama" && family.id.as_str() == "inference"));
         assert!(dials(
             "stado service directory connect brama --consumer oko",
             "brama"
@@ -209,13 +245,32 @@ mod tests {
         ));
         assert!(dials("cat ~/.stado/forwards/brama.local", "brama"));
         assert!(!dials(
-            "stado capabilities resolve inference --consumer oko",
+            "stado capabilities call inference --consumer oko",
             "brama"
         ));
         assert!(!dials(
             r#"run(&["service", "directory", "connect", "weles-admission"])"#,
             "brama"
         ));
+    }
+
+    #[test]
+    fn resolving_a_called_family_is_found_and_calling_it_is_not() {
+        let inference = family("inference").expect("inference is declared");
+        assert!(inference.called);
+        assert!(resolves(
+            "stado capabilities resolve inference --consumer oko --json",
+            inference
+        ));
+        assert!(resolves(
+            r#"stado(&["capabilities", "resolve", "inference", "--consumer", CONSUMER])"#,
+            inference
+        ));
+        assert!(!resolves(
+            r#"stado(&["capabilities", "call", "inference", "--consumer", CONSUMER])"#,
+            inference
+        ));
+        assert!(!family("secrets").expect("secrets is declared").called);
     }
 
     #[test]

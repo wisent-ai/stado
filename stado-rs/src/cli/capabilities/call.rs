@@ -222,7 +222,7 @@ pub(crate) async fn run(
 ) -> Result<(), CmdError> {
     let refuse = |error: CmdError| error.machine_readable(as_json);
     let family = super::declared_family(family).map_err(refuse)?;
-    if family.id.as_str() != "inference" {
+    if !family.called {
         return Err(refuse(CmdError::usage(format!(
             "{} is resolved, not called: a product asks `stado capabilities resolve {} --consumer {consumer}` and reaches what it hands out",
             family.id, family.id

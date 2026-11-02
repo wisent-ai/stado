@@ -54,13 +54,17 @@ pub struct Alternative {
     pub reach: Reach,
 }
 
-/// One family: what is asked for, the key that selects its order, and its
-/// alternatives in the order declared.
+/// One family: what is asked for, the key that selects its order, its
+/// alternatives in the order declared, and how a product reaches them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Family {
     pub id: CapabilityKind,
     pub order: ConfigField,
     pub alternatives: &'static [Alternative],
+    /// A product hands its request to `stado capabilities call` and never
+    /// reaches an alternative itself, so a product's resolving it is refused
+    /// too; otherwise it resolves the family and reaches what it is handed.
+    pub called: bool,
 }
 
 pub const INFERENCE_ORDER_CONFIG: ConfigField = ConfigField::list(
@@ -93,6 +97,7 @@ pub const FAMILIES: &[Family] = &[
     Family {
         id: CapabilityKind::Inference,
         order: INFERENCE_ORDER_CONFIG,
+        called: true,
         alternatives: &[
             Alternative {
                 provider: ProviderId::Brama,
@@ -107,6 +112,7 @@ pub const FAMILIES: &[Family] = &[
     Family {
         id: CapabilityKind::Secrets,
         order: SECRETS_ORDER_CONFIG,
+        called: false,
         alternatives: &[
             Alternative {
                 provider: ProviderId::Skarbiec,
@@ -123,6 +129,7 @@ pub const FAMILIES: &[Family] = &[
     Family {
         id: CapabilityKind::BrowserAutomation,
         order: BROWSER_AUTOMATION_ORDER_CONFIG,
+        called: false,
         alternatives: &[Alternative {
             provider: ProviderId::Weles,
             reach: Reach::Program { name: "weles" },
@@ -131,6 +138,7 @@ pub const FAMILIES: &[Family] = &[
     Family {
         id: CapabilityKind::Mail,
         order: MAIL_ORDER_CONFIG,
+        called: false,
         alternatives: &[Alternative {
             provider: ProviderId::Skrzynka,
             reach: Reach::Program { name: "skrzynka" },
@@ -139,6 +147,7 @@ pub const FAMILIES: &[Family] = &[
     Family {
         id: CapabilityKind::Transcripts,
         order: TRANSCRIPTS_ORDER_CONFIG,
+        called: false,
         alternatives: &[Alternative {
             provider: ProviderId::TranscriptLake,
             reach: Reach::Program {
