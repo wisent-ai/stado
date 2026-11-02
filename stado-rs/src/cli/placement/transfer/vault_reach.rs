@@ -12,6 +12,14 @@
 //! resolver opens, within the resolver's refresh interval; a source that
 //! cannot is refused here, before anything is committed, and the move rolls
 //! back as for any step before the commit.
+//!
+//! The channel needs the source resolver's own SSH key authorized on the
+//! destination: a source that is the registry authority never opened a
+//! session to another host, so it held no resolver key, and its reach failed
+//! with `no identity is available` while the vault on the destination was
+//! up. The step before the reach mints that key on the source when it has
+//! none and authorizes it on the destination ([`authorize_source`]), the same
+//! operation as `stado route key <source> --to <destination>`.
 
 use serde_json::Value;
 
@@ -19,6 +27,24 @@ use super::MoveContext;
 use crate::cli::host::remote_stado_verdict;
 use crate::cli::CmdError;
 use crate::deploy::Runner;
+
+/// Authorize the source resolver's SSH key on the destination, minting the
+/// key on the source when it has none: the hop the source's resolver opens to
+/// the vault once the move commits.
+pub(super) async fn authorize_source(context: &MoveContext) -> Result<(), CmdError> {
+    let registry = crate::targets::load_registry_from_str(
+        &serde_json::to_string(&context.claimed_document)?,
+    )
+    .map_err(|error| CmdError::declaration(error.to_string()))?;
+    crate::deploy::host_access::resolver_key::authorize(
+        &registry,
+        &context.source.name,
+        Some(&context.destination.name),
+    )
+    .await
+    .map(drop)
+    .map_err(CmdError::from)
+}
 
 pub(super) async fn source_reads_destination(
     context: &MoveContext,

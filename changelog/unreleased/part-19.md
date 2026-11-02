@@ -154,3 +154,14 @@ The version bump gathers them into the release's own file and removes this one.
   and `stado release promote`) and that nothing was built or installed. The narrower refusal of a
   CLI release coordinate with `--host` is folded into it. Real journey:
   `tests/install/host_surface.mjs`.
+- **A vault move authorizes its source's resolver key on the destination:** a source that is the
+  registry authority never opened a session to another host, so it held no resolver SSH key; the
+  vault reach, and the resolver once the move would commit, failed with `SSH authentication
+  failed for <user>: no identity is available`, and the destination's `.local` path with an
+  untrusted host key, while the vault there was up. `stado route key TARGET --to HOST`
+  authorizes TARGET's resolver key (minted on TARGET when absent) on any registry host its
+  adapters tunnel to, not only on the directory authority, and the vault move runs it as the step
+  `authorize <source>'s resolver key on <destination>` before the reach. The receipt names the
+  host as `authorized_on`; `--to` naming TARGET itself, and the authority without `--to`, are
+  refused with their cause. Stado Desktop's **Authorize this host's resolver public key** takes the
+  host. Real journey: `tests/route/key_to.mjs`.

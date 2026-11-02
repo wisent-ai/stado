@@ -64,11 +64,11 @@ pub async fn capability(name: &str, as_json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-pub async fn key(target: &str, as_json: bool) -> Result<(), CmdError> {
+pub async fn key(target: &str, to: Option<&str>, as_json: bool) -> Result<(), CmdError> {
     let document = registry::fetch_document().await?;
     let directory = directory(&document)?;
     let parsed = parsed_registry(&document)?;
-    let report = resolver_key::authorize(&parsed, target)
+    let report = resolver_key::authorize(&parsed, target, to)
         .await
         .map_err(CmdError::from)?;
     if as_json {
@@ -85,7 +85,7 @@ pub async fn key(target: &str, as_json: bool) -> Result<(), CmdError> {
             reported(&report, "target"),
             reported(&report, "key_state"),
             reported(&report, "key_type"),
-            reported(&report, "authority"),
+            reported(&report, "authorized_on"),
             reported(&report, "authorized_keys"),
         );
     }

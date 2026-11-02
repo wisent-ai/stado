@@ -40,9 +40,16 @@ pub enum RouteCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Authorize TARGET's resolver key on the declared directory authority.
+    /// Authorize TARGET's resolver key on the declared directory authority,
+    /// or with --to on the registry host a resolver adapter of TARGET opens a
+    /// tunnel to (the host serving a service TARGET reads, such as the fleet
+    /// vault after it moved there).
     Key {
         target: String,
+        /// The registry host to authorize the key on; the directory authority
+        /// when absent.
+        #[arg(long, value_name = "HOST")]
+        to: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -76,7 +83,7 @@ pub async fn dispatch(command: RouteCommands) -> Result<(), CmdError> {
             forward::close(&service, target.as_deref()).await
         }
         RouteCommands::Capability { service, json } => inspect::capability(&service, json).await,
-        RouteCommands::Key { target, json } => inspect::key(&target, json).await,
+        RouteCommands::Key { target, to, json } => inspect::key(&target, to.as_deref(), json).await,
         RouteCommands::Placement(RoutePlacementCommands::Publish { mobile, json }) => {
             inspect::publish_placement(mobile, json).await
         }

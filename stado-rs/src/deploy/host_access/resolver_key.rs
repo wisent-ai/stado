@@ -160,30 +160,44 @@ async fn resolver_public_key(
     Ok((public_key, minted))
 }
 
-/// Authorize TARGET's resolver on the service-directory authority from this
-/// exact registry read.
+/// Authorize TARGET's resolver on HOST from this exact registry read: the
+/// service-directory authority when `to` is none, for the snapshot hop, or
+/// any other registry host a resolver adapter of TARGET opens a tunnel to,
+/// such as the host the fleet vault moves to, which the vault move's source
+/// reads every store bearer from once the move commits.
 pub async fn authorize(
     registry: &crate::targets::Registry,
     target_name: &str,
+    to: Option<&str>,
 ) -> Result<Value, DeployError> {
     let directory = registry.service_directory.as_ref().ok_or_else(|| {
         DeployError("the canonical registry carries no service directory".to_string())
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let authority_name = directory.authority.target.clone();
-    // The authority's resolver reads its own store: `snapshot_source` returns
-    // `SnapshotSource::Local` for it and opens no SSH session at all. Writing a
-    // key for a hop that does not exist would leave an authorization nothing
-    // uses, which is the kind of declaration this fleet has been bitten by.
-    if authority_name == target_name {
-        return Err(DeployError(format!(
-            "{target_name:?} IS the service-directory authority, so its resolver reads the \
-             canonical store directly and opens no session to authorize"
-        ))
+    let host_name = to.map_or_else(|| authority_name.clone(), str::to_string);
+    if host_name == target_name {
+        // The authority's resolver reads its own store: `snapshot_source`
+        // returns `SnapshotSource::Local` for it and opens no SSH session at
+        // all, and no resolver tunnels to its own host. Writing a key for a
+        // hop that does not exist would leave an authorization nothing uses,
+        // which is the kind of declaration this fleet has been bitten by.
+        return Err(DeployError(if to.is_none() {
+            format!(
+                "{target_name:?} IS the service-directory authority, so its resolver reads the \
+                 canonical store directly and opens no session to authorize; name the host its \
+                 adapters reach with --to <host>"
+            )
+        } else {
+            format!(
+                "--to {host_name:?} is {target_name:?} itself, and a resolver opens no session to \
+                 its own host"
+            )
+        })
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let target = host_channel::resolve_target(registry, target_name)?.clone();
-    let authority = host_channel::resolve_target(registry, &authority_name)?.clone();
+    let authority = host_channel::resolve_target(registry, &host_name)?.clone();
 
     let (public_key, minted) = resolver_public_key(&target).await?;
     // The program is a compile-time constant in argv and the key rides stdin:
@@ -218,6 +232,7 @@ pub async fn authorize(
 
     Ok(json!({
         "target": target.name,
+        "authorized_on": host_name,
         "authority": authority_name,
         "authority_destination": authority_destination,
         "connection_path": connection_path,

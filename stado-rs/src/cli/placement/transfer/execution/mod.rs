@@ -317,9 +317,23 @@ pub(in crate::cli::placement) async fn execute_move(
         }
     } else {
         // The commit sends the source's registry authority and object API to
-        // the destination's vault at once, so the source reads it first over
-        // the same channel ([`super::vault_reach`]); a refusal here rolls the
-        // move back with nothing committed.
+        // the destination's vault at once, so the source's resolver key is
+        // authorized there and the source then reads it over the same channel
+        // ([`super::vault_reach`]); a refusal here rolls the move back with
+        // nothing committed.
+        let authorize = super::vault_reach::authorize_source(context);
+        let what = format!(
+            "authorize {}'s resolver key on {}",
+            context.source.name, context.destination.name
+        );
+        step(
+            context,
+            &mut progress.steps,
+            &context.destination.name,
+            what,
+            authorize,
+        )
+        .await?;
         let reach = super::vault_reach::source_reads_destination(context, runner);
         let what = format!(
             "read the destination's vault from {}",

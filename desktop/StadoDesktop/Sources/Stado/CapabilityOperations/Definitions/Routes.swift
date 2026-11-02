@@ -73,7 +73,9 @@ enum NativeRouteOperations {
         .init(id: "capability", title: "Read service credential routes", path: ["route", "capability"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Service", required: true),
         ], mutates: false),
-        .init(id: "key", title: "Authorize this host's resolver public key", path: ["route", "key"], hostPlacement: .positional),
+        .init(id: "key", title: "Authorize this host's resolver public key", path: ["route", "key"], hostPlacement: .positional, fields: [
+            .init(id: "to", label: "Host to authorize it on (blank: the directory authority)", option: "--to"),
+        ]),
         .init(id: "placement", title: "Publish declared fleet placement policies", path: ["route", "placement", "publish"], hostPlacement: .none, fields: [
             .init(id: "mobile", label: "Only active hosts declaring mobile runtime", option: "--mobile", flag: true),
         ]),

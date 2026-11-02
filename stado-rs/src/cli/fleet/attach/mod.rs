@@ -99,7 +99,7 @@ pub(crate) async fn attach(
     let document = crate::cli::registry::fetch_document().await?;
     let registry = crate::targets::load_registry_from_str(&serde_json::to_string(&document)?)
         .map_err(|error| CmdError::click(error.to_string()).stating(FailureCode::Config))?;
-    let key = crate::deploy::host_access::resolver_key::authorize(&registry, &target.name)
+    let key = crate::deploy::host_access::resolver_key::authorize(&registry, &target.name, None)
         .await
         .map_err(CmdError::from)?;
     echo(&format!(
