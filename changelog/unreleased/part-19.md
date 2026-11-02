@@ -144,7 +144,10 @@ The version bump gathers them into the release's own file and removes this one.
   with no end, holding a resolver's tunnel and a vault move's reach for their whole bound. Such a
   path is now left out naming `this machine's own Tailscale node key expired at <T>` or `this
   machine's Tailscale is <state>, not Running`; when no other path is left the connection fails
-  naming it, as for an expired peer.
+  naming it, as for an expired peer. A Tailscale client that answers `status --json` with
+  something other than JSON (one still starting, or asking for a login) is named with the first
+  200 characters it printed on stdout and stderr, where the message gave only the parser's
+  position before.
 - **`--host` on a surface that installs locally is refused, not ignored:** `stado product install
   stado --surface cli --source-commit <c> --host <h>` built and installed on the machine running
   it, reported `installed`, and left `<h>` as it was, so the caller believed `<h>` ran the new

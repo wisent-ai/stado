@@ -40,6 +40,10 @@ const BINARIES: &[&str] = &[
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
 ];
 
+/// How much of what the Tailscale client printed instead of JSON a refusal
+/// quotes: enough for its first sentence.
+const PRINTED_CHARS: usize = 200;
+
 /// The first listed Tailscale CLI that is a file; none when no listed path
 /// holds one. A listed path that cannot be examined is the cause: skipped,
 /// the next path, or no client at all, was taken for this machine's.
@@ -151,8 +155,19 @@ fn read(binary: &Path) -> Result<Tailnet, String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    let status: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("`status --json` is not JSON: {error}"))?;
+    let status: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        // What the client printed instead is the cause (a client still
+        // starting, or one asking for a login, answers in prose), so it is
+        // named, cut to its first characters.
+        let printed = |bytes: &[u8]| -> String {
+            String::from_utf8_lossy(bytes).trim().chars().take(PRINTED_CHARS).collect()
+        };
+        format!(
+            "`status --json` is not JSON: {error}; it printed {:?} on stdout and {:?} on stderr",
+            printed(&output.stdout),
+            printed(&output.stderr)
+        )
+    })?;
     let mut addresses = Tailnet::default();
     record(status.get("Self"), &mut addresses)?;
     addresses.own = own_cause(&status)?;
