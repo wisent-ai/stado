@@ -60,6 +60,11 @@ try {
   assert.equal(live.reached, true, `the live vault was not read: ${live.cause}`);
   assert.ok(live.bound_seconds > 0, 'the bound comes from a declared refresh interval');
   assert.ok(live.reads.length > 0, 'every object API namespace bearer is read');
+  assert.ok(live.paths.length > 0, 'the receipt names the SSH paths it tried');
+  assert.ok(
+    live.paths_seconds <= live.session_seconds && live.session_seconds <= live.seconds,
+    'the path choice, then the session, then the reads are timed in order',
+  );
   for (const read of live.reads) {
     assert.equal(read.answered, true, `${read.namespace} (${read.item}) answered ${JSON.stringify(read.answer)}`);
     assert.ok(read.seconds < live.bound_seconds, `${read.namespace} answered past the bound`);
@@ -71,6 +76,11 @@ try {
   report.closed = deadReceipt;
   assert.equal(deadReceipt.reached, false);
   assert.ok(deadReceipt.cause, 'the refusal names its cause');
+  assert.equal(
+    typeof deadReceipt.session_seconds,
+    'number',
+    'a closed endpoint on a reachable host still opens the session, so the cause is the read',
+  );
   assert.match(dead.stderr, /was not read from this host/);
 
   report.result = 'passed';

@@ -128,3 +128,10 @@ The version bump gathers them into the release's own file and removes this one.
   revision read as consumer `stado` over the native SSH channel the source's resolver will open,
   within the resolver's refresh interval. A source that cannot is refused before the commit and
   the move rolls back, with each read's namespace, item, time and answer in the refusal.
+- **A vault reach that runs out of time says where the time went:** a reach that exceeded the
+  resolver's refresh interval reported only `reads: []`, so a channel that never opened could not
+  be told from a vault that did not answer. `stado host local vault-reach` now reports `paths`
+  (each SSH path tried, in order), `paths_seconds` (choosing them, which reads the tailnet's
+  status), `session_seconds` (the SSH session opening) and, when the bound expires, a cause naming
+  the phase it expired in: the path choice unfinished, no session over the named paths, or the
+  read still unanswered with how many had answered.

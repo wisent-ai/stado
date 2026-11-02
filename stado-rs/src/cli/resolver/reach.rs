@@ -58,13 +58,29 @@ pub(crate) async fn vault_reach(host: &str, endpoint: &str) -> Result<Value, Cmd
     let token_file = crate::config::skarbiec_token_file();
     let started = Instant::now();
     let mut reads = Vec::new();
+    let namespace_count = namespaces.len();
+    // Kept outside the bounded work, so a bound that expires still says how
+    // far the work got: paths not chosen yet, no SSH session yet, or which
+    // read was pending.
+    let mut paths_seconds: Option<f64> = None;
+    let mut path_names: Vec<String> = Vec::new();
+    let mut session_seconds: Option<f64> = None;
+    let mut pending: Option<String> = None;
     let work = async {
+        // Choosing the paths reads the tailnet's status, which the resolver
+        // pays too, so it is measured inside the bound.
+        let paths = target_ssh_paths(&target);
+        paths_seconds = Some(started.elapsed().as_secs_f64());
+        path_names = paths
+            .iter()
+            .map(|path| format!("{} ({})", path.name, path.destination))
+            .collect();
         let tunnel = Arc::new(
-            Tunnel::open(&target_ssh_paths(&target))
+            Tunnel::open(&paths)
                 .await
                 .map_err(|error| format!("no SSH session to {} opened: {error}", target.name))?,
         );
-        let session_seconds = started.elapsed().as_secs_f64();
+        session_seconds = Some(started.elapsed().as_secs_f64());
         let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, u16::default()))
             .await
             .map_err(|error| format!("no loopback port to carry the reads could be bound: {error}"))?;
@@ -93,6 +109,7 @@ pub(crate) async fn vault_reach(host: &str, endpoint: &str) -> Result<Value, Cmd
         .map_err(|error| format!("no Skarbiec client as consumer stado: {error}"))?;
         let mut failed = None;
         for (namespace, policy) in namespaces {
+            pending = Some(format!("{namespace} ({})", policy.item()));
             let read_started = Instant::now();
             let answer = client.read_declared_revision(policy.item(), BEARER_FIELD).await;
             let seconds = read_started.elapsed().as_secs_f64();
@@ -115,27 +132,49 @@ pub(crate) async fn vault_reach(host: &str, endpoint: &str) -> Result<Value, Cmd
                 failed = Some(format!("{namespace} ({}): {}", policy.item(), detail));
             }
         }
+        pending = None;
         carrier.abort();
-        Ok::<_, String>((session_seconds, failed))
+        Ok::<_, String>(failed)
     };
     let budget = Duration::from_secs(bound.seconds);
     let outcome = tokio::time::timeout(budget, work).await;
-    let (reached, session_seconds, cause) = match outcome {
-        Ok(Ok((session_seconds, None))) => (true, Some(session_seconds), None),
-        Ok(Ok((session_seconds, Some(failed)))) => (
+    let (reached, cause) = match outcome {
+        Ok(Ok(None)) => (true, None),
+        Ok(Ok(Some(failed))) => (
             false,
-            Some(session_seconds),
             Some(format!("the vault on {} did not answer the read of {failed}", target.name)),
         ),
-        Ok(Err(cause)) => (false, None, Some(cause)),
+        Ok(Err(cause)) => (false, Some(cause)),
         Err(_) => (
             false,
-            None,
-            Some(format!(
-                "the reads did not all answer within {}s, the refresh interval {}; the resolver \
-                 gives up the object API's own read after it",
-                bound.seconds, bound.declared
-            )),
+            Some(match (paths_seconds, session_seconds, &pending) {
+                (None, _, _) => format!(
+                    "choosing the SSH paths to {} (the tailnet status read) had not finished \
+                     within {}s, the refresh interval {}; the resolver gives up the object \
+                     API's own read after it",
+                    target.name, bound.seconds, bound.declared
+                ),
+                (Some(chosen), None, _) => format!(
+                    "the SSH paths to {} were chosen after {chosen:.3}s ({}), and no SSH \
+                     session over them opened within {}s, the refresh interval {}; the \
+                     resolver gives up the object API's own read after it",
+                    target.name,
+                    path_names.join(", "),
+                    bound.seconds,
+                    bound.declared
+                ),
+                (Some(_), Some(opened), pending) => format!(
+                    "the SSH session to {} opened after {opened:.3}s, then {} of {} reads \
+                     answered and the read of {} was still unanswered at {}s, the refresh \
+                     interval {}; the resolver gives up the object API's own read after it",
+                    target.name,
+                    reads.len(),
+                    namespace_count,
+                    pending.as_deref().unwrap_or("no namespace"),
+                    bound.seconds,
+                    bound.declared
+                ),
+            }),
         ),
     };
     Ok(json!({
@@ -144,6 +183,8 @@ pub(crate) async fn vault_reach(host: &str, endpoint: &str) -> Result<Value, Cmd
         "endpoint": endpoint,
         "bound_seconds": bound.seconds,
         "bound_declared": bound.declared,
+        "paths": path_names,
+        "paths_seconds": paths_seconds,
         "session_seconds": session_seconds,
         "seconds": started.elapsed().as_secs_f64(),
         "reads": reads,
