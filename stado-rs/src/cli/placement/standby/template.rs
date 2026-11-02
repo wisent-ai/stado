@@ -207,6 +207,7 @@ pub(super) async fn commit_host(
             target_name.clone(),
             json!({ "probes": probes, "units": Value::Object(units.clone()) }),
         );
+        let mut directory_changed = false;
         if let Some(services) = next
             .get_mut("service_directory")
             .and_then(|directory| directory.get_mut("services"))
@@ -243,7 +244,15 @@ pub(super) async fn commit_host(
                         .stating(crate::primitives::failure::FailureCode::Config)
                     })?
                     .insert(target_name.clone(), serving);
+                directory_changed = true;
             }
+        }
+        // Every resolver refuses a directory that changed under the
+        // generation it already holds, so a standby address written without
+        // advancing it reached no host: the write landed and every resolver
+        // kept the directory before it.
+        if directory_changed {
+            crate::service_resolution::advance_generation(&mut next).map_err(CmdError::declaration)?;
         }
         Ok(next)
     })

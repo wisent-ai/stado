@@ -201,3 +201,8 @@ The version bump gathers them into the release's own file and removes this one.
   declaration and, with `--apply`, declares the vault there and withdraws it everywhere else,
   then requires that host's `keys check` to read it. Stado Desktop's **Move the fleet vault and
   its owner to another host** runs the same command.
+- **`placement standby` advances the directory generation when it writes a standby address:** the
+  standby commit added the new host under the service's `standby` in the service directory
+  without advancing its generation, so every resolver refused the store (`service directory
+  changed without advancing generation <N>`) and kept the directory before it; the write landed
+  and reached no host. The commit now advances the generation whenever it writes the directory.
