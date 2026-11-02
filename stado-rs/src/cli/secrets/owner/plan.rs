@@ -35,12 +35,19 @@ pub(super) struct Plan {
     pub live: Vec<String>,
 }
 
+/// What a move to a host finds: a vault to move there, or one the directory
+/// already places there, whose move is finished instead.
+pub(super) enum Read {
+    Move(Box<Plan>),
+    Placed(super::recovery::Placed),
+}
+
 impl Plan {
     /// Every fact the move depends on, from one registry read: the profile,
     /// the directory's owner host, both hosts' entries and their Skarbiec
     /// releases. Each further read of the registry is a round trip to its
     /// authority, so it is read here and handed down.
-    pub(super) async fn read(to: &str, owner_uid: &str, runner: &Runner) -> Result<Self, CmdError> {
+    pub(super) async fn read(to: &str, owner_uid: &str, runner: &Runner) -> Result<Read, CmdError> {
         let (document, _) = crate::cli::registry::fetch_versioned_document().await?;
         let registry =
             crate::targets::load_registry_from_value(&document).map_err(CmdError::from)?;
@@ -55,9 +62,9 @@ impl Plan {
         let destination_target = crate::cli::resolved_host(&registry, to)?.clone();
         let destination_name = destination_target.name.clone();
         if destination_name == source_target.name {
-            return Err(CmdError::refused(format!(
-                "{destination_name} already holds the fleet vault"
-            )));
+            return super::recovery::Placed::read(destination_target, &profile, &document, runner)
+                .await
+                .map(Read::Placed);
         }
         if !profile.hosts.contains_key(&destination_name) {
             return Err(CmdError::refused(format!(
@@ -84,7 +91,7 @@ impl Plan {
             .await
             .map_err(CmdError::refused)?;
         let live = live_items(&listed).map_err(CmdError::declaration)?;
-        Ok(Self {
+        Ok(Read::Move(Box::new(Self {
             profile,
             source,
             destination,
@@ -94,7 +101,7 @@ impl Plan {
             registered,
             missing_secret,
             live,
-        })
+        })))
     }
 
     /// What makes a missing owner key on the destination: the applied move
@@ -220,7 +227,7 @@ fn vault_state(profile: &PlacementProfile, source: &VaultHost) -> Result<String,
 }
 
 /// The recipient the vault registers as its owner.
-fn owner_of(recipients: &Value) -> Result<Recipient, CmdError> {
+pub(super) fn owner_of(recipients: &Value) -> Result<Recipient, CmdError> {
     let registered = recipients.as_object().ok_or_else(|| {
         CmdError::declaration(format!(
             "skarbiec recipient list answered no map: {recipients}"

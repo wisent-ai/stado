@@ -19,24 +19,27 @@
 //!    exactly the ones the owner host held.
 //!
 //! A placement move that fails after the rotation gives the vault back to
-//! its previous owner (`rollback`), so the owner host reads its vault again.
+//! its previous owner (`recovery`), so the owner host reads its vault again.
 //! Once the move has carried the vault, it is not moved back: a later step
 //! that fails (a declaration, the read on the destination) is refused naming
 //! what stands then — the vault rotated to the new owner and on the
 //! destination, which host declares the vault file, and whether `keys check`
-//! read it — so the step can be finished from there. Without `--apply`
-//! nothing changes: every reading the move depends on is made and reported.
+//! read it — so the step can be finished from there. A move to the host the
+//! directory already places the vault on finishes those steps: that host
+//! declares the vault and every other host of the profile stops declaring
+//! one. Without `--apply` nothing changes: every reading the move depends on
+//! is made and reported.
 
 mod plan;
+mod recovery;
 mod remote;
-mod rollback;
 
 use serde_json::{json, Value};
 
 use crate::cli::host::{remote_config_output, RemoteConfigAction};
 use crate::cli::CmdError;
 use crate::deploy::Runner;
-use plan::Plan;
+use plan::{Plan, Read};
 /// The directory service whose vault this module moves, which a plain
 /// placement move must not carry before the owner rotates.
 pub(crate) use plan::SERVICE as VAULT_SERVICE;
@@ -54,7 +57,12 @@ pub(crate) async fn move_owner(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let plan = Plan::read(to, owner_uid, &runner).await?;
+    let plan = match Plan::read(to, owner_uid, &runner).await? {
+        Read::Move(plan) => plan,
+        Read::Placed(placed) => {
+            return recovery::finish(&placed, owner_uid, apply, json_output, &runner).await
+        }
+    };
     let mut report = plan.report();
     // A destination whose units were never staged is refused as such first,
     // naming the standby that stages them.
@@ -172,7 +180,7 @@ async fn apply_move(plan: &Plan, runner: &Runner) -> Result<Value, CmdError> {
                     plan.source.target.name, plan.owner_uid, plan.profile.name
                 )));
             }
-            let restored = match rollback::restore_owner(plan, runner).await {
+            let restored = match recovery::restore_owner(plan, runner).await {
                 Ok(_) => format!(
                     "the vault was rotated back to {} and {} reads it again",
                     plan.previous.uid, plan.source.target.name

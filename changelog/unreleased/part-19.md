@@ -193,3 +193,11 @@ The version bump gathers them into the release's own file and removes this one.
   goes to stderr; a report that still cannot be read is quoted with the start of stdout and the
   end of stderr, and the refusal names `stado placement history` and `stado placement holds` as
   where to read whether the move committed.
+- **`credentials vault move` finishes a move whose placement committed:** a move whose
+  placement committed while its caller could not read the report left the directory placing the
+  vault on the destination, the destination declaring none and the former host still declaring
+  its old file, and running the move again refused `<host> already holds the fleet vault`. A move
+  to the host the directory places the vault on now reads that host's owner and every host's
+  declaration and, with `--apply`, declares the vault there and withdraws it everywhere else,
+  then requires that host's `keys check` to read it. Stado Desktop's **Move the fleet vault and
+  its owner to another host** runs the same command.
