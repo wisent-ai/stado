@@ -60,10 +60,12 @@ pub(crate) enum HostLocalCommands {
     /// Whether this host's object API could check its bearers against the
     /// vault at ENDPOINT on HOST: each namespace bearer's revision read as
     /// consumer `stado`, over the native SSH channel this host's resolver
-    /// would open to HOST, within the resolver's refresh interval. Prints a
-    /// `stado.vault-reach.v1` receipt and exits non-zero when any read did
-    /// not answer in time; the host half of a vault move's last step before
-    /// its commit.
+    /// would open to HOST. The session must open within the resolver's
+    /// refresh interval and each read within that interval less the session's
+    /// time: the object API makes one read per request, and the resolver
+    /// gives each request up alone. Prints a `stado.vault-reach.v1` receipt
+    /// and exits non-zero when any read did not answer in time; the host half
+    /// of a vault move's last step before its commit.
     VaultReach {
         #[arg(long)]
         host: String,

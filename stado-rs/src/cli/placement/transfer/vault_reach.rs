@@ -9,9 +9,11 @@
 //! with the commit. So the source's own Stado (`stado host local
 //! vault-reach`) reads every object API bearer's revision from the
 //! destination's declared vault endpoint, over the native SSH channel its
-//! resolver opens, within the resolver's refresh interval; a source that
-//! cannot is refused here, before anything is committed, and the move rolls
-//! back as for any step before the commit.
+//! resolver opens: the session within the resolver's refresh interval and
+//! each read within that interval less the session's time, since the object
+//! API makes one read per request and the resolver gives each request up
+//! alone. A source that cannot is refused here, before anything is committed,
+//! and the move rolls back as for any step before the commit.
 //!
 //! The channel needs the source resolver's own SSH key authorized on the
 //! destination: a source that is the registry authority never opened a

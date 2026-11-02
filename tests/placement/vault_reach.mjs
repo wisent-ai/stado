@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 // runs on its source before the commit. From this machine, against a real
 // registered host serving the fleet vault: every object API bearer's
 // revision is read as consumer `stado` over the native SSH channel the
-// resolver opens, within the resolver's refresh interval, and the receipt
+// resolver opens, the session within the resolver's refresh interval and
+// each read within that interval less the session's time, and the receipt
 // says `reached: true` with one answered read per namespace. Refusals: an
 // endpoint that is not a URL, and an endpoint on that host where nothing
 // listens, which must end `reached: false`, exit non-zero and name the cause.
@@ -65,9 +66,13 @@ try {
     live.paths_seconds <= live.session_seconds && live.session_seconds <= live.seconds,
     'the path choice, then the session, then the reads are timed in order',
   );
+  assert.ok(
+    Math.abs(live.read_bound_seconds - (live.bound_seconds - live.session_seconds)) < 0.001,
+    'each read is bounded by the refresh interval less the session time, not all reads together',
+  );
   for (const read of live.reads) {
     assert.equal(read.answered, true, `${read.namespace} (${read.item}) answered ${JSON.stringify(read.answer)}`);
-    assert.ok(read.seconds < live.bound_seconds, `${read.namespace} answered past the bound`);
+    assert.ok(read.seconds < live.read_bound_seconds, `${read.namespace} answered past its bound`);
   }
 
   const dead = reach(closed);

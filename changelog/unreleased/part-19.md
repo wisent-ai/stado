@@ -178,3 +178,11 @@ The version bump gathers them into the release's own file and removes this one.
   vault move's reach among them. One read now runs at a time in a process; callers that ask
   together wait for it and take its answer, and each later read covers only what was logged since
   the previous one began, keeping the earlier decision when nothing newer was logged.
+- **A vault move's reach bounds each read, not all reads together:** `read the destination's
+  vault from <source>` gave the session and every object API bearer read one refresh interval in
+  total, so with nineteen namespaces declared a channel whose reads each answered in a fraction of
+  a second was refused at the tenth read, though the object API makes one read per request and
+  the resolver gives each request up alone. The session must still open within the interval;
+  each read now has the interval less the session's time, the request that opens the session.
+  The receipt names it as `read_bound_seconds`, and a read past it names how long it was waited
+  for. Real journey: `tests/placement/vault_reach.mjs`.
