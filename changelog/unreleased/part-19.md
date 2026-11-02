@@ -89,3 +89,12 @@ The version bump gathers them into the release's own file and removes this one.
   old process ignores the fence on its writes), and a source whose own Stado reads the vault at
   the unit the move retires, naming the configuration that sends it through its resolver adapter
   instead.
+- **The fleet vault keeps resolving while its own move is open:** the resolver refused every
+  service of a profile under an open placement transaction, so once a host's registry authority
+  and object API read the vault through their resolver adapter (`secrets.skarbiec.url
+  stado://service/skarbiec?consumer=stado`, what the vault move's preflight asks for), the move's
+  own claim cut them off from the vault every store write is checked against: the claim landed,
+  its receipt never came back (`received unexpected message from connection` from the adapter's
+  502), and the transaction stayed open with the vault refused to everyone. `skarbiec` now
+  resolves to its active host, the write-fenced source, until the commit retargets it; every
+  other service of a moving profile is refused as before.

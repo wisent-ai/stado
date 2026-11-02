@@ -112,7 +112,14 @@ fn holding_transaction(
 
 /// Resolve a logical service for one workload identity. Resolution fails while
 /// the owning placement profile is being moved, preventing a partially staged
-/// destination from receiving traffic.
+/// destination from receiving traffic. The fleet vault is the exception: its
+/// move holds every write with Skarbiec's own fence and keeps the source
+/// serving reads until the commit, and the registry authority, the object API
+/// and every credential reader read it through this resolution. Refused here,
+/// the move's own claim cut the authority off from the vault it checks every
+/// store write against, so the claim's receipt never came back and the
+/// transaction was left open. It resolves to its active host, which the
+/// commit retargets.
 pub fn resolve(
     document: &Value,
     service: &str,
@@ -136,7 +143,10 @@ pub fn resolve(
             service: service.to_string(),
             consumer: consumer.to_string(),
         })?;
-    if let Some(profile) = &route.placement_profile {
+    if let (Some(profile), false) = (
+        &route.placement_profile,
+        service == crate::cli::secrets::VAULT_SERVICE,
+    ) {
         if let Some(transaction) =
             holding_transaction(document, profile).map_err(ResolveError::Declaration)?
         {
