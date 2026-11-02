@@ -217,11 +217,13 @@ async fn execute(
     let pulled = match &ran {
         Ok(result) if result.succeeded() && request.operation == CargoOperation::Build => {
             let local = area.join(&commit);
-            let synced = host_delivery::sync_directory(
+            let synced = host_delivery::sync_path(
                 target,
                 &output,
                 &local,
+                host_delivery::Copied::Tree,
                 host_delivery::Direction::Pull,
+                host_delivery::Compare::Quick,
                 runner,
             )
             .await;

@@ -37,3 +37,22 @@ The version bump gathers them into the release's own file and removes this one.
   non-UTF-8`. The record now carries exactly the bytes `git diff` gave, as `diff` when they are
   UTF-8 and as `diff_base64` when they are not, and its `sha256` is the digest of those bytes, so
   it can be checked against `git diff` itself.
+- **A placement move carries every state as a file, and copies it before the fence:** a file state
+  travelled as base64 inside the read script's output and the write script's heredoc, held whole
+  in the move's memory with the source fenced for the whole copy, so a state of a few gigabytes
+  held its service down for hours and then failed with `bash: xrealloc: cannot allocate`.
+  Every state, file or directory, now goes through `rsync -a` into a staging copy on the machine
+  running the move and on to a stage beside its path on the destination, renamed over it after the
+  previous file or tree is renamed to the backup. The preflight and a first copy of each state
+  (`copy <state> while it serves`) run before the move claims its transaction, since an open
+  transaction refuses the profile's services to every consumer; the claim is then laid on the
+  registry as it stands and refused when the profile moved meanwhile. After the fence each state
+  is read again by content (`read what changed in <state>`), so the services are refused for what
+  changed in between; a role move copies its store the same way before it arms the store fence.
+  The staged copies are removed once installed, when the move rolls back and when it fails before
+  its claim, and the local staging room counts every state.
+- **A Stado built from an exported tree no longer claims the enclosing checkout's revision:** the
+  build asked `git rev-parse`, which walks up to any enclosing work tree, so a tree exported inside
+  another checkout reported that checkout's HEAD with `-dirty`. Git is now asked only when the
+  package's parent is the root of its own work tree; otherwise the build embeds the revision
+  `STADO_SOURCE_REVISION` states, or `unknown`.

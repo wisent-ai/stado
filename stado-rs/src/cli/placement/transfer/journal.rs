@@ -250,7 +250,7 @@ pub(in crate::cli::placement) fn sweep(open: &[String]) -> Result<Vec<String>, S
         let (gone, what) = if staged {
             (
                 std::fs::remove_dir_all(&file),
-                format!("the trees staged for {id}"),
+                format!("the state copies staged for {id}"),
             )
         } else {
             (

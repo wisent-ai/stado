@@ -12,8 +12,8 @@ use crate::cli::placement::candidates::{
     declared_profile_hosts, ensure_profile_lifecycle_mutable, parse_registry, profile_host, target,
 };
 use crate::cli::placement::transfer::{
-    execute_move, forget_progress, production_committer, release_claim, rollback,
-    settle_state_backup, MoveContext, Progress, StepTiming,
+    discard_staging, execute_move, forget_progress, prepare_move, production_committer,
+    release_claim, rollback, settle_state_backup, MoveContext, Progress, StepTiming,
 };
 use crate::cli::{registry, CmdError};
 use crate::deploy::production_runner;
@@ -134,35 +134,74 @@ pub(super) async fn relocate(
         to_host: destination.name.clone(),
         started_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
     };
-    let mut claimed_document = document;
-    // The document parsed as a registry above, so the one way the claim is
-    // refused is another transaction already holding it.
-    placement::claim_transaction(&mut claimed_document, &transaction).map_err(CmdError::refused)?;
-    // The claim is a registry compare-and-swap, which on a host whose
-    // registry authority is another host runs on that authority: said as its
-    // own wait, so a move standing before its first step names the claim.
-    let claim_generation = crate::wait::until(
-        crate::wait::Kind::Host,
-        format!(
-            "placement move {} of {}: claim the transaction",
-            transaction.id, transaction.profile
-        ),
-        "the registry",
-        registry::push_document_if(&claimed_document, &generation),
-    )
-    .await?;
-    let context = MoveContext {
+    let runner = production_runner();
+    let committer = production_committer();
+    let mut progress = Progress::default();
+    let mut context = MoveContext {
         profile,
         source,
         destination,
         registry: parsed_registry,
-        claimed_document,
-        claim_generation,
+        claimed_document: document,
+        claim_generation: generation,
         transaction,
     };
-    let runner = production_runner();
-    let committer = production_committer();
-    let mut progress = Progress::default();
+    // The preflight and the first copy of every state run before the claim,
+    // while the profile's services still answer every consumer.
+    if let Err(error) = prepare_move(&context, &mut progress, &runner).await {
+        forget_progress(&context.transaction.id);
+        return Err(match discard_staging(&context.transaction.id) {
+            Ok(()) => error,
+            Err(cleanup) => error.also(cleanup.to_string()),
+        });
+    }
+    // The copy took as long as it took, so the claim is laid on the registry
+    // as it stands now: the profile must still be placed on the source.
+    let (mut claimed_document, generation) = registry::fetch_versioned_document().await?;
+    let current = parse_registry(&claimed_document)?;
+    let still_on = placed_host(&current, &context.profile).map_err(CmdError::declaration)?;
+    if still_on != context.source.name {
+        forget_progress(&context.transaction.id);
+        discard_staging(&context.transaction.id)?;
+        return Err(CmdError::refused(format!(
+            "{} was placed on {} when the move began and is placed on {still_on} now; nothing \
+             was claimed or fenced",
+            context.profile.name, context.source.name
+        )));
+    }
+    // The document parsed as a registry above, so the one way the claim is
+    // refused is another transaction already holding it. The claim is a
+    // registry compare-and-swap, which on a host whose registry authority is
+    // another host runs on that authority: said as its own wait, so a move
+    // standing before its first step names the claim. A claim that fails
+    // leaves nothing claimed or fenced, so the copy goes with it.
+    let claimed = match placement::claim_transaction(&mut claimed_document, &context.transaction) {
+        Ok(()) => {
+            crate::wait::until(
+                crate::wait::Kind::Host,
+                format!(
+                    "placement move {} of {}: claim the transaction",
+                    context.transaction.id, context.transaction.profile
+                ),
+                "the registry",
+                registry::push_document_if(&claimed_document, &generation),
+            )
+            .await
+        }
+        Err(refusal) => Err(CmdError::refused(refusal)),
+    };
+    context.claim_generation = match claimed {
+        Ok(generation) => generation,
+        Err(error) => {
+            forget_progress(&context.transaction.id);
+            return Err(match discard_staging(&context.transaction.id) {
+                Ok(()) => error,
+                Err(cleanup) => error.also(cleanup.to_string()),
+            });
+        }
+    };
+    context.claimed_document = claimed_document;
+    context.registry = current;
     match execute_move(&context, &mut progress, &runner, &committer).await {
         Ok(committed_generation) => {
             // The commit ends the transaction: no release will read how far

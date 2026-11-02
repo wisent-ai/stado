@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use super::super::run_host_script;
-use super::super::state::restore_state;
+use super::super::state::{discard_staging, restore_state};
 use crate::cli::CmdError;
 use crate::deploy::{shlex_quote, Runner};
 use crate::placement::{PlacementState, StateRoot};
@@ -38,6 +38,9 @@ pub(super) async fn undo(
                 destination.name
             ));
         }
+    }
+    if let Err(error) = discard_staging(transaction) {
+        failure = failure.also(error.to_string());
     }
     // `disarmed`, or `not-fenced` when the arm never landed: either way the
     // source takes writes again.

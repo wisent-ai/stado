@@ -134,6 +134,12 @@ fn source_revision() -> String {
         return explicit;
     }
 
+    // `git rev-parse` walks up to any enclosing work tree, so a tree exported
+    // inside another checkout would claim that checkout's revision: only a
+    // package whose parent is the root of its own work tree asks git.
+    if !Path::new("../.git").exists() {
+        return UNKNOWN_REVISION.to_string();
+    }
     checkout_revision().unwrap_or_else(|| UNKNOWN_REVISION.to_string())
 }
 

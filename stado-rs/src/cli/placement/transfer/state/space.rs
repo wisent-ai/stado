@@ -117,11 +117,10 @@ pub(in crate::cli::placement::transfer) async fn ensure_room_for(
     for (state, size) in states.iter().zip(sizes) {
         measured.push((state, size?));
     }
-    let trees: Vec<&(&PlacementState, u64)> =
-        measured.iter().filter(|(state, _)| state.tree).collect();
-    let tree_need: u64 = trees.iter().map(|(_, size)| size).sum();
-    let tree_names: Vec<String> = trees
+    let staged_need: u64 = measured.iter().map(|(_, size)| size).sum();
+    let staged_names: Vec<String> = measured
         .iter()
+        .filter(|(_, size)| *size > 0)
         .map(|(state, _)| state_location(state))
         .collect();
     let mut roots: Vec<(StateRoot, u64, Vec<String>, &PlacementState)> = Vec::new();
@@ -150,11 +149,11 @@ pub(in crate::cli::placement::transfer) async fn ensure_room_for(
             )));
         }
     }
-    staging_room(ends, runner, tree_need, tree_names).await
+    staging_room(ends, runner, staged_need, staged_names).await
 }
 
-/// A tree is copied through this machine (`sync_directory` pulls it into
-/// [`super::tree::staging_base`] and pushes it on), so the trees need room
+/// Every state is copied through this machine (`sync_path` pulls it into
+/// [`super::copy::staging_base`] and pushes it on), so the states need room
 /// here too. This machine is asked like any host when the registry names
 /// it; a machine the registry does not name cannot be asked, which is said.
 async fn staging_room(
@@ -179,7 +178,7 @@ async fn staging_room(
         );
         return Ok(());
     };
-    let base = super::tree::staging_base()?;
+    let base = super::copy::staging_base()?;
     let encoded = base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD,
         base.to_string_lossy().as_bytes(),

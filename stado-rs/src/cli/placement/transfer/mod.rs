@@ -10,7 +10,9 @@ mod role;
 mod state;
 mod units;
 
-pub(in crate::cli::placement) use execution::{execute_move, release_claim, rollback};
+pub(in crate::cli::placement) use execution::{
+    execute_move, prepare_move, release_claim, rollback,
+};
 pub(in crate::cli::placement) use journal::{
     forget as forget_progress, recorded as recorded_progress, running_pid as running_move_pid,
     summary as progress_summary, sweep as sweep_progress,
@@ -19,7 +21,7 @@ pub(in crate::cli::placement) use readiness::preflight;
 pub(in crate::cli::placement) use role::{
     apply_role, ensure_runs_on, move_role, prepare_role, store_fence,
 };
-pub(in crate::cli::placement) use state::settle_state_backup;
+pub(in crate::cli::placement) use state::{discard_staging, settle_state_backup};
 
 use std::sync::Arc;
 
@@ -44,10 +46,9 @@ pub(in crate::cli::placement) fn production_committer() -> RegistryCommitter {
 #[derive(Debug, Clone)]
 struct StateSnapshot {
     spec: PlacementState,
-    /// A file state's bytes, `None` when the source held none.
-    bytes: Option<Vec<u8>>,
-    /// A tree state's copy on this machine, `None` when the source held none.
-    tree: Option<std::path::PathBuf>,
+    /// The state's copy on this machine, a file or a directory as `spec`
+    /// declares; `None` when the source held none.
+    copy: Option<std::path::PathBuf>,
 }
 
 /// How long one step of a move took, on which host, and whether it ended

@@ -13,7 +13,7 @@ use super::plan::{DeliveryPlan, SourceKind};
 use super::script::{guard_lines, parse_marker, DELIVERED_STATUS, MARKER};
 
 mod sync;
-pub use sync::{sync_directory, Direction};
+pub use sync::{sync_path, Compare, Copied, Direction};
 
 pub(super) async fn preflight(
     target: &ComputeTarget,

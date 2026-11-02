@@ -8,10 +8,12 @@
 //! Stado serves its object API from. The role moves as its store and its
 //! route:
 //!
-//! 1. the source's store is fenced for the transaction (`stado storage fence
-//!    arm` on the source), which returns once every write in flight finished;
-//! 2. the store is copied whole to this machine and put in place on the
-//!    destination, its previous tree kept as the move's backup;
+//! 1. the source's store is copied to this machine while it still takes
+//!    writes;
+//! 2. the store is fenced for the transaction (`stado storage fence arm` on
+//!    the source), which returns once every write in flight finished, and
+//!    what changed since the first copy is copied by content and put in
+//!    place on the destination, its previous tree kept as the move's backup;
 //! 3. one registry commit names the destination as the route's active host
 //!    ([`route::switched`]).
 //!
@@ -138,6 +140,12 @@ async fn role_steps(plan: &RoleMove, reason: &str, runner: &Runner) -> Result<Va
     let source_name = &source.name;
     let transaction = uuid::Uuid::new_v4().to_string();
     let why = format!("placement role move {service} to {to_host}: {reason}");
+    // The store is copied once while it still takes writes, into the copy
+    // the fenced read fills again by content: the fence holds every fleet
+    // write off for what changed in between, not for the whole store.
+    if let Err(error) = read_state(source, &store(), &transaction, runner).await {
+        return Err(undo(error, source, None, &transaction, runner).await);
+    }
     let armed = fence(source, "arm", &transaction, &why, runner).await?;
     if armed != ARMED {
         let error = CmdError::click(format!(

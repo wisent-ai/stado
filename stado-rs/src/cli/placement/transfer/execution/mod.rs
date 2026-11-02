@@ -1,6 +1,8 @@
-//! The ordered steps of one transaction: fence, transfer, route, start,
-//! probe, retire, commit. The reverse of every step that already happened,
-//! run on any failure before the commit, is [`rollback`].
+//! The ordered steps of one move: preflight and a copy of every state before
+//! the transaction is claimed ([`prepare_move`]), then under the claim fence,
+//! copy what changed, install, route, start, probe, retire, commit. The
+//! reverse of every step that already happened, run on any failure before
+//! the commit, is [`rollback`].
 
 use std::time::Instant;
 
@@ -9,7 +11,7 @@ use serde_json::Value;
 
 use super::cutover::promote_standby;
 use super::readiness::{apply_routes, await_healthy, preflight, stop_empty_copies};
-use super::state::{read_state, state_location, write_state};
+use super::state::{discard_staging, read_state, state_location, write_state};
 use super::units::{act_on_unit, UnitAction};
 use super::{MoveContext, Progress, RegistryCommitter, StepTiming};
 use crate::cli::placement::candidates::{deploy_error, managed_unit, profile_host, unit};
@@ -87,15 +89,44 @@ fn prepare_committed_document(context: &MoveContext) -> Result<Value, CmdError> 
     Ok(document)
 }
 
+/// What a move does before it claims its transaction, while the source
+/// still serves every consumer: the preflight, then a copy of every state
+/// into the staging copy the read after the fence fills again by content.
+/// An open transaction refuses the profile's services to every consumer, so
+/// a copy made under the claim would hold them down for the whole copy; made
+/// here, they are down for what changed in between. The journal is kept from
+/// the start, so a `placement transactions` sweep keeps the copies of a
+/// move whose process still runs.
+pub(in crate::cli::placement) async fn prepare_move(
+    context: &MoveContext,
+    progress: &mut Progress,
+    runner: &Runner,
+) -> Result<(), CmdError> {
+    super::journal::keep(&context.transaction.id, progress);
+    let both = format!("{} and {}", context.source.name, context.destination.name);
+    let checked = preflight(context, runner);
+    step(context, &mut progress.steps, &both, "preflight", checked).await?;
+    let copies = context
+        .profile
+        .state
+        .iter()
+        .map(|state| {
+            let copy = read_state(&context.source, state, &context.transaction.id, runner);
+            (format!("copy {} while it serves", state_location(state)), copy)
+        })
+        .collect();
+    steps_together(context, &mut progress.steps, &context.source.name, copies).await?;
+    Ok(())
+}
+
+/// The claimed half of a move [`prepare_move`] prepared: fence, copy what
+/// changed, install, route, start, probe, retire, commit.
 pub(in crate::cli::placement) async fn execute_move(
     context: &MoveContext,
     progress: &mut Progress,
     runner: &Runner,
     committer: &RegistryCommitter,
 ) -> Result<String, CmdError> {
-    let both = format!("{} and {}", context.source.name, context.destination.name);
-    let checked = preflight(context, runner);
-    step(context, &mut progress.steps, &both, "preflight", checked).await?;
     let source_profile = profile_host(&context.profile, &context.source.name)?;
     let destination_profile = profile_host(&context.profile, &context.destination.name)?;
 
@@ -138,17 +169,17 @@ pub(in crate::cli::placement) async fn execute_move(
         println!("  fenced {}:{}", context.source.name, logical);
     }
 
-    // Every state of the profile is its own file on the source and its own
-    // file on the destination, so the reads run at once on the fenced source
-    // and the writes at once on the destination: a profile with several
-    // stores no longer stands the sum of every transfer over SSH.
+    // Every state is its own file or tree on the source and on the
+    // destination, so the reads run at once on the fenced source and the
+    // writes at once on the destination: a profile with several stores does
+    // not stand the sum of every transfer over SSH.
     let reads = context
         .profile
         .state
         .iter()
         .map(|state| {
             let read = read_state(&context.source, state, &context.transaction.id, runner);
-            (format!("read {}", state_location(state)), read)
+            (format!("read what changed in {}", state_location(state)), read)
         })
         .collect();
     let snapshots =
@@ -179,6 +210,7 @@ pub(in crate::cli::placement) async fn execute_move(
     for snapshot in &snapshots {
         println!("  transferred {}", state_location(&snapshot.spec));
     }
+    discard_staging(&context.transaction.id)?;
 
     progress.route_applied = true;
     super::journal::keep(&context.transaction.id, progress);

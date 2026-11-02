@@ -1,21 +1,24 @@
-//! The durable files a profile declares: read from the fenced source and
-//! installed on the destination behind a backup the rollback can restore.
+//! The durable files and trees a profile declares: copied from the source
+//! and installed on the destination behind a backup the rollback can
+//! restore (`copy`).
 //!
 //! A state path is relative to its root on each host separately: the home of
 //! the account Stado runs as, or the work root the registry declares for that
 //! host, so a store kept under a large volume on one host lands under the
 //! large volume of the other.
 
+mod copy;
 mod settle;
 mod space;
-mod tree;
 
+pub(in crate::cli::placement) use copy::discard_staging;
+pub(in crate::cli::placement::transfer) use copy::{read_state, state_exists, write_state};
 pub(in crate::cli::placement) use settle::settle_state_backup;
 pub(in crate::cli::placement::transfer) use space::{ensure_room, ensure_room_for, Ends};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-use super::{marker_line, run_host_script, StateSnapshot};
+use super::{marker_line, run_host_script};
 use crate::cli::CmdError;
 use crate::deploy::Runner;
 use crate::placement::{PlacementState, StateRoot};
@@ -73,157 +76,6 @@ root=$(printf '%s' '{root}' | /usr/bin/base64 "$decode")
 full="$root/$relative""#,
         path = payload(path)
     )
-}
-
-pub(super) async fn state_exists(
-    target: &ComputeTarget,
-    state: &PlacementState,
-    runner: &Runner,
-) -> Result<bool, CmdError> {
-    if state.tree {
-        return tree::tree_exists(target, state, runner).await;
-    }
-    let locate = full_path_lines(&root_payload(target, state)?, &state.path);
-    let script = format!(
-        r#"set -eu
-{locate}
-if [ -f "$full" ]; then printf 'STADO_PLACEMENT_STATE\tpresent\n';
-elif [ -e "$full" ]; then printf '%s is not a regular file\n' "$full" >&2; exit 65;
-else printf 'STADO_PLACEMENT_STATE\tmissing\n'; fi
-"#
-    );
-    let output = run_host_script(target, &script, runner, "state preflight").await?;
-    Ok(marker_line(&output, "STADO_PLACEMENT_STATE\tpresent").is_some())
-}
-
-pub(super) async fn read_state(
-    target: &ComputeTarget,
-    state: &PlacementState,
-    transaction_id: &str,
-    runner: &Runner,
-) -> Result<StateSnapshot, CmdError> {
-    if state.tree {
-        return tree::read_tree(target, state, transaction_id, runner).await;
-    }
-    let locate = full_path_lines(&root_payload(target, state)?, &state.path);
-    // The file's base64 goes straight from the encoder onto the marker line:
-    // held in a shell variable first, a store of hundreds of megabytes was
-    // copied through bash's command substitution before a byte was sent.
-    let script = format!(
-        r#"set -eu
-set -o pipefail
-{locate}
-if [ ! -e "$full" ]; then printf 'STADO_PLACEMENT_STATE\tmissing\n'; exit 0; fi
-[ -f "$full" ] || {{ printf '%s is not a regular file\n' "$full" >&2; exit 65; }}
-printf 'STADO_PLACEMENT_STATE\tpresent\t'
-/usr/bin/base64 < "$full" | /usr/bin/tr -d '\r\n'
-printf '\n'
-"#
-    );
-    let output = run_host_script(target, &script, runner, "state read").await?;
-    let line = marker_line(&output, "STADO_PLACEMENT_STATE\t").ok_or_else(|| {
-        CmdError::click(format!(
-            "{}: state read returned no marker for {}",
-            target.name, state.path
-        ))
-        .stating(crate::primitives::failure::FailureCode::InfraDown)
-    })?;
-    // The payload is base64, which never holds a tab, so the marker line is
-    // exactly marker, state and payload.
-    let mut fields = line.split('\t');
-    let _marker = fields.next();
-    match fields.next() {
-        Some("missing") if !state.required => Ok(StateSnapshot {
-            spec: state.clone(),
-            bytes: None,
-            tree: None,
-        }),
-        Some("missing") => Err(CmdError::click(format!(
-            "{}: required state {} disappeared after fencing",
-            target.name, state.path
-        ))
-        .stating(crate::primitives::failure::FailureCode::NotFound)),
-        Some("present") => {
-            let payload = fields.next().ok_or_else(|| {
-                CmdError::click(format!(
-                    "{}: state read marked {} present without its payload",
-                    target.name, state.path
-                ))
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-            })?;
-            let bytes = STANDARD.decode(payload).map_err(|error| {
-                CmdError::click(format!(
-                    "{}: invalid state payload for {}: {error}",
-                    target.name, state.path
-                ))
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-            })?;
-            Ok(StateSnapshot {
-                spec: state.clone(),
-                bytes: Some(bytes),
-                tree: None,
-            })
-        }
-        _ => Err(CmdError::click(format!(
-            "{}: malformed state marker for {}",
-            target.name, state.path
-        ))
-        .stating(crate::primitives::failure::FailureCode::InfraDown)),
-    }
-}
-
-pub(super) async fn write_state(
-    target: &ComputeTarget,
-    snapshot: &StateSnapshot,
-    transaction_id: &str,
-    runner: &Runner,
-) -> Result<(), CmdError> {
-    if snapshot.spec.tree {
-        return tree::write_tree(target, snapshot, transaction_id, runner).await;
-    }
-    let locate = full_path_lines(&root_payload(target, &snapshot.spec)?, &snapshot.spec.path);
-    let transaction = STANDARD.encode(transaction_id.as_bytes());
-    let (present, payload) = match &snapshot.bytes {
-        Some(bytes) => ("yes", STANDARD.encode(bytes)),
-        None => ("no", String::new()),
-    };
-    let script = format!(
-        r#"set -eu
-umask 077
-{locate}
-txn=$(printf '%s' '{transaction}' | /usr/bin/base64 "$decode")
-backup="$full.pre-stado-placement-$txn"
-meta="$backup.meta"
-parent=$(/usr/bin/dirname "$full")
-/bin/mkdir -p "$parent"
-[ ! -e "$backup" ] && [ ! -e "$meta" ] || {{ printf 'placement backup already exists: %s\n' "$backup" >&2; exit 73; }}
-had=no
-if [ -f "$full" ]; then /bin/cp -p "$full" "$backup"; had=yes;
-elif [ -e "$full" ]; then printf '%s is not a regular file\n' "$full" >&2; exit 65; fi
-printf '%s\n' "$had" > "$meta"
-if [ '{present}' = yes ]; then
-  tmp="$full.placement-$txn.tmp"
-  trap '/bin/rm -f "$tmp"' EXIT HUP INT TERM
-  /usr/bin/base64 "$decode" > "$tmp" <<'STADO_PLACEMENT_PAYLOAD'
-{payload}
-STADO_PLACEMENT_PAYLOAD
-  /bin/chmod 600 "$tmp"
-  /bin/mv -f "$tmp" "$full"
-else
-  /bin/rm -f "$full"
-fi
-printf 'STADO_PLACEMENT_WRITE\tok\t%s\n' "$had"
-"#
-    );
-    let output = run_host_script(target, &script, runner, "state install").await?;
-    if marker_line(&output, "STADO_PLACEMENT_WRITE\tok\t").is_none() {
-        return Err(CmdError::click(format!(
-            "{}: state install returned no marker for {}",
-            target.name, snapshot.spec.path
-        ))
-        .stating(crate::primitives::failure::FailureCode::InfraDown));
-    }
-    Ok(())
 }
 
 pub(super) async fn restore_state(

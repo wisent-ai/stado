@@ -3,7 +3,7 @@
 //! where the directory still places it.
 
 use super::super::readiness::apply_routes;
-use super::super::state::restore_state;
+use super::super::state::{discard_staging, restore_state};
 use super::super::units::{act_on_unit, UnitAction};
 use super::super::{MoveContext, Progress};
 use crate::cli::placement::candidates::{profile_host, unit};
@@ -72,6 +72,11 @@ pub(in crate::cli::placement) async fn rollback(
         if let Err(error) = restored {
             errors.push(error.to_string());
         }
+    }
+    // The copies this transaction staged on this machine serve no later
+    // move, which is a new transaction.
+    if let Err(error) = discard_staging(&context.transaction.id) {
+        errors.push(error.to_string());
     }
     if progress.route_applied {
         if let Err(error) = apply_routes(context, &context.source.name, runner).await {
