@@ -2638,3 +2638,21 @@ products:
   approved_by: operator
   approved_at: 2026-10-30T04:46:56Z
   approval_note: 'Operator, ordering the product: ''okej i teraz dodajmy jeszcze dwa projekty. jeden o nazwie prawo. drugi o nazwie zdrowie. kolejny o nazwie para do matchowania ludzi pod dating.'''
+- id: slajd
+  name: Slajd
+  status: preview
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/slajd
+  description: Timed Markdown talks rendered as designed presentations in the Wisent design tokens, refused by slide when they run over or do not fit, and any presentation judged by Probierz against the documents it presents. One engine behind its CLI and loopback API.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/slajd@7c6b3f28d54f
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/slajd
+  installations: []
+  approved_by: lukasz.bartoszcze
+  approved_at: 2026-11-02T04:43:10Z
+  approval_note: 'operator 2026-11-02: to zbuduj repozytorium slajd'
