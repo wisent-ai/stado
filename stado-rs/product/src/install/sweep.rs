@@ -25,6 +25,14 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     if surface == "service" && host.is_none() {
         bail!("service reconciliation requires --host");
     }
+    if let Some(named) = host.filter(|_| surface != "service") {
+        bail!(
+            "--host names the host a service surface's unit runs on; the {surface} surface is \
+             reconciled on the machine that runs this command, so --host {named} would be \
+             ignored. Run the reconciliation on {named}, or drop --host to reconcile here. \
+             Nothing was built or installed"
+        );
+    }
     let path = runtime.home.join(".stado/products/sync.lock");
     // The lock's own holder record (pid, birth, command, phase) names this
     // pass; nothing else is written into the file. A second record written

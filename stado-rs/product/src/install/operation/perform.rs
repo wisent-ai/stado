@@ -36,6 +36,19 @@ pub fn perform(
     if surface == "service" && host.is_none() {
         bail!("service installation requires --host");
     }
+    // `--host` names the host a service surface's unit runs on. Every other
+    // surface installs on the machine that runs this command, so a `--host`
+    // there was ignored and the build landed here while the caller believed
+    // it went to the named host.
+    if let Some(named) = host.filter(|_| surface != "service") {
+        bail!(
+            "--host names the host a service surface's unit runs on; the {surface} surface \
+             installs on the machine that runs this command, so --host {named} would be \
+             ignored and the build would land here. To put it on {named}, run the installation \
+             on {named}, or deliver a release there (`stado release prepare` then `stado release \
+             promote`); to install here, drop --host. Nothing was built or installed"
+        );
+    }
     // A service surface installs its files on this machine and then ensures
     // the unit on `--host`. For another host that restarted the unit there on
     // the files it already had, and left the new build on this machine.
@@ -61,9 +74,6 @@ pub fn perform(
     // signing identity that host's vault may not yet be able to tag.
     if pin.is_some() && (surface == "desktop" || selected["kind"] != "stado-release") {
         bail!("exact release coordinates require a stado-release recipe on the cli or service surface; no source build or host deployment was started");
-    }
-    if pin.is_some() && surface == "cli" && host.is_some() {
-        bail!("exact release coordinates install a CLI on the machine that runs this command; --host names a service host. No source build or host deployment was started");
     }
     let node = format!("{id}/{surface}");
     if stack.iter().any(|frame| frame.node() == node) {

@@ -27,7 +27,15 @@ pub fn installation(action: &'static str, about: &'static str, shape: Shape) -> 
         .about(about)
         .arg(positional("PRODUCT").required(true))
         .arg(surface(true))
-        .arg(value("host", "Stado host for a service surface"))
+        .arg(value(
+            "host",
+            if shape == Shape::Reads {
+                "Stado host for a service surface"
+            } else {
+                "Stado host for a service surface; any other surface installs on the machine \
+                 that runs this command and refuses --host"
+            },
+        ))
         .arg(flag("json", "Print lifecycle state and observed readiness"));
     let command = if shape == Shape::Reads {
         command
@@ -174,7 +182,11 @@ pub fn sync() -> Command {
              fails its readiness check is rolled back to the one before it",
         )
         .arg(surface(true))
-        .arg(value("host", "Stado host for service surfaces"))
+        .arg(value(
+            "host",
+            "Stado host for service surfaces; any other surface is reconciled on the machine \
+             that runs this command and refuses --host",
+        ))
         .arg(flag(
             "fetch",
             "Fetch canonical origins before checking source readiness",

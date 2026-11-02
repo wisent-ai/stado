@@ -145,3 +145,12 @@ The version bump gathers them into the release's own file and removes this one.
   path is now left out naming `this machine's own Tailscale node key expired at <T>` or `this
   machine's Tailscale is <state>, not Running`; when no other path is left the connection fails
   naming it, as for an expired peer.
+- **`--host` on a surface that installs locally is refused, not ignored:** `stado product install
+  stado --surface cli --source-commit <c> --host <h>` built and installed on the machine running
+  it, reported `installed`, and left `<h>` as it was, so the caller believed `<h>` ran the new
+  build. `install` and `update` of a `cli` or `desktop` surface given `--host`, and `sync` of one,
+  are now refused before anything is built, naming that `--host` would be ignored, how to reach
+  the named host (run the installation there, or deliver a release with `stado release prepare`
+  and `stado release promote`) and that nothing was built or installed. The narrower refusal of a
+  CLI release coordinate with `--host` is folded into it. Real journey:
+  `tests/install/host_surface.mjs`.
