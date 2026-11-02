@@ -340,10 +340,14 @@ impl<'a> Job<'a> {
             .arg(source)
             .arg("-C")
             .arg(format!("metadata={identity}"))
-            .arg("-C")
-            .arg(format!("extra-filename=-{identity}"))
             .arg("-L")
             .arg(format!("dependency={}", self.deps.display()));
+        // A library is named by rustc in the shared deps directory, so its
+        // identity goes into its file name; a build script or a binary is
+        // written where `-o` says, and rustc ignores the suffix there.
+        if matches!(output, Output::Library | Output::ProcMacro) {
+            command.arg("-C").arg(format!("extra-filename=-{identity}"));
+        }
         command.arg("-C").arg(format!("opt-level={}", profile.opt_level));
         if profile.debug != "0" {
             command.arg("-C").arg(format!("debuginfo={}", profile.debug));
