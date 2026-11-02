@@ -1,0 +1,10 @@
+[package]
+name = "kompilator"
+version = "0.1.0"
+edition = "2021"
+description = "Builds a Rust package from its Cargo.lock with rustc alone, without Cargo."
+publish = false
+
+[[bin]]
+name = "kompilator"
+path = "src/main.rs"

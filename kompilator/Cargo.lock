@@ -1,0 +1,6 @@
+# Written by hand: kompilator has no dependencies.
+version = 4
+
+[[package]]
+name = "kompilator"
+version = "0.1.0"
