@@ -215,10 +215,10 @@ define_capabilities! {
     },
     Inference => {
         id: "inference",
-        summary: "Answer a product's model requests: Brama, or the model endpoint the operator declares when Brama does not answer.",
+        summary: "Answer a product's model requests: Brama, or a statement recorded for the exact request when Brama does not answer.",
         providers: provider_rows![
             ProviderId::Brama => (Implemented, "capabilities::alternatives + service directory route brama", "The authenticated model gateway, reached through the service directory"),
-            ProviderId::ModelEndpoint => (Implemented, "capabilities::alternatives", "Any OpenAI-compatible endpoint capabilities.inference.endpoint.url names, asked for capabilities.inference.endpoint.model, its key the item playing role capabilities.inference.endpoint.key_role"),
+            ProviderId::Attestation => (Implemented, "capabilities::alternatives + cli::capabilities::attestation", "A statement recorded with stado capabilities attest for the exact request, kept under ~/.stado/attestations"),
         ]
     },
     BrowserAutomation => {

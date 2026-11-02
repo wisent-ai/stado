@@ -18,6 +18,35 @@ enum NativeComputeProviderOperations {
                 .init(id: "consumer", label: "Consumer (the product asking)", option: "--consumer", required: true),
                 .init(id: "failed", label: "An alternative that refused the caller, proven again now (blank: none)", option: "--failed"),
             ]),
+        .init(id: "capabilities-call", title: "Answer a model request through the alternative that answers it, naming every one that could not",
+            path: ["capabilities", "call"], hostPlacement: .none, fields: [
+                .init(id: "family", label: "Family", required: true, choices: ["inference"], initial: "inference"),
+                .init(id: "consumer", label: "Consumer (the product asking)", option: "--consumer", required: true),
+            ], payload: .standardInput(label: "OpenAI chat-completions request JSON", initial: "")),
+        .init(id: "capabilities-attestation-list", title: "List requests kept for a statement, and whether one answers each",
+            path: ["capabilities", "attestation", "list"], hostPlacement: .none, fields: [
+                .init(id: "family", label: "Family", required: true, choices: ["inference"], initial: "inference"),
+                .init(id: "consumer", label: "Consumer", option: "--consumer", required: true),
+            ], mutates: false),
+        .init(id: "capabilities-attestation-show", title: "Read a kept request and its statement",
+            path: ["capabilities", "attestation", "show"], hostPlacement: .none, fields: [
+                .init(id: "family", label: "Family", required: true, choices: ["inference"], initial: "inference"),
+                .init(id: "consumer", label: "Consumer", option: "--consumer", required: true),
+                .init(id: "request", label: "Request SHA-256 (or its first characters)", required: true),
+            ], mutates: false),
+        .init(id: "capabilities-attestation-record", title: "Record the statement answering a request",
+            path: ["capabilities", "attestation", "record"], hostPlacement: .none, fields: [
+                .init(id: "family", label: "Family", required: true, choices: ["inference"], initial: "inference"),
+                .init(id: "consumer", label: "Consumer", option: "--consumer", required: true),
+                .init(id: "request", label: "Request SHA-256 (or its first characters)", required: true),
+                .init(id: "checked", label: "What was checked to give this answer", option: "--checked", required: true),
+            ], payload: .standardInput(label: "The answer: the forced function's arguments as JSON, else text", initial: ""), jsonOutput: false),
+        .init(id: "capabilities-attestation-revoke", title: "Withdraw a statement; the request stays kept",
+            path: ["capabilities", "attestation", "revoke"], hostPlacement: .none, fields: [
+                .init(id: "family", label: "Family", required: true, choices: ["inference"], initial: "inference"),
+                .init(id: "consumer", label: "Consumer", option: "--consumer", required: true),
+                .init(id: "request", label: "Request SHA-256 (or its first characters)", required: true),
+            ], jsonOutput: false),
         .init(id: "capabilities-select", title: "Choose the order a family's alternatives are tried in",
             path: ["capabilities", "select"], hostPlacement: .none, fields: [
                 .init(id: "family", label: "Family", required: true, choices: ["inference", "secrets", "browser-automation", "mail", "transcripts"], initial: "inference"),

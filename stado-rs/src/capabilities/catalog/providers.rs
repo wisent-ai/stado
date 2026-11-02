@@ -97,7 +97,7 @@ define_providers! {
     Skrzynka => ("skrzynka", []),
     Most => ("most", []),
     Brama => ("brama", []),
-    ModelEndpoint => ("model-endpoint", ["openai-compatible"]),
+    Attestation => ("attestation", []),
     Weles => ("weles", []),
     TranscriptLake => ("transcript-lake", []),
     OwnerFile => ("owner-file", []),

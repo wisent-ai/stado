@@ -1,8 +1,12 @@
 //! `stado capabilities` — discover user-facing features and provider support,
 //! and, for what one product calls another for, the selected order of its
 //! alternatives, each alternative's last proof and which one served which
-//! consumer (`resolve`, `select`).
+//! consumer (`resolve`, `select`); the request itself sent to the
+//! alternative that answers (`call`), and the statements that answer a
+//! request in place of a product (`attestation`).
 
+mod attestation;
+mod call;
 mod record;
 mod resolve;
 
@@ -12,6 +16,9 @@ use serde_json::{json, Value};
 use super::CmdError;
 use crate::capabilities::{self, alternatives, ProductCapability};
 
+pub(crate) use attestation::{list as attestation_list, record as attestation_record};
+pub(crate) use attestation::{revoke as attestation_revoke, show as attestation_show};
+pub(crate) use call::run as call;
 pub(crate) use resolve::run as resolve;
 
 #[derive(Serialize)]
@@ -152,20 +159,25 @@ pub fn run(filter: Option<&str>, as_json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// `stado capabilities select FAMILY --order A,B`: write the family's
-/// selected order to `capabilities.<family>.order` in the config file, after
-/// refusing a name the family does not declare or names twice.
-pub(crate) fn select(family: &str, order: &[String]) -> Result<(), CmdError> {
-    let declared = alternatives::family(family).ok_or_else(|| {
+/// The family `id` names, else a usage refusal naming every family.
+fn declared_family(id: &str) -> Result<&'static alternatives::Family, CmdError> {
+    alternatives::family(id).ok_or_else(|| {
         let known: Vec<&str> = alternatives::FAMILIES
             .iter()
             .map(|family| family.id.as_str())
             .collect();
         CmdError::usage(format!(
-            "{family:?} is no family a product resolves through Stado; the families are [{}]",
+            "{id:?} is no family a product resolves through Stado; the families are [{}]",
             known.join(", ")
         ))
-    })?;
+    })
+}
+
+/// `stado capabilities select FAMILY --order A,B`: write the family's
+/// selected order to `capabilities.<family>.order` in the config file, after
+/// refusing a name the family does not declare or names twice.
+pub(crate) fn select(family: &str, order: &[String]) -> Result<(), CmdError> {
+    let declared = declared_family(family)?;
     if order.is_empty() {
         return Err(CmdError::usage(format!(
             "--order names {}'s alternatives in the order they are tried: [{}]",

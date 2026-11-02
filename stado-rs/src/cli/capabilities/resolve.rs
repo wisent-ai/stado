@@ -15,7 +15,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{json, Value};
 
 use super::record::{self, Proof, Served, Unreachable};
-use crate::capabilities::alternatives::{self, Alternative, Family, Reach};
+use crate::capabilities::alternatives::{Alternative, Family, Reach};
 use crate::cli::CmdError;
 
 /// What one alternative answered when it was proven now.
@@ -161,40 +161,20 @@ async fn directory(service: &str, consumer: &str, bound: Option<Duration>) -> Pr
     }
 }
 
-/// Prove the endpoint the operator declares answers HTTP at all: any status
-/// is an answer, as a gateway refusing an unauthenticated caller has
-/// answered.
-async fn endpoint(url_field: &crate::capabilities::ConfigField, bound: Option<Duration>) -> Proven {
-    let Some(url) = declared(url_field) else {
-        return Proven {
-            route: url_field.path.to_owned(),
-            outcome: Err(format!(
-                "no endpoint is declared: set {} (or {})",
-                url_field.path, url_field.env
-            )),
-        };
-    };
-    let client = match reqwest::Client::builder().no_proxy().build() {
-        Ok(client) => client,
-        Err(error) => {
-            return Proven {
-                route: url,
-                outcome: Err(crate::cli::http_failure(&error)),
-            }
-        }
-    };
-    let models = format!("{}/v1/models", url.trim_end_matches('/'));
-    let mut request = client.get(&models);
-    if let Some(bound) = bound {
-        request = request.timeout(bound);
-    }
-    let outcome = crate::wait::request(request)
-        .await
-        .map(|_answered| ())
-        .map_err(|error| crate::cli::http_failure(&error));
-    Proven {
-        route: url,
-        outcome,
+/// Prove the attestation alternative for `consumer`: its directory has a
+/// place. Whether a statement answers a request is read when the request is
+/// made (`stado capabilities call`), since a statement answers one request.
+fn attestation(family: &Family, consumer: &str) -> Proven {
+    match super::attestation::directory(family, consumer) {
+        Ok(directory) => Proven {
+            outcome: std::fs::create_dir_all(&directory)
+                .map_err(|error| format!("cannot create {}: {error}", directory.display())),
+            route: directory.display().to_string(),
+        },
+        Err(cause) => Proven {
+            route: format!("attestations of {consumer}"),
+            outcome: Err(cause),
+        },
     }
 }
 
@@ -242,10 +222,15 @@ fn owner_file() -> Proven {
     }
 }
 
-async fn prove(alternative: &Alternative, consumer: &str, bound: Option<Duration>) -> Proven {
+async fn prove(
+    family: &Family,
+    alternative: &Alternative,
+    consumer: &str,
+    bound: Option<Duration>,
+) -> Proven {
     match alternative.reach {
         Reach::Directory { service } => directory(service, consumer, bound).await,
-        Reach::Endpoint { url, .. } => endpoint(url, bound).await,
+        Reach::Attestation => attestation(family, consumer),
         Reach::Program { name } => program(name),
         Reach::OwnerFile => owner_file(),
     }
@@ -254,64 +239,99 @@ async fn prove(alternative: &Alternative, consumer: &str, bound: Option<Duration
 fn kind(reach: &Reach) -> &'static str {
     match reach {
         Reach::Directory { .. } => "directory",
-        Reach::Endpoint { .. } => "endpoint",
+        Reach::Attestation => "attestation",
         Reach::Program { .. } => "program",
         Reach::OwnerFile => "owner-file",
     }
 }
 
-/// A declared text setting, trimmed; `None` when unset or blank.
-fn declared(field: &crate::capabilities::ConfigField) -> Option<String> {
-    crate::config_file::field_value(field)
-        .and_then(|value| value.as_str().map(str::trim).map(str::to_owned))
-        .filter(|text| !text.is_empty())
+/// The alternative that answers, where, and whether it was proven now or
+/// its kept proof stands.
+pub(super) struct Chosen {
+    pub(super) index: usize,
+    pub(super) alternative: &'static Alternative,
+    pub(super) route: String,
+    pub(super) proven_at: String,
+    pub(super) proven_now: bool,
 }
 
-/// What the caller of an endpoint alternative asks it for and presents to
-/// it, as declared: the model, and the role of the credential-store item
-/// holding its key, which the caller reads itself (`stado credentials get
-/// --role ROLE`); never the secret. Both are `None` for every other kind.
-fn endpoint_terms(reach: &Reach) -> (Option<String>, Option<String>) {
-    match reach {
-        Reach::Endpoint {
-            model, key_role, ..
-        } => (declared(model), declared(key_role)),
-        _ => (None, None),
+/// What one resolve found: the alternative chosen, every one before it that
+/// did not answer, and the order and interval it was judged under.
+pub(super) struct Resolution {
+    pub(super) family: &'static Family,
+    pub(super) consumer: String,
+    pub(super) chosen: Chosen,
+    pub(super) skipped: Vec<Unreachable>,
+    pub(super) order: Vec<&'static str>,
+    pub(super) interval: Option<Duration>,
+    pub(super) interval_unread: Option<String>,
+}
+
+impl Resolution {
+    /// The answer `resolve --json` prints.
+    pub(super) fn answer(&self) -> Value {
+        json!({
+            "family": self.family.id.as_str(),
+            "consumer": self.consumer,
+            "provider": self.chosen.alternative.provider.as_str(),
+            "kind": kind(&self.chosen.alternative.reach),
+            "route": self.chosen.route,
+            "proven_at": self.chosen.proven_at,
+            "proven_now": self.chosen.proven_now,
+            "fallback": self.chosen.index > 0,
+            "order": self.order,
+            "unreachable": unreachable(&self.skipped),
+            "interval_seconds": self.interval.map(|interval| interval.as_secs()),
+            "interval_unread": self.interval_unread,
+        })
     }
 }
 
-/// The alternative that answers, where, and whether it was proven now or
-/// its kept proof stands.
-struct Chosen<'a> {
-    index: usize,
-    alternative: &'a Alternative,
-    route: String,
-    proven_at: String,
-    proven_now: bool,
+fn unreachable(skipped: &[Unreachable]) -> Vec<Value> {
+    skipped
+        .iter()
+        .map(|item| json!({"product": item.product, "route": item.route, "cause": item.cause}))
+        .collect()
 }
 
-/// `stado capabilities resolve FAMILY --consumer C [--failed P]... [--json]`.
-pub(crate) async fn run(
-    family: &str,
+/// The refusal when no alternative of `family` answers `consumer`: the
+/// sentence names each one's product, route and cause, and the details
+/// carry them as data.
+pub(super) fn none_answers(
+    family: &Family,
+    consumer: &str,
+    order: &[&str],
+    skipped: &[Unreachable],
+) -> CmdError {
+    let sentence = skipped
+        .iter()
+        .map(|item| format!("{} at {}: {}", item.product, item.route, item.cause))
+        .collect::<Vec<_>>()
+        .join("; ");
+    CmdError::unreachable(format!(
+        "no {} alternative answers {consumer}: {sentence}",
+        family.id
+    ))
+    .detailing(json!({
+        "family": family.id.as_str(),
+        "consumer": consumer,
+        "order": order,
+        "unreachable": unreachable(skipped),
+    }))
+}
+
+/// The first alternative of `family`, in the selected order, proven to
+/// answer `consumer`, skipping `excluded` (alternatives the caller already
+/// tried for this request), and every one before it that did not; the
+/// proofs made and what served the consumer are recorded.
+pub(super) async fn choose(
+    family: &'static Family,
     consumer: &str,
     failed: &[String],
-    as_json: bool,
-) -> Result<(), CmdError> {
-    let family = alternatives::family(family).ok_or_else(|| {
-        let known: Vec<&str> = alternatives::FAMILIES
-            .iter()
-            .map(|family| family.id.as_str())
-            .collect();
-        CmdError::usage(format!(
-            "{family:?} is no family a product resolves through Stado; the families are [{}]",
-            known.join(", ")
-        ))
-        .machine_readable(as_json)
-    })?;
+    excluded: &[Unreachable],
+) -> Result<Resolution, CmdError> {
     if consumer.trim().is_empty() {
-        return Err(
-            CmdError::usage("--consumer names the product asking").machine_readable(as_json)
-        );
+        return Err(CmdError::usage("--consumer names the product asking"));
     }
     for name in failed {
         if !family
@@ -323,14 +343,12 @@ pub(crate) async fn run(
                 "--failed {name}: {} has no alternative {name}; its alternatives are [{}]",
                 family.id,
                 family.names().join(", ")
-            ))
-            .machine_readable(as_json));
+            )));
         }
     }
-    let ordered = order(family).map_err(|error| error.machine_readable(as_json))?;
+    let ordered = order(family)?;
     let (interval, interval_unread) = interval();
-    let kept = record::read()
-        .map_err(|error| error.machine_readable(as_json))?
+    let kept = record::read()?
         .families
         .remove(family.id.as_str())
         .unwrap_or_default();
@@ -338,13 +356,20 @@ pub(crate) async fn run(
     let mut proofs: Vec<(String, Proof)> = Vec::new();
     let mut skipped: Vec<Unreachable> = Vec::new();
     let mut chosen: Option<Chosen> = None;
-    for (index, alternative) in ordered.iter().enumerate() {
+    for (index, alternative) in ordered.iter().copied().enumerate() {
         let name = alternative.provider.as_str();
+        // One the caller already asked for this request is named where it
+        // stands in the order, with the cause it gave.
+        if let Some(item) = excluded.iter().find(|item| item.product == name) {
+            skipped.push(item.clone());
+            continue;
+        }
         // A directory route is admitted and placed per consumer, so its
-        // proof speaks for that consumer alone; an endpoint, a program and
-        // the owner file answer every consumer alike.
+        // proof speaks for that consumer alone, as the attestations kept for
+        // a consumer do; a program and the owner file answer every consumer
+        // alike.
         let key = match alternative.reach {
-            Reach::Directory { .. } => format!("{name} for {consumer}"),
+            Reach::Directory { .. } | Reach::Attestation => format!("{name} for {consumer}"),
             _ => name.to_owned(),
         };
         let reported = failed
@@ -376,7 +401,7 @@ pub(crate) async fn run(
             });
             continue;
         }
-        let proven = prove(alternative, consumer, interval).await;
+        let proven = prove(family, alternative, consumer, interval).await;
         let at = now();
         proofs.push((
             key,
@@ -406,7 +431,6 @@ pub(crate) async fn run(
             }),
         }
     }
-
     let served = Served {
         provider: chosen
             .as_ref()
@@ -424,79 +448,62 @@ pub(crate) async fn run(
             entry.proven.insert(name, proof);
         }
         entry.served.insert(consumer_id, served);
-    })
-    .map_err(|error| error.machine_readable(as_json))?;
-
-    let order_names: Vec<&str> = ordered
+    })?;
+    let order: Vec<&'static str> = ordered
         .iter()
         .map(|alternative| alternative.provider.as_str())
         .collect();
-    let unreachable: Vec<Value> = skipped
-        .iter()
-        .map(|item| json!({"product": item.product, "route": item.route, "cause": item.cause}))
-        .collect();
-    let Some(Chosen {
-        index,
-        alternative,
-        route,
-        proven_at,
-        proven_now,
-    }) = chosen
-    else {
-        let sentence = skipped
-            .iter()
-            .map(|item| format!("{} at {}: {}", item.product, item.route, item.cause))
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(CmdError::unreachable(format!(
-            "no {} alternative answers {consumer}: {sentence}",
-            family.id
-        ))
-        .detailing(json!({
-            "family": family.id.as_str(),
-            "consumer": consumer,
-            "order": order_names,
-            "unreachable": unreachable,
-        }))
-        .machine_readable(as_json));
+    let Some(chosen) = chosen else {
+        return Err(none_answers(family, consumer, &order, &skipped));
     };
-    let (model, key_role) = endpoint_terms(&alternative.reach);
-    let answer = json!({
-        "family": family.id.as_str(),
-        "consumer": consumer,
-        "provider": alternative.provider.as_str(),
-        "kind": kind(&alternative.reach),
-        "route": route,
-        "model": model,
-        "key_role": key_role,
-        "proven_at": proven_at,
-        "proven_now": proven_now,
-        "fallback": index > 0,
-        "order": order_names,
-        "unreachable": unreachable,
-        "interval_seconds": interval.map(|interval| interval.as_secs()),
-        "interval_unread": interval_unread,
-    });
+    Ok(Resolution {
+        family,
+        consumer: consumer.to_owned(),
+        chosen,
+        skipped,
+        order,
+        interval,
+        interval_unread,
+    })
+}
+
+/// `stado capabilities resolve FAMILY --consumer C [--failed P]... [--json]`.
+pub(crate) async fn run(
+    family: &str,
+    consumer: &str,
+    failed: &[String],
+    as_json: bool,
+) -> Result<(), CmdError> {
+    let family = super::declared_family(family).map_err(|error| error.machine_readable(as_json))?;
+    let resolution = choose(family, consumer, failed, &[])
+        .await
+        .map_err(|error| error.machine_readable(as_json))?;
     if as_json {
-        println!("{}", serde_json::to_string_pretty(&answer)?);
+        println!("{}", serde_json::to_string_pretty(&resolution.answer())?);
+        return Ok(());
+    }
+    let chosen = &resolution.chosen;
+    let proof = if chosen.proven_now {
+        "proven now"
     } else {
-        let proof = if proven_now {
-            "proven now"
-        } else {
-            "kept proof"
-        };
+        "kept proof"
+    };
+    println!(
+        "{} for {consumer}: {} at {} ({proof} of {}{})",
+        family.id,
+        chosen.alternative.provider,
+        chosen.route,
+        chosen.proven_at,
+        if chosen.index > 0 { "; a fallback" } else { "" }
+    );
+    for item in &resolution.skipped {
         println!(
-            "{} for {consumer}: {} at {route} ({proof} of {proven_at}{})",
-            family.id,
-            alternative.provider,
-            if index > 0 { "; a fallback" } else { "" }
+            "  {} at {} did not answer: {}",
+            item.product, item.route, item.cause
         );
-        for item in &skipped {
-            println!(
-                "  {} at {} did not answer: {}",
-                item.product, item.route, item.cause
-            );
-        }
+    }
+    if let Some(cause) = &resolution.interval_unread {
+        println!("  no kept proof stands, as its interval cannot be read: {cause}");
     }
     Ok(())
 }

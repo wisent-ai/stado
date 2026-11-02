@@ -5,6 +5,24 @@ The version bump gathers them into the release's own file and removes this one.
 
 ## Unreleased
 
+### Changed
+
+- **A model request is handed to Stado, and Brama's alternative is a statement recorded for the
+  request:** a product resolved `inference`, then dialled what it was handed itself, reading the
+  endpoint's key and choosing whether to sign, so every alternative added to the catalog needed a
+  change in every product. `stado capabilities call inference --consumer C [--json]` takes the
+  OpenAI chat-completions request on standard input, asks the first alternative in the selected
+  order that answers it and prints that answer; one that cannot answer this request is named with
+  its cause and the next is asked. Brama is sent the request with the `token` of
+  `<consumer>-model-router` and, when an item plays `<consumer>-agent-auth`, its signature. The
+  OpenAI-compatible `model-endpoint` alternative and its `capabilities.inference.endpoint.*`
+  settings are removed; `attestation` takes its place: a request no alternative before it
+  answered is kept under its SHA-256 and refused naming the command that answers it, and
+  `stado capabilities attestation list|show|record|revoke inference --consumer C` reads it and
+  records the answer with what was checked, answering that exact request as a chat completion
+  whose `model` is `attestation`. Stado Desktop runs the same operations on the Compute providers
+  screen.
+
 ### Fixed
 
 - **No check formats or lints a tree:** `stado quality check --pre-push`, `stado release changes

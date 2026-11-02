@@ -24,9 +24,10 @@ pub(crate) use crate::cli::secrets::owner::VAULT_SERVICE;
 /// other launcher that hands them to one program: `sandbox fleet exec
 /// --credential`.
 pub(crate) use crate::cli::secrets::run::granted;
-/// The selected store and its role lookup, for a quality check that hands a
-/// gate the `secret_env` values the release worker would resolve.
-pub(crate) use crate::cli::secrets::store::items::{item_in_role, store, Store};
+/// The selected store, its role lookup and one field's value, for a quality
+/// check that hands a gate the `secret_env` values the release worker would
+/// resolve, and for `capabilities call`, which presents a consumer's bearer.
+pub(crate) use crate::cli::secrets::store::items::{field_value, item_in_role, store, Store};
 /// The local Skarbiec launcher and its JSON reports, for the one place
 /// outside this surface that issues a grant: the agent renewing its own.
 pub(crate) use crate::cli::secrets::store::resolve::{launcher_json, skarbiec_launcher};

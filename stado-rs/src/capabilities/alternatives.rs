@@ -11,6 +11,13 @@
 //! how a product works on its own: a product that is down costs the caller
 //! one named refusal, never its whole function.
 //!
+//! A model request is not even resolved by the caller: it hands the request
+//! to `stado capabilities call inference --consumer PRODUCT`, which sends it
+//! to the alternative that answers and prints that alternative's answer. So
+//! an alternative added here, or an order the operator selects, changes what
+//! every product's model request reaches without a line of that product
+//! changing.
+//!
 //! The families and their alternatives are declared here once. The selected
 //! order of a family is the configuration key `capabilities.<family>.order`
 //! (its environment override is the field's `env`), and the declared order
@@ -26,16 +33,13 @@ pub enum Reach {
     /// directory connect SERVICE --consumer CONSUMER`, which knocks on the
     /// route and refuses one the resolver already holds unanswered.
     Directory { service: &'static str },
-    /// An OpenAI-compatible endpoint the operator declares: `url` names it,
-    /// `model` the model the caller asks it for, and `key_role` the role of
-    /// the credential-store item holding its key (`stado credentials get
-    /// --role`), handed to the caller as that role, never as the secret. Any
-    /// HTTP answer from `<url>/v1/models` proves it.
-    Endpoint {
-        url: &'static ConfigField,
-        model: &'static ConfigField,
-        key_role: &'static ConfigField,
-    },
+    /// A statement recorded for the exact request, in place of the product
+    /// that would answer it: `stado capabilities attest` keeps it under
+    /// `~/.stado/attestations/<family>/<consumer>/` (`STADO_ATTESTATIONS`
+    /// moves the root), keyed by the request's SHA-256. Proven by that
+    /// directory having a place; a request no statement answers yet is kept
+    /// there and refused naming the command that answers it.
+    Attestation,
     /// A program found on this machine's PATH.
     Program { name: &'static str },
     /// The owner-only credential file `credentials.store` names as
@@ -64,21 +68,7 @@ pub const INFERENCE_ORDER_CONFIG: ConfigField = ConfigField::list(
     "STADO_INFERENCE_ORDER",
     "capabilities.inference.order",
 );
-pub const INFERENCE_ENDPOINT_URL_CONFIG: ConfigField = ConfigField::scalar(
-    "inference-endpoint-url",
-    "STADO_INFERENCE_ENDPOINT_URL",
-    "capabilities.inference.endpoint.url",
-);
-pub const INFERENCE_ENDPOINT_MODEL_CONFIG: ConfigField = ConfigField::scalar(
-    "inference-endpoint-model",
-    "STADO_INFERENCE_ENDPOINT_MODEL",
-    "capabilities.inference.endpoint.model",
-);
-pub const INFERENCE_ENDPOINT_KEY_ROLE_CONFIG: ConfigField = ConfigField::scalar(
-    "inference-endpoint-key-role",
-    "STADO_INFERENCE_ENDPOINT_KEY_ROLE",
-    "capabilities.inference.endpoint.key_role",
-);
+pub const ATTESTATIONS_ROOT_VARIABLE: &str = "STADO_ATTESTATIONS";
 pub const SECRETS_ORDER_CONFIG: ConfigField = ConfigField::list(
     "secrets-order",
     "STADO_SECRETS_ORDER",
@@ -109,12 +99,8 @@ pub const FAMILIES: &[Family] = &[
                 reach: Reach::Directory { service: "brama" },
             },
             Alternative {
-                provider: ProviderId::ModelEndpoint,
-                reach: Reach::Endpoint {
-                    url: &INFERENCE_ENDPOINT_URL_CONFIG,
-                    model: &INFERENCE_ENDPOINT_MODEL_CONFIG,
-                    key_role: &INFERENCE_ENDPOINT_KEY_ROLE_CONFIG,
-                },
+                provider: ProviderId::Attestation,
+                reach: Reach::Attestation,
             },
         ],
     },
