@@ -137,6 +137,7 @@ pub(in crate::cli::placement) fn recorded(
         route_applied: journal.route_applied,
         destination_started: journal.destination_started,
         source_retired: journal.source_retired,
+        commit_unknown: false,
         steps: Vec::new(),
     }))
 }

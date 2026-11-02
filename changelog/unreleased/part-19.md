@@ -98,3 +98,13 @@ The version bump gathers them into the release's own file and removes this one.
   502), and the transaction stayed open with the vault refused to everyone. `skarbiec` now
   resolves to its active host, the write-fenced source, until the commit retargets it; every
   other service of a moving profile is refused as before.
+- **A move whose commit landed is not rolled back when its receipt is lost:** the registry
+  authority writes the commit and then answers, and its answer can fail after the write (a vault
+  move's authority loses the vault for a moment once its resolver follows the commit). The move
+  took that as a failed commit and rolled every host back under a registry that already placed
+  the profile on the destination, so every consumer was sent to a host that no longer served it.
+  A failed `commit the placement` now reads the registry back: this move's transaction released
+  and its services active on the destination is a commit, and the move goes on as committed; a
+  registry that does not hold it rolls back as before; one that cannot be read leaves the hosts
+  as they are and says how to tell (`placement transactions`: the transaction still open means it
+  did not land, and `placement release` undoes it).

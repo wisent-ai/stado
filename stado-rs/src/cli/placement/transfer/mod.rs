@@ -74,6 +74,9 @@ pub(in crate::cli::placement) struct Progress {
     route_applied: bool,
     destination_started: bool,
     source_retired: bool,
+    /// The commit was sent and its outcome could not be read back: the move
+    /// may stand committed, so nothing is rolled back.
+    pub(in crate::cli::placement) commit_unknown: bool,
     /// Every step this process ran, in order, with its time.
     pub(in crate::cli::placement) steps: Vec<StepTiming>,
 }
@@ -92,6 +95,7 @@ impl Progress {
             route_applied: true,
             destination_started: true,
             source_retired: true,
+            commit_unknown: false,
             steps: Vec::new(),
         }
     }

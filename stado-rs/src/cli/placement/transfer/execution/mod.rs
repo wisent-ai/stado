@@ -321,7 +321,7 @@ pub(in crate::cli::placement) async fn execute_move(
         prepare_committed_document(context)?,
         context.claim_generation.clone(),
     );
-    step(
+    let error = match step(
         context,
         &mut progress.steps,
         "the registry",
@@ -329,6 +329,52 @@ pub(in crate::cli::placement) async fn execute_move(
         committed,
     )
     .await
+    {
+        Ok(generation) => return Ok(generation),
+        Err(error) => error,
+    };
+    // A compare-and-swap whose write landed can still lose its receipt: the
+    // authority answers after writing, and its own answer can fail (a vault
+    // move's authority loses the vault the moment the resolver follows the
+    // commit). Rolled back on that, the hosts were undone under a registry
+    // that already placed the profile on the destination. So the registry
+    // is read back: this move's commit standing there is a commit; a
+    // registry that cannot be read leaves the outcome unknown, which is
+    // never rolled back.
+    let read = crate::cli::registry::fetch_versioned_document().await;
+    match read {
+        Ok((document, generation)) if landed(context, &document) => {
+            println!(
+                "  the registry holds this move's commit at generation {generation}; its \
+                 receipt was lost ({error})"
+            );
+            Ok(generation)
+        }
+        Ok(_) => Err(error),
+        Err(unread) => {
+            progress.commit_unknown = true;
+            Err(error.also(format!(
+                "whether the commit landed is unknown: the registry could not be read back \
+                 ({unread}); nothing was rolled back, so read `stado placement transactions`: \
+                 transaction {} still open means it did not land and `stado placement release \
+                 {}` undoes the move; gone means it committed",
+                context.transaction.id, context.transaction.id
+            )))
+        }
+    }
+}
+
+/// Whether `document` holds this move's commit: its transaction released
+/// and every service of the profile active on the destination.
+fn landed(context: &MoveContext, document: &Value) -> bool {
+    let open = placement::transactions(document)
+        .map(|open| open.iter().any(|held| held.id == context.transaction.id))
+        .unwrap_or(true);
+    !open
+        && context.profile.services.iter().all(|service| {
+            document["service_directory"]["services"][service]["active_host"].as_str()
+                == Some(context.destination.name.as_str())
+        })
 }
 
 /// The write-fenced source's units, retired once the move committed: first

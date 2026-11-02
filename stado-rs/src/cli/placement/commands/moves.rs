@@ -253,6 +253,19 @@ pub(super) async fn relocate(
         }
         // The move's own failure is the class the caller acts on; what the
         // rollback and the claim release did is said beside it.
+        Err(primary) if progress.commit_unknown => {
+            // A commit that may have landed is never undone under it: the
+            // hosts stay as the move left them and the error says how to
+            // tell, with the journal kept for `placement release`.
+            let mut failure = primary;
+            if !progress.steps.is_empty() {
+                failure = failure.also(format!(
+                    "steps the move ran: {}",
+                    timeline(&progress.steps).join("; ")
+                ));
+            }
+            Err(failure)
+        }
         Err(primary) => {
             let rollback_errors = rollback(&context, &progress, &runner).await;
             let release_error = release_claim(&context.transaction.id).await.err();
