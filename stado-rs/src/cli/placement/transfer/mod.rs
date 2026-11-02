@@ -10,6 +10,7 @@ mod role;
 mod state;
 mod units;
 mod vault_fence;
+mod vault_reach;
 
 pub(in crate::cli::placement) use execution::{
     execute_move, prepare_move, release_claim, retire_after_commit, rollback,

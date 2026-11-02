@@ -119,3 +119,12 @@ The version bump gathers them into the release's own file and removes this one.
   unit the move retires, the refusal named `stado host config set … secrets.skarbiec.url …` as if
   the value took effect alone. It now names `--reload-service stado`, run on the source, whose
   owner vault holds the host account a system daemon's reload needs.
+- **A vault move commits only after its source has read the destination's vault:** the
+  destination's probe asked `GET /health` on its own loopback, which reads nothing, so a move
+  committed while the vault there answered nothing over the channel from the source; the
+  source's registry authority then checked every store request's bearer against it and its
+  store went down with the commit. A new step before the commit, `read the destination's vault
+  from <source>`, runs `stado host local vault-reach` on the source: every object API bearer's
+  revision read as consumer `stado` over the native SSH channel the source's resolver will open,
+  within the resolver's refresh interval. A source that cannot is refused before the commit and
+  the move rolls back, with each read's namespace, item, time and answer in the refusal.

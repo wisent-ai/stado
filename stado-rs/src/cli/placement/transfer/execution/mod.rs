@@ -315,6 +315,17 @@ pub(in crate::cli::placement) async fn execute_move(
             )
             .await?;
         }
+    } else {
+        // The commit sends the source's registry authority and object API to
+        // the destination's vault at once, so the source reads it first over
+        // the same channel ([`super::vault_reach`]); a refusal here rolls the
+        // move back with nothing committed.
+        let reach = super::vault_reach::source_reads_destination(context, runner);
+        let what = format!(
+            "read the destination's vault from {}",
+            context.source.name
+        );
+        step(context, &mut progress.steps, &context.source.name, what, reach).await?;
     }
 
     let committed = committer(

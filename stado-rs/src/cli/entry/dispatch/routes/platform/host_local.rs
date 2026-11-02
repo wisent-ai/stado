@@ -62,6 +62,18 @@ pub(super) async fn dispatch(command: HostLocalCommands) -> Result<(), CmdError>
             println!("{port}");
             Ok(())
         }
+        HostLocalCommands::VaultReach { host, endpoint } => {
+            let receipt = crate::cli::resolver::vault_reach(&host, &endpoint).await?;
+            println!("{receipt}");
+            if receipt["reached"].as_bool() == Some(true) {
+                Ok(())
+            } else {
+                Err(crate::cli::CmdError::refused(format!(
+                    "the vault at {endpoint} on {host} was not read from this host: {}",
+                    receipt["cause"].as_str().unwrap_or("no cause was recorded")
+                )))
+            }
+        }
         HostLocalCommands::Reconcile(HostLocalReconcileCommands::Phase { phase, transaction }) => {
             crate::deploy::host_storage_reconcile_program::run(&phase, &transaction);
             Ok(())

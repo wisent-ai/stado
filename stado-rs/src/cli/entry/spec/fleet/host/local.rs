@@ -57,6 +57,19 @@ pub(crate) enum HostLocalCommands {
     /// ensure` records a catalog service's port and `service directory
     /// consumer add` a resolver adapter's in the registry.
     Port,
+    /// Whether this host's object API could check its bearers against the
+    /// vault at ENDPOINT on HOST: each namespace bearer's revision read as
+    /// consumer `stado`, over the native SSH channel this host's resolver
+    /// would open to HOST, within the resolver's refresh interval. Prints a
+    /// `stado.vault-reach.v1` receipt and exits non-zero when any read did
+    /// not answer in time; the host half of a vault move's last step before
+    /// its commit.
+    VaultReach {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        endpoint: String,
+    },
     /// The storage-root transaction (`stado repair`'s storage-root step) as
     /// it runs on this host: one receipt phase, one host step, or the
     /// resident worker.
