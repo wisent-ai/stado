@@ -130,9 +130,15 @@ struct ProductsView: View {
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
                 if let keychain = installation.signingKeychain {
-                    Text("Source installation signs with the catalog's local keychain: \(keychain). A missing keychain refuses before building; no Skarbiec signing role is read.")
-                        .font(WisentTypeScale.identifierSmall())
-                        .textSelection(.enabled)
+                    if let role = installation.signingRole {
+                        Text("Source installation signs with role \(role)'s identity, which Stado keeps in \(keychain) at every installation (imported when missing or renewed; signed from as kept when the role cannot be read).")
+                            .font(WisentTypeScale.identifierSmall())
+                            .textSelection(.enabled)
+                    } else {
+                        Text("Source installation signs with the catalog's local keychain: \(keychain). A missing keychain refuses before building; no Skarbiec signing role is read.")
+                            .font(WisentTypeScale.identifierSmall())
+                            .textSelection(.enabled)
+                    }
                 }
                 if installation.surface == "cli" && installation.kind == "stado-release" {
                     TextField("Signed release version (optional)", text: Binding(

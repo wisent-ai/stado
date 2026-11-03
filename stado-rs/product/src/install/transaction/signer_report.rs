@@ -11,6 +11,7 @@ use serde_json::{json, Map, Value};
 
 pub(super) struct Report {
     keychain: Option<String>,
+    kept: Option<Value>,
     signatures: Map<String, Value>,
 }
 
@@ -21,6 +22,9 @@ impl Report {
                 true => runtime.signing.keychain_path()?,
                 false => None,
             },
+            kept: runtime.signing.kept_identity().map(|(role, outcome, fingerprint)| {
+                json!({"role": role, "outcome": outcome, "identity": fingerprint})
+            }),
             signatures: Map::new(),
         })
     }
@@ -58,7 +62,8 @@ impl Report {
         if let Some(keychain) = self.keychain {
             state.extra.insert(
                 "signing".to_owned(),
-                json!({"source": "local keychain", "keychain": keychain, "signatures": self.signatures}),
+                json!({"source": "local keychain", "keychain": keychain,
+                    "kept_identity": self.kept, "signatures": self.signatures}),
             );
         }
     }

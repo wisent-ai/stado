@@ -53,6 +53,7 @@ pub struct Choice {
     keychain: Option<String>,
     identity: Option<String>,
     require_signature: bool,
+    kept: Option<(String, &'static str, Option<String>)>,
 }
 
 /// What `variable` declares, a blank value as none; a value that is not
@@ -83,6 +84,7 @@ impl Choice {
             keychain: keychain.map(str::to_owned),
             identity: identity.map(str::to_owned),
             require_signature: false,
+            kept: None,
         })
     }
 
@@ -132,7 +134,10 @@ impl Choice {
 
     /// A catalog recipe may bind a source installation to a keychain on the
     /// installing machine. A command-line or environment choice cannot replace
-    /// that declaration with the fleet role or another keychain.
+    /// that declaration with the fleet role or another keychain. A recipe that
+    /// also declares `signing_role` has Stado keep that role's identity in the
+    /// keychain first ([`super::keep`]), so the installation signs with the
+    /// identity the installed program carries on any Mac that can read the role.
     pub fn for_recipe(&self, recipe: &Value, home: &Path) -> Result<Self> {
         let Some(declared) = recipe.get("signing_keychain") else {
             return Ok(self.clone());
@@ -147,12 +152,43 @@ impl Choice {
                 bail!("signing_keychain {named} declares {selected}, but the invocation names {other}; no other signing source was tried");
             }
         }
-        let mut choice = Self::new(Some(&selected), self.identity.as_deref())?;
+        let kept = match recipe.get("signing_role").and_then(Value::as_str) {
+            Some(role) => {
+                let kept = super::keep(role, &path)?;
+                match (&kept.fingerprint, &kept.cause) {
+                    (Some(fingerprint), _) => eprintln!(
+                        "signing: role {role}'s identity {fingerprint} {} in {selected}",
+                        if kept.outcome == "kept" { "is kept" } else { "was imported" }
+                    ),
+                    (None, Some(cause)) => eprintln!(
+                        "signing: role {role} could not be read ({cause}); signing from the \
+                         identity {selected} kept earlier"
+                    ),
+                    (None, None) => {}
+                }
+                Some((role.to_owned(), kept))
+            }
+            None => None,
+        };
+        let identity = match (&self.identity, &kept) {
+            (Some(identity), _) => Some(identity.clone()),
+            (None, Some((_, kept))) => kept.fingerprint.clone(),
+            (None, None) => None,
+        };
+        let mut choice = Self::new(Some(&selected), identity.as_deref())?;
         choice.require_signature = true;
+        choice.kept = kept.map(|(role, kept)| (role, kept.outcome, kept.fingerprint));
         match Source::resolve(&choice, None)? {
             Source::Keychain(_) => Ok(choice),
             _ => bail!("signing_keychain {named} did not select its keychain"),
         }
+    }
+
+    /// The role whose identity this installation kept in its keychain, how
+    /// (`kept`, `imported` or `unrefreshed`) and the identity's SHA-1 when
+    /// known, for the receipt.
+    pub fn kept_identity(&self) -> Option<&(String, &'static str, Option<String>)> {
+        self.kept.as_ref()
     }
 
     /// The effective keychain selected by a command line, environment or

@@ -122,6 +122,15 @@ pub fn validate(document: &Value) -> Result<()> {
                 DeclaredKeychain::parse(text(recipe, "signing_keychain")?)
                     .with_context(|| format!("{id}.{surface}"))?;
             }
+            if recipe.get("signing_role").is_some() {
+                let role = text(recipe, "signing_role").with_context(|| format!("{id}.{surface}"))?;
+                if role.contains('#') || recipe.get("signing_keychain").is_none() {
+                    bail!(
+                        "{id}.{surface}: signing_role names a role (no #field) and is kept in the \
+                         recipe's signing_keychain, which must be declared beside it"
+                    );
+                }
+            }
             if let Some(commands) = recipe.get("after_install") {
                 for command in commands
                     .as_array()

@@ -23,9 +23,11 @@ struct ProductInstallation: Decodable, Identifiable, Sendable {
     let kind: String
     let repository: String
     let signingKeychain: String?
+    let signingRole: String?
     enum CodingKeys: String, CodingKey {
         case surface, kind, repository
         case signingKeychain = "signing_keychain"
+        case signingRole = "signing_role"
     }
     var id: String { "\(surface)/\(repository)" }
 }

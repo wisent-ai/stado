@@ -315,3 +315,14 @@ The version bump gathers them into the release's own file and removes this one.
   on macOS names no process holding a FIFO, so a program's lingering child went unseen and the
   attach still waited for it (93 s in `tests/host_run/attach_descendant.mjs`). Holders are now
   found by the relays' device and inode among every open file.
+- **Stado keeps the fleet signing identity in its own keychain:** Skarbiec's recipes declared the
+  operator's login keychain, which holds his own identity and not the fleet role's the installed
+  Skarbiec is signed with, so every source install on a Mac was refused as an identity change and
+  could proceed only by changing the identity by hand. A recipe now declares `signing_role` beside
+  `signing_keychain`; at every installation Stado reads the role, imports its identity into the
+  declared keychain under `~/.stado/signing` when it is missing or renewed, and signs from it. A
+  role that cannot be read (Skarbiec down for its own update) signs from the identity kept
+  earlier; with none kept yet the install is refused naming the role. The receipt records
+  `signing.kept_identity` (role, `kept`/`imported`/`unrefreshed`, SHA-1); Products in Stado
+  Desktop says which role is kept. Skarbiec's three recipes declare
+  `$HOME/.stado/signing/fleet-identity.keychain-db` and `macos-development-signing`.

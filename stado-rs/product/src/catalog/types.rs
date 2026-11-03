@@ -206,6 +206,7 @@ impl RecipeKind {
             || self.also_required() == Some(field)
             || self.optional() == Some(field)
             || field == SIGNING_KEYCHAIN
+            || field == SIGNING_ROLE
     }
 
     /// Installed by a language package manager into an isolated prefix.
@@ -229,6 +230,8 @@ pub const PACKAGE: &str = "package";
 pub const ENTRYPOINTS: &str = "entrypoints";
 pub const FEATURES: &str = "features";
 pub const SIGNING_KEYCHAIN: &str = "signing_keychain";
+/// The role whose identity Stado keeps in the recipe's `signing_keychain`.
+pub const SIGNING_ROLE: &str = "signing_role";
 
 /// Whether a recipe field holds a comma-separated list.
 pub fn list_field(field: &str) -> bool {
