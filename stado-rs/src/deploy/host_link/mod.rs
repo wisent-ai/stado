@@ -152,25 +152,19 @@ fn read<T>(unread: &mut Vec<String>, what: &str, answer: Result<Option<T>, Strin
 
 /// Collect this host's `link` block. Never fails: an unreadable datum is a
 /// null with its cause in `unread`, and an unknown platform is
-/// [`SOURCE_UNSUPPORTED`].
-pub async fn collect_link(runner: &Runner) -> BeaconLink {
+/// [`SOURCE_UNSUPPORTED`]. `period` is how often the publisher publishes; the
+/// interface-change window is one period, so consecutive beacons tile the
+/// timeline. A one-off publish has none, and its interface changes are unread.
+pub async fn collect_link(runner: &Runner, period: Option<std::time::Duration>) -> BeaconLink {
     let collected_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let mut unread = Vec::new();
-    let window = match window_seconds() {
-        Ok(Some(window)) => Some(window),
-        Ok(None) => {
-            unread.push(
-                "interface changes: the beacon unit declares no WC_HEALTH_INTERVAL_SECONDS, so \
-                 no window was read"
-                    .to_string(),
-            );
-            None
-        }
-        Err(cause) => {
-            unread.push(format!("interface changes: {cause}"));
-            None
-        }
-    };
+    let window = window_seconds(period);
+    if window.is_none() {
+        unread.push(
+            "interface changes: a one-off beacon publishes on no period, so no window was read"
+                .to_string(),
+        );
+    }
     let path = read(&mut unread, "tailnet path", tailnet_path(runner).await);
 
     let (sleep_wake, changes, platform_source) = match std::env::consts::OS {

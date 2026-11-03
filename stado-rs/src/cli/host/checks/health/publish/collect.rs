@@ -97,7 +97,7 @@ fn unit_entry(state: &LabelState) -> Value {
 /// the role strays it finds are named under `roles.unended_strays` and left
 /// running: only the host process's own health pass ends them.
 pub async fn collect_beacon(publish: bool) -> Result<(), CmdError> {
-    let document = collect_document(Strays::Report).await?;
+    let document = collect_document(Strays::Report, None).await?;
     super::publish_document(document, !publish).await
 }
 
@@ -119,11 +119,20 @@ pub async fn collect_beacons_every(period: std::time::Duration) -> Result<(), Cm
         // Every collection runs to completion. A delayed pass skips obsolete
         // scheduled ticks instead of cancelling work or bursting repeated probes.
         let started = std::time::Instant::now();
-        let collected = collect_document(Strays::End).await;
+        let collected = collect_document(Strays::End, Some(period)).await;
         // How long this collection took: the part of the next beacon's
         // promise the period alone does not cover, since the next one is
         // published only once its own collection finishes.
         let last_collection = started.elapsed();
+        if last_collection > period {
+            eprintln!(
+                "[stado serve host-health] this collection took {}s, past the {}s period, so the \
+                 beacon was published that late; launchd's event reads are the slow part, and the \
+                 beacon's units name each read's status",
+                last_collection.as_secs(),
+                period.as_secs()
+            );
+        }
         let mut document = match collected {
             Ok(document) => document,
             Err(error) => {
@@ -149,6 +158,7 @@ pub async fn collect_beacons_every(period: std::time::Duration) -> Result<(), Cm
         if let Err(error) = super::deliver_document(
             &mut document,
             super::Destination::Store(store),
+            Some(period),
             Some(period + last_collection),
         )
         .await
@@ -158,7 +168,13 @@ pub async fn collect_beacons_every(period: std::time::Duration) -> Result<(), Cm
     }
 }
 
-async fn collect_document(strays: Strays) -> Result<Value, CmdError> {
+/// `cadence` is the period a repeating collector reads every unit on, which
+/// bounds how much of launchd's log its first read of a unit covers; a one-off
+/// collection states none and reads the one-off hour.
+async fn collect_document(
+    strays: Strays,
+    cadence: Option<std::time::Duration>,
+) -> Result<Value, CmdError> {
     let hostname = crate::providers::vast::system_hostname();
     let target = crate::providers::local::agent::lookup_self_auto(&hostname)
         .await
@@ -189,6 +205,7 @@ async fn collect_document(strays: Strays) -> Result<Value, CmdError> {
             unit,
             crate::deploy::service::BootoutScope::Any,
             &runner,
+            cadence,
         )
         .await
         {

@@ -12,25 +12,14 @@ use crate::deploy::{CommandOutput, CommandSpec, Runner};
 /// Seconds in a minute, read from the `time` crate's own minute.
 const SECONDS_PER_MINUTE: u64 = time::Duration::MINUTE.whole_seconds().unsigned_abs();
 
-/// How far back the interface-change window reaches: one beacon interval, so
+/// How far back the interface-change window reaches: one beacon period, so
 /// consecutive beacons tile the timeline without this module persisting a
-/// cursor of its own. The interval is the beacon unit's declared
-/// `WC_HEALTH_INTERVAL_SECONDS`; without one there is no window, and the
-/// interface changes are published as unread rather than over a guessed span.
-/// A declared value that is not a positive whole number is the cause.
-pub(super) fn window_seconds() -> Result<Option<NonZeroU64>, String> {
-    let raw = match std::env::var("WC_HEALTH_INTERVAL_SECONDS") {
-        Ok(raw) => raw,
-        Err(std::env::VarError::NotPresent) => return Ok(None),
-        Err(error) => {
-            return Err(format!(
-                "WC_HEALTH_INTERVAL_SECONDS cannot be read: {error}"
-            ))
-        }
-    };
-    raw.trim().parse::<NonZeroU64>().map(Some).map_err(|error| {
-        format!("WC_HEALTH_INTERVAL_SECONDS is {raw:?}, not a positive whole number: {error}")
-    })
+/// cursor of its own. The period is the publisher's own; it was read from
+/// `WC_HEALTH_INTERVAL_SECONDS`, which no unit declares, so every beacon
+/// published its interface changes as unread. A period under one second, or
+/// none, is no window.
+pub(super) fn window_seconds(period: Option<std::time::Duration>) -> Option<NonZeroU64> {
+    period.and_then(|period| NonZeroU64::new(period.as_secs()))
 }
 
 /// The window in whole minutes, rounded up, which is the unit `log show

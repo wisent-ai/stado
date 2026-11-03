@@ -90,17 +90,16 @@ fn window_since(elapsed: std::time::Duration) -> String {
     format!("{}m", elapsed.as_secs().div_ceil(60).max(1))
 }
 
-/// The window of a cadenced reader's first read of a unit: its declared
-/// cadence (`WC_HEALTH_INTERVAL_SECONDS`, the beacon's), so a host process
-/// that starts does not read an hour of launchd's log for every unit before
-/// its first beacon; the one-off hour when no cadence is declared.
-fn first_window() -> String {
-    match std::env::var("WC_HEALTH_INTERVAL_SECONDS")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .filter(|seconds| *seconds > 0)
-    {
-        Some(seconds) => window_since(std::time::Duration::from_secs(seconds)),
+/// The window of a cadenced reader's first read of a unit: its cadence, the
+/// period it reads every unit on, so a host process that starts does not
+/// read an hour of launchd's log for every unit before its first beacon; the
+/// one-off hour when the reader states none. The cadence was read from
+/// `WC_HEALTH_INTERVAL_SECONDS`, which `stado serve --health-interval-seconds`
+/// never sets: every first read covered an hour, and on a loaded Mac one such
+/// read per unit held the beacon for minutes.
+fn first_window(cadence: Option<std::time::Duration>) -> String {
+    match cadence.filter(|period| !period.is_zero()) {
+        Some(period) => window_since(period),
         None => ONE_OFF_WINDOW.to_string(),
     }
 }
@@ -162,14 +161,15 @@ pub async fn inspect_label_state(
 /// state changed) and the host is under its scan load ceiling; otherwise
 /// the previous read's events are carried, and `event_read_status` says so.
 /// A read covers only the time since this process last looked at the unit
-/// (the first, its declared cadence): a change since then happened in that
-/// window, and an hour of a busy Mac's log took many minutes per unit, which
-/// held the beacon that many minutes.
+/// (the first, `cadence`): a change since then happened in that window, and
+/// an hour of a busy Mac's log took many minutes per unit, which held the
+/// beacon that many minutes.
 pub async fn inspect_label_carrying(
     target: &ComputeTarget,
     label: &str,
     scope: BootoutScope,
     runner: &Runner,
+    cadence: Option<std::time::Duration>,
 ) -> Result<LabelState, DeployError> {
     let key = (target.name.clone(), label.to_string());
     // One get or insert per read: a read that panicked while recording left
@@ -181,7 +181,7 @@ pub async fn inspect_label_carrying(
     // the load, since an unread unit has no events at all, so the ceiling
     // is not asked and no skip is recorded for a read that happened.
     let mode = match &previous {
-        None => EventRead::Read(first_window()),
+        None => EventRead::Read(first_window(cadence)),
         Some(carried) => {
             let admitted = crate::deploy::host_scan::admit(EVENT_SCAN)
                 .map_err(|error| {

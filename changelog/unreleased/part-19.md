@@ -271,3 +271,10 @@ The version bump gathers them into the release's own file and removes this one.
   wrapper names each process still holding a relay (pid and command), stops relaying and exits
   with the program's status. A signal forwarded after the program ended names the marker and
   why it is gone. Real journey: `tests/host_run/attach_descendant.mjs`.
+- **The host-health loop reads launchd's log over its own period, not an hour:** the first read of
+  each unit and the beacon's interface-change window both took their span from
+  `WC_HEALTH_INTERVAL_SECONDS`, which `stado serve --health-interval-seconds` never sets, so every
+  first read covered an hour (one `log show` per unit, minutes each on a loaded Mac, holding the
+  beacon 40 minutes) and every beacon published its interface changes as unread. Both now take the
+  serve loop's period; a one-off `beacon collect` reads the hour and says it has no window. A
+  collection that outruns its period is logged with its duration.

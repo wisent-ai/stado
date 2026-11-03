@@ -116,15 +116,18 @@ pub(super) async fn publish_document(mut document: Value, print: bool) -> Result
     } else {
         Destination::Api
     };
-    deliver_document(&mut document, destination, None).await
+    deliver_document(&mut document, destination, None, None).await
 }
 
 /// Merge this host's `link` block into `document` and deliver it to
-/// `destination`. `promise` is how soon the publisher will publish again,
-/// when it is a process that does: the document then carries `next_by`.
+/// `destination`. `period` is how often the publisher publishes, which sets
+/// the link block's interface-change window; `promise` is how soon it will
+/// publish again, when it is a process that does: the document then carries
+/// `next_by`.
 pub async fn deliver_document(
     document: &mut Value,
     destination: Destination<'_>,
+    period: Option<std::time::Duration>,
     promise: Option<std::time::Duration>,
 ) -> Result<(), CmdError> {
     // A document without `host` names no beacon; it is relayed as it is,
@@ -136,7 +139,7 @@ pub async fn deliver_document(
     if beacon_is_this_host(&host) {
         let runner = crate::deploy::production_runner();
         refresh_local_unit_lifecycle(document, &runner).await;
-        let link = crate::deploy::host_link::collect_link(&runner).await;
+        let link = crate::deploy::host_link::collect_link(&runner, period).await;
         // What this process's scans of the host's own disk last decided:
         // the load reading and every scan standing skipped above the ceiling.
         let scans = crate::deploy::host_scan::published().map_err(|error| {
