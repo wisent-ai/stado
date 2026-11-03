@@ -261,4 +261,5 @@ The version bump gathers them into the release's own file and removes this one.
   `$HOME/.stado/services/<service>/current/<platform>/<launcher>` was never written by the install.
   A service build is placed whole under that directory, each staged member at its staged path, with
   no link on PATH; a release that stages no file named as the catalog program, or a catalog program
-  outside `~/.stado/services`, is refused before anything is placed.
+  outside `~/.stado/services`, is refused before anything is placed. Real journey:
+  `tests/install/service_tree.mjs`.
