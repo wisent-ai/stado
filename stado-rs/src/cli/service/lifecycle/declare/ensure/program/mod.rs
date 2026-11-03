@@ -1,6 +1,7 @@
 //! What a unit runs, and which declaration said so.
 
 mod names;
+mod port;
 
 use super::*;
 
@@ -224,7 +225,10 @@ pub(crate) fn resolved_unit(
         );
     }
     for (variable, value) in std::mem::take(&mut unit.env) {
-        let value = crate::deploy::service_catalog::resolve_word(&value, home, platform, host);
+        let value = port::with_port(
+            crate::deploy::service_catalog::resolve_word(&value, home, platform, host),
+            listen_port,
+        );
         match unit_env.iter_mut().find(|(key, _)| key == &variable) {
             Some((_, current)) => *current = value,
             None => unit_env.push((variable, value)),
@@ -243,6 +247,7 @@ pub(crate) fn resolved_unit(
     for (_, value) in &mut unit_env {
         *value = declared(value)?;
     }
+    port::refuse_unresolved(host, name, &unit.program, &unit.args, &unit_env)?;
     Ok((unit, unit_env))
 }
 

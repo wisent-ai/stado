@@ -236,3 +236,9 @@ The version bump gathers them into the release's own file and removes this one.
   bind it after the move, and exited. Before it stages each unit, standby reads the host's socket
   table for that port and refuses naming the listener's pid, command and user and the host's own
   words, so the directory's standby address is given a free port first.
+- **A unit is never written with `$STADO_LISTEN_PORT` left in it:** a unit rendered while the
+  service directory recorded no port for the service on that host kept the word as its text, and
+  launchd and systemd expand no variables, so Weles staged on the laptop started with
+  `WELES_API_PORT=$STADO_LISTEN_PORT`. The word is replaced in a host's own unit declaration as in
+  the catalog's, and a unit that would still carry it is refused naming where it stands and how to
+  record the port.
