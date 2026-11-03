@@ -556,3 +556,9 @@ The version bump gathers them into the release's own file and removes this one.
   got a Skrzynka that keeps every row in the fleet database `skrzynka`, which nothing declared there,
   so every command and the running service answered `unknown database "skrzynka"`. The CLI recipe
   runs the same create, which places nothing anew on a host that already has the database.
+- **`product sync` installs a surface again when its catalog recipe changed:** a ready installation
+  was kept whatever the catalog now said, so a step a recipe gained (an `after_install` declaring
+  the database a product now keeps its rows in) never ran on a host whose files already matched
+  their source: Skrzynka's CLI, installed before its recipe declared the database, stayed without
+  it. An installation whose recorded recipe differs from the catalog's is installed again, and the
+  row's note says why.

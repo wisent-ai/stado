@@ -147,8 +147,21 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
             }
             let observed = status::inspect(runtime, product, surface, host)?;
             copy_status(&mut row, &observed);
-            if observed["readiness"]["ready"] == true {
+            // A ready installation is kept only while the catalog still states
+            // the recipe it was installed by: a recipe that gained a step (an
+            // `after_install` declaring the database the product now keeps its
+            // rows in) is installed again, since nothing else ever runs it on a
+            // host whose files already match their source.
+            let recipe_changed =
+                crate::state::ProductState::load(runtime, text(product, "id")?, surface)?
+                    .is_some_and(|installed| installed.recipe != *selected);
+            if observed["readiness"]["ready"] == true && !recipe_changed {
                 return Ok(());
+            }
+            if recipe_changed {
+                row["note"] = json!(
+                    "the catalog's recipe differs from the one this installation recorded, so it is installed again"
+                );
             }
             if let Some(reason) = observed["readiness"]["blocked"]
                 .as_str()
