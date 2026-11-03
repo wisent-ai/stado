@@ -53,6 +53,9 @@ pub const SOURCE_LINUX: &str = "journalctl+tailscale";
 /// Nothing on this host could be read: not the platform's log tool, not
 /// tailscale. Every field is null and the reader is told so by name.
 pub const SOURCE_UNSUPPORTED: &str = "unsupported";
+/// The beacon's first link collection beside it has not finished yet: every
+/// field is null and `unread` says so.
+pub const SOURCE_PENDING: &str = "pending";
 
 /// One interface transition inside the collection window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +116,24 @@ impl BeaconLink {
         }
     }
 
+    /// The block a periodic beacon publishes before its first collection
+    /// beside it has finished: every datum null, its source naming that the
+    /// collection is still running, and `unread` saying so.
+    pub fn pending(collected_at: String) -> Self {
+        Self {
+            collected_at,
+            path_kind: PATH_KIND_UNKNOWN.to_string(),
+            endpoint: None,
+            last_sleep_at: None,
+            last_wake_at: None,
+            interface_changes: Vec::new(),
+            source: SOURCE_PENDING.to_string(),
+            unread: Some(vec![
+                "link: the first collection runs beside this beacon".to_string()
+            ]),
+        }
+    }
+
     /// What a loaded beacon document published for its link: none when the
     /// beacon predates the block, the block, or — when it carries something
     /// that is not this shape — why, in the block's own `unread` field. This
@@ -148,6 +169,41 @@ fn read<T>(unread: &mut Vec<String>, what: &str, answer: Result<Option<T>, Strin
             None
         }
     }
+}
+
+/// The link block the last completed background collection made, for a
+/// publisher that publishes on a period.
+static LAST_LINK: std::sync::Mutex<Option<BeaconLink>> = std::sync::Mutex::new(None);
+/// Whether a background collection is running in this process.
+static LINK_PASS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The link block a periodic publisher carries: the last one collected beside
+/// the beacon, and a new collection started beside it unless one still runs.
+/// The block's own reads (`log show` over configd, `pmset -g log`, the
+/// tailnet) took minutes on a loaded Mac and held every beacon behind them;
+/// a beacon now carries the newest finished block, its `collected_at` saying
+/// when, and `None` before the first one finished.
+pub fn link_beside(runner: Runner, period: std::time::Duration) -> Option<BeaconLink> {
+    use std::sync::atomic::Ordering;
+    if LINK_PASS
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        /// Lets the next collection start however this one ends.
+        struct Running;
+        impl Drop for Running {
+            fn drop(&mut self) {
+                LINK_PASS.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        let running = Running;
+        tokio::spawn(async move {
+            let _running = running;
+            let link = collect_link(&runner, Some(period)).await;
+            *crate::primitives::lock::held(&LAST_LINK) = Some(link);
+        });
+    }
+    crate::primitives::lock::held(&LAST_LINK).clone()
 }
 
 /// Collect this host's `link` block. Never fails: an unreadable datum is a

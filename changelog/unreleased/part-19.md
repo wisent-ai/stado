@@ -353,3 +353,10 @@ The version bump gathers them into the release's own file and removes this one.
   it reads only labels, domains and declared and running programs. On a loaded Mac that read ran
   for over eleven minutes inside `stado serve` each pass, adding to the host's load. It now takes
   the image read `service images` already uses for the same fields.
+- **The beacon's link block is collected beside the beacon too:** after the launchd event reads
+  moved beside the beacon, the link block's own reads (`log show` over configd for interface
+  changes, `pmset -g log`, the tailnet path) still ran before each publish, and on a loaded Mac the
+  laptop's beacon reached 193 s against a 60 s period. A beacon published on a period now carries
+  the newest link block collected beside it (its `collected_at` says when); before the first one
+  finishes the block's `source` is `pending` and `unread` says the collection runs beside it. A
+  one-off `beacon collect` still collects its own block.

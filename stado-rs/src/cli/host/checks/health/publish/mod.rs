@@ -139,7 +139,12 @@ pub async fn deliver_document(
     if beacon_is_this_host(&host) {
         let runner = crate::deploy::production_runner();
         refresh_local_unit_lifecycle(document, &runner).await;
-        let link = crate::deploy::host_link::collect_link(&runner, period).await;
+        // A publisher on a period carries the link block collected beside
+        // it; a one-off publish collects its own, since it publishes once.
+        let link = match period {
+            Some(period) => crate::deploy::host_link::link_beside(runner.clone(), period),
+            None => Some(crate::deploy::host_link::collect_link(&runner, None).await),
+        };
         // What this process's scans of the host's own disk last decided:
         // the load reading and every scan standing skipped above the ceiling.
         let scans = crate::deploy::host_scan::published().map_err(|error| {
@@ -148,6 +153,11 @@ pub async fn deliver_document(
             ))
         })?;
         if let Some(object) = document.as_object_mut() {
+            let link = link.unwrap_or_else(|| {
+                crate::deploy::host_link::BeaconLink::pending(
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                )
+            });
             object.insert("link".to_string(), serde_json::to_value(&link)?);
             object.insert("scans".to_string(), scans);
         }
