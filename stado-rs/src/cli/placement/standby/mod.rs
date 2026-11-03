@@ -203,9 +203,11 @@ pub(crate) async fn prepare(
             as_launch_agent: false,
             as_json: true,
         };
-        let standby = crate::cli::service::lifecycle::declare::ensure::Standby {
-            listen_port: ports::standby_port(&document, logical, &target.name, &placed_on)?,
-        };
+        let listen_port = ports::standby_port(&document, logical, &target.name, &placed_on)?;
+        if let Some(port) = listen_port {
+            ports::refuse_taken(&target, logical, &service.catalog_name, port).await?;
+        }
+        let standby = crate::cli::service::lifecycle::declare::ensure::Standby { listen_port };
         let staged =
             crate::cli::service::lifecycle::declare::ensure::run::stage_unit(options, standby);
         let staged = crate::wait::until(

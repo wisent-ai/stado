@@ -4,6 +4,37 @@
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
+use crate::targets::ComputeTarget;
+
+/// Refuse to stage `logical` on `target` when another program already
+/// listens on the port the directory gives it there. A standby unit is
+/// staged, not running (standby refuses a second active copy), so any
+/// listener is someone else's: staged anyway, the moved unit could not bind
+/// and exited, and the move's probe asked a port another product answered.
+pub(super) async fn refuse_taken(
+    target: &ComputeTarget,
+    logical: &str,
+    catalog_name: &str,
+    port: u16,
+) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let (holders, text) = crate::cli::host::port_holders(target, port, &runner).await?;
+    let Some(holder) = holders.first() else {
+        return Ok(());
+    };
+    Err(CmdError::refused(format!(
+        "{}: the service directory gives {logical} ({catalog_name}) port {port} there, and pid {} \
+         ({} as {}) already listens on it; the moved unit could not bind it. Give {logical} a \
+         free port on {} in the directory's standby address, or move the other program off it, \
+         then stand by again. The host said: {}",
+        target.name,
+        holder.pid,
+        holder.command,
+        holder.user,
+        target.name,
+        text.lines().take(3).collect::<Vec<_>>().join(" | ")
+    )))
+}
 
 /// The port a standby unit of `logical` listens on, from the service
 /// directory: the address it names for `target` (as a standby, or as an

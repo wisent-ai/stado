@@ -51,6 +51,20 @@ fn parse_lsof(text: &str) -> Vec<PortHolder> {
         .collect()
 }
 
+/// The processes listening on `port` of `target`, as [`port_owner`] reads
+/// them, with the host's own text for a refusal to quote.
+pub(crate) async fn port_holders(
+    target: &ComputeTarget,
+    port: u16,
+    runner: &crate::deploy::Runner,
+) -> Result<(Vec<PortHolder>, String), CmdError> {
+    let answered = crate::deploy::host_channel::run_command(target, &reader(u32::from(port)), runner)
+        .await
+        .map_err(CmdError::from)?;
+    let text = answered.stdout.trim().to_string();
+    Ok((parse_lsof(&text), text))
+}
+
 /// Read the process listening on one port of TARGET.
 ///
 /// The answer is the host's own words: the rows the reader printed, plus the

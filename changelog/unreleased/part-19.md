@@ -230,3 +230,9 @@ The version bump gathers them into the release's own file and removes this one.
   or a 4xx now counts only once the socket table shows the unit's process listening on the URL's
   port; a unit that stops running while another program answers there is refused naming that
   the port is taken.
+- **`placement standby` refuses a port another program already listens on:** standby staged a
+  unit on the port the service directory gives it on the new host without asking whether anything
+  listened there, so Weles was staged on a laptop port another product already held, could not
+  bind it after the move, and exited. Before it stages each unit, standby reads the host's socket
+  table for that port and refuses naming the listener's pid, command and user and the host's own
+  words, so the directory's standby address is given a free port first.
