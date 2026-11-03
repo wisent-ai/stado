@@ -253,14 +253,43 @@ fn filter_word(value: Option<&str>) -> &str {
 }
 
 /// `release status --run ID | --version V`: the runs the filter admits, and
-/// a refusal naming the runs read when none does.
+/// a refusal naming the runs read when none does. With `--wait` the read
+/// holds, on the store's change watch over the run records, until the one
+/// run `--run` names has stopped moving, and a run that finished without
+/// publishing ends the command as failed, so `--wait && install` installs
+/// only a published release.
 async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
     let filter = RunFilter {
         product: args.product.as_deref(),
         run: args.run.as_deref(),
         version: args.version.as_deref(),
     };
-    let runs = matching_runs(filter, run_window(args)?).await?;
+    let mut watch = match args.wait {
+        true => {
+            let store = crate::queue::JobStorage::new()
+                .await
+                .map_err(CmdError::from)?;
+            Some(store.watch_prefixes(&[RUN_RECORDS]).map_err(|error| {
+                CmdError::click(format!("release status --wait cannot hold: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?)
+        }
+        false => None,
+    };
+    let mut runs = matching_runs(filter, run_window(args)?).await?;
+    while let Some(armed) = watch.take() {
+        match unfinished(&runs)? {
+            Some(state) => {
+                eprintln!(
+                    "stado release status: run {} is {state}; waiting for it to finish",
+                    args.run.as_deref().unwrap_or_default()
+                );
+                watch = Some(run_changed(armed).await?);
+                runs = matching_runs(filter, run_window(args)?).await?;
+            }
+            None => break,
+        }
+    }
     if runs.is_empty() {
         let recent = recent_runs(args.product.as_deref(), run_window(args)?).await?;
         let known: Vec<String> = recent
@@ -293,8 +322,85 @@ async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
             "{}",
             serde_json::to_string_pretty(&json!({ "runs": runs }))?
         );
+    } else {
+        print_runs(&runs);
+    }
+    if args.wait {
+        unpublished(&runs)?;
+    }
+    Ok(())
+}
+
+/// Where every release run record is kept, the prefix `--wait` watches.
+const RUN_RECORDS: &str = "runs/release-pipeline/";
+
+/// The state of the run `--run` named while it has not finished, or `None`
+/// once it has (or when no run matched, which the caller refuses). More than
+/// one run matching a `--run` prefix is refused: the wait would not know
+/// which to follow.
+fn unfinished(runs: &[Value]) -> Result<Option<String>, CmdError> {
+    let run = match runs {
+        [] => return Ok(None),
+        [run] => run,
+        several => {
+            return Err(CmdError::refused(format!(
+                "--run names {} runs ({}); --wait follows one, so name it by more of its id",
+                several.len(),
+                several
+                    .iter()
+                    .filter_map(|run| run["run_id"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )))
+        }
+    };
+    let word = run["state"].as_str().unwrap_or_default();
+    let state = crate::release_pipeline::ReleaseRunState::named(word).ok_or_else(|| {
+        CmdError::click(format!(
+            "run {} records state {word:?}, which this Stado does not know, so whether it \
+             finished cannot be read",
+            run["run_id"].as_str().unwrap_or_default()
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    Ok((!state.finished()).then(|| word.to_string()))
+}
+
+/// Refuse a finished run that published nothing (failed, or superseded
+/// before it published), so a caller chaining an install after `--wait`
+/// does not install over it.
+fn unpublished(runs: &[Value]) -> Result<(), CmdError> {
+    let Some(run) = runs.first() else {
+        return Ok(());
+    };
+    let word = run["state"].as_str().unwrap_or_default();
+    let published = crate::release_pipeline::ReleaseRunState::named(word)
+        .is_some_and(|state| state.published());
+    if published {
         return Ok(());
     }
-    print_runs(&runs);
-    Ok(())
+    Err(CmdError::refused(format!(
+        "run {} finished {word} without publishing: {}",
+        run["run_id"].as_str().unwrap_or_default(),
+        run["failure"].as_str().unwrap_or("it recorded no failure")
+    )))
+}
+
+/// Wait on `armed` until a run record changes.
+async fn run_changed(
+    armed: Box<dyn crate::queue::ChangeWatch>,
+) -> Result<Box<dyn crate::queue::ChangeWatch>, CmdError> {
+    tokio::task::spawn_blocking(move || {
+        let mut armed = armed;
+        armed.next().map(|()| armed)
+    })
+    .await
+    .map_err(|error| {
+        CmdError::click(format!("the change watch on the release runs stopped: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?
+    .map_err(|error| {
+        CmdError::click(format!("the change watch on the release runs failed: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })
 }

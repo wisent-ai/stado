@@ -163,6 +163,13 @@ pub struct ReleaseStatusArgs {
     /// question is about the run. Found however far back it is.
     #[arg(long)]
     run: Option<String>,
+    /// With --run: hold until that run has stopped moving (completed,
+    /// reconciled, failed or superseded), so the answer says whether it
+    /// published; woken by the store's change watch on the run, not a timer.
+    /// `stado release status --run ID --wait && stado product install ...`
+    /// installs a release as soon as it is published.
+    #[arg(long, requires = "run")]
+    wait: bool,
     /// Only runs that published this version; with --run, both must hold.
     #[arg(long)]
     version: Option<String>,

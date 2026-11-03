@@ -498,3 +498,9 @@ The version bump gathers them into the release's own file and removes this one.
   `~/.stado/bin` nor `~/.local/bin`, so every scheduled sync held each product as `… is not on
   PATH` and installed nothing (Skrzynka stayed six weeks behind its origin). A host job now runs
   with those directories ahead of the inherited PATH, the search path every product step uses.
+- **`stado release status --run ID --wait` holds until the run is published or has failed:** no
+  command waited for a submitted release to be published, so an install could not be chained after
+  `stado release submit`. With `--wait` the run read holds on the store's change watch until the run
+  has stopped moving, prints it, and exits non-zero when it finished without publishing, so
+  `stado release status --run ID --wait && stado product install …` installs it as soon as it is
+  out. A `--run` prefix naming several runs is refused with each id.
