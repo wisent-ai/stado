@@ -7,7 +7,9 @@
 //! at a loopback port allocated by the product but holding no listener.
 //! The real connection refusal must not prevent the worker's host pass firing
 //! routine, run its command as a child shell, append its output to the
-//! routine's log, and record the job completed in the host store.
+//! routine's log, record the job completed in the host store, and a later
+//! pass must delete the cleaned sentinels the job left in `queue/` and
+//! `running/`.
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -153,6 +155,32 @@ fn a_host_routine_fires_and_runs_while_the_fleet_store_does_not_answer() {
         !tree.exists(),
         "the routine's work tree {} was left behind",
         tree.display()
+    );
+    // The cleaned sentinels the job left under queue/ and running/ are
+    // deleted by a later pass once the job has settled, so the host store
+    // keeps no two records per fired routine. The pass says each sweep that
+    // retired something; the journey reads on until neither prefix holds
+    // this job's file.
+    let sentinel = |prefix: &str| host_store.join(prefix).join(format!("{id}.json"));
+    let mut retired = Vec::new();
+    for line in lines.iter() {
+        if line.contains("settled sentinel") {
+            retired.push(line.clone());
+        }
+        if !sentinel("queue").exists() && !sentinel("running").exists() {
+            break;
+        }
+    }
+    deployment.report["sentinels_retired"] = json!(retired);
+    for prefix in ["queue", "running"] {
+        assert!(
+            !sentinel(prefix).exists(),
+            "the finished job's {prefix}/ sentinel was never retired: {retired:?}"
+        );
+    }
+    assert!(
+        retired.iter().any(|line| line.contains("retired")),
+        "no pass said it retired a settled sentinel: {retired:?}"
     );
     deployment.pass();
 }

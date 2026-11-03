@@ -15,8 +15,9 @@
 //! ([`crate::schedules::fire_due_schedules`], overlap policy included), record
 //! the sweep, record the end of every child that exited, fail every running
 //! host job no child here runs whose lease has run out (a worker that stopped
-//! mid-job), renew the lease of every job this process still runs, and start
-//! every queued host job as a
+//! mid-job), delete the cleaned sentinels of jobs that have settled, renew the
+//! lease of every job this process still runs, and start every queued host
+//! job as a
 //! child shell running the job's command, its output appended to
 //! `~/.stado/host-store/logs/<job>.log`. A child that exits moves its job to
 //! `completed` or `failed`, the exit status in `error`.
@@ -31,7 +32,7 @@ use std::time::Duration;
 use chrono::Utc;
 
 use crate::capabilities::StorageAdapter;
-use crate::queue::runs::QUEUE;
+use crate::queue::runs::{QUEUE, RUNNING};
 use crate::queue::{JobStorage, LocalBackend, StorageError};
 
 use jobs::{reap, settle, start, Running};
@@ -97,6 +98,7 @@ async fn pass(
     }
     settle(store, running, log).await;
     reap(store, running, log).await;
+    retire_sentinels(store, log).await;
     for held in running.values() {
         match store.renew_running_lease(&held.job.job_id, lease).await {
             Ok(true) => {}
@@ -136,6 +138,41 @@ async fn pass(
             Err(error) => log(&format!(
                 "host routines: starting {} failed: {error}",
                 job.job_id
+            )),
+        }
+    }
+}
+
+/// Delete the cleaned sentinels every finished host job leaves in `queue/`
+/// and `running/`, as the fleet reaper does for the fleet store
+/// ([`JobStorage::retire_settled_sentinels`]: only a sentinel whose job has
+/// settled in a terminal prefix). The host store has no reaper of its own,
+/// so every routine fired every few minutes left two sentinels for good, and
+/// each pass's `running/` and `queue/` listings downloaded all of them: a
+/// laptop held 8,849 under `running/` after four days, the oldest from the
+/// first day. A sweep that retired nothing is not said; one that failed, or
+/// found objects that are not job records, is.
+async fn retire_sentinels(store: &JobStorage, log: fn(&str)) {
+    for prefix in [QUEUE, RUNNING] {
+        match store.retire_settled_sentinels(prefix).await {
+            Ok(sweep) => {
+                if sweep.retired > 0 {
+                    log(&format!(
+                        "host routines: retired {} settled sentinel(s) under {prefix}/",
+                        sweep.retired
+                    ));
+                }
+                if !sweep.unreadable.is_empty() {
+                    log(&format!(
+                        "host routines: {prefix}/ holds {} object(s) that are not job records, \
+                         left in place: {}",
+                        sweep.unreadable.len(),
+                        sweep.unreadable.join("; ")
+                    ));
+                }
+            }
+            Err(error) => log(&format!(
+                "host routines: retiring the settled sentinels under {prefix}/ failed: {error}"
             )),
         }
     }

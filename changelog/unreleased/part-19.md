@@ -509,3 +509,9 @@ The version bump gathers them into the release's own file and removes this one.
   every build it ran inherited that: a build an operator's session waited on compiled at
   scheduling priority 20 beside the session's 31. The unit now declares `Interactive`; the host
   scan still moves itself into the background band. A host takes it on its next unit install.
+- **The host store keeps no record of a finished routine under `queue/` or `running/`:** every
+  transition leaves a cleaned sentinel in the prefix it left, and only the fleet reaper deleted
+  them, so every host routine fired every few minutes left two for good: a laptop held 8,849 under
+  `running/` after four days, and each host pass downloaded all of them to list the live jobs. The
+  host pass now deletes every sentinel whose job has settled in a terminal prefix, as the fleet
+  reaper does, and says each sweep that retired something.
