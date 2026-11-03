@@ -215,3 +215,11 @@ The version bump gathers them into the release's own file and removes this one.
   (its store refused, here a directory changed under an unadvanced generation) held the install
   for an hour until it was killed. `backing_off` now ends the wait with the resolver's attempt,
   next read and reason.
+- **A placement move rewrites the source account's home in the files it carries:** a home-rooted
+  file state was copied verbatim between accounts, so Weles' `worker.env` moved from one host to
+  another still named `STADO_BIN=<source home>/.stado/bin/stado`, and the moved `weles-admission`
+  exited on start with `Required Stado binary is unavailable: <source home>/.stado/bin/stado`. A
+  home-rooted file that is UTF-8 now has each mention of the source home (followed by `/`, a quote
+  or the line's end) rewritten to the destination's home in the copy before it is sent; the move
+  prints how many it rewrote. A directory state and a file that is not UTF-8 are carried as they
+  are.

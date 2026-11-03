@@ -143,6 +143,7 @@ pub(in crate::cli::placement::transfer) async fn read_state(
         return Ok(StateSnapshot {
             spec: state.clone(),
             copy: None,
+            source_home: None,
         });
     }
     let local = staging(transaction_id, state)?;
@@ -172,10 +173,65 @@ pub(in crate::cli::placement::transfer) async fn read_state(
     )
     .await
     .map_err(CmdError::from)?;
+    let source_home = match state.root {
+        StateRoot::Home => Some(
+            host_channel::remote_home(target, runner)
+                .await
+                .map_err(CmdError::from)?,
+        ),
+        StateRoot::Work => None,
+    };
     Ok(StateSnapshot {
         spec: state.clone(),
         copy: Some(local),
+        source_home,
     })
+}
+
+/// Rewrite the source account's home to the destination's in a home-rooted
+/// file state, in this machine's copy, before it is sent. Such a file
+/// (Weles' `worker.env`, for one) names programs and sockets under the
+/// account's home; copied verbatim from one account to another it named a
+/// home that does not exist there, and the moved service exited on its first
+/// read of it (`Required Stado binary is unavailable: <source home>/...`).
+/// Only the home followed by `/` or the end of a line is replaced, so a
+/// longer name that starts with it is left alone. A file that is not UTF-8
+/// is left as it is: a binary state does not hold paths a reader rewrites.
+fn rehome(local: &std::path::Path, source_home: &str, destination_home: &str) -> Result<usize, CmdError> {
+    let source = source_home.trim_end_matches('/');
+    let destination = destination_home.trim_end_matches('/');
+    if source.is_empty() || source == destination {
+        return Ok(0);
+    }
+    let bytes = std::fs::read(local).map_err(|error| {
+        CmdError::click(format!("{} cannot be read to rewrite its home: {error}", local.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
+    let Ok(text) = String::from_utf8(bytes) else {
+        return Ok(0);
+    };
+    let mut rewritten = String::with_capacity(text.len());
+    let mut count = 0;
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find(source) {
+        let after = &rest[at + source.len()..];
+        rewritten.push_str(&rest[..at]);
+        if after.is_empty() || after.starts_with('/') || after.starts_with('\n') || after.starts_with('"') {
+            rewritten.push_str(destination);
+            count += 1;
+        } else {
+            rewritten.push_str(source);
+        }
+        rest = after;
+    }
+    rewritten.push_str(rest);
+    if count > 0 {
+        std::fs::write(local, rewritten).map_err(|error| {
+            CmdError::click(format!("{} cannot be written with its home rewritten: {error}", local.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
+    }
+    Ok(count)
 }
 
 /// Put the state in place on the destination: the previous file or tree
@@ -218,6 +274,18 @@ printf '%s\n' '{STAGED}'
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let present = if let Some(local) = &snapshot.copy {
+        if let (Copied::File, Some(source_home)) = (copied, &snapshot.source_home) {
+            let destination_home = host_channel::remote_home(target, runner)
+                .await
+                .map_err(CmdError::from)?;
+            let replaced = rehome(local, source_home, &destination_home)?;
+            if replaced > 0 {
+                eprintln!(
+                    "  {}: {replaced} mention(s) of {source_home} in {} now name {destination_home}",
+                    target.name, state.path
+                );
+            }
+        }
         let stage = format!(
             "{}.placement-{transaction_id}.stage",
             absolute(target, state, runner).await?

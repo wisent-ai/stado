@@ -52,6 +52,10 @@ struct StateSnapshot {
     /// The state's copy on this machine, a file or a directory as `spec`
     /// declares; `None` when the source held none.
     copy: Option<std::path::PathBuf>,
+    /// The source account's home, read when the copy was taken: a
+    /// home-rooted file that names it is installed naming the destination's
+    /// home instead (`state::copy::rehome`).
+    source_home: Option<String>,
 }
 
 /// How long one step of a move took, on which host, and whether it ended
