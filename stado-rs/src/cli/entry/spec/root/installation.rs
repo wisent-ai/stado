@@ -122,14 +122,15 @@ pub(crate) enum CapabilityAction {
         #[arg(long)]
         json: bool,
     },
-    /// Send the OpenAI chat-completions request on standard input to the
-    /// first alternative of FAMILY (only inference) that answers it, and
-    /// print that answer. The caller names no gateway, key or alternative:
-    /// an alternative that cannot answer this request is named with its
-    /// cause and the next one is asked; exits with the infra_down code
-    /// naming every one when none answers.
+    /// Send the request on standard input to the first alternative of FAMILY
+    /// that answers it, and print that answer: for inference an OpenAI
+    /// chat-completions request; for image {"plan", "inputs", "output"}, an
+    /// Obraz edit plan; for search {"query", "count"}. The caller names no
+    /// gateway, key or alternative: an alternative that cannot answer this
+    /// request is named with its cause and the next one is asked; exits with
+    /// the infra_down code naming every one when none answers.
     Call {
-        /// The family: inference.
+        /// The family: inference, image or search.
         family: String,
         /// The product asking, as the service directory names its consumer.
         #[arg(long)]
@@ -175,8 +176,9 @@ pub(crate) enum AttestationAction {
         request: String,
     },
     /// Record the answer on standard input as the statement answering the
-    /// request: for a request that makes the answer call one function, the
-    /// JSON object of its arguments; else the answer's text.
+    /// request. For inference: for a request that makes the answer call one
+    /// function, the JSON object of its arguments; else the answer's text.
+    /// For image and search: the answer as the family's alternative gives it.
     Record {
         family: String,
         #[arg(long)]

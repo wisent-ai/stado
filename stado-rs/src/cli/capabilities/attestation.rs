@@ -242,9 +242,11 @@ fn forced_tool(request: &Value) -> Option<String> {
 }
 
 /// `stado capabilities attestation record FAMILY --consumer C REQUEST
-/// --checked TEXT`, the answer on standard input: for a request that makes
-/// the answer call one function, the JSON object of its arguments; else the
-/// answer's text.
+/// --checked TEXT`, the answer on standard input. For `inference`: for a
+/// request that makes the answer call one function, the JSON object of its
+/// arguments; else the answer's text. For `image` and `search`: the answer
+/// itself, as the family's own alternative answers (`call::image_answer`,
+/// `call::search_answer` say its shape).
 pub(crate) fn record(
     family: &str,
     consumer: &str,
@@ -252,7 +254,7 @@ pub(crate) fn record(
     checked: &str,
     stated: &str,
 ) -> Result<(), CmdError> {
-    let (_, directory) = located(family, consumer)?;
+    let (declared, directory) = located(family, consumer)?;
     let digest = named(&directory, request)?;
     if checked.trim().is_empty() {
         return Err(CmdError::usage(
@@ -279,6 +281,19 @@ pub(crate) fn record(
         ))
     })?;
     let at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    if declared.id != crate::capabilities::CapabilityKind::Inference {
+        let mut answer: Value = serde_json::from_str(stated).map_err(|error| {
+            CmdError::usage(format!(
+                "a {family} answer is JSON, as the family's alternative answers it, and standard input is not: {error}"
+            ))
+        })?;
+        super::call::check_answer(declared, &answer).map_err(CmdError::usage)?;
+        answer["attestation"] = json!({"request": digest, "checked": checked.trim(), "at": at});
+        crate::primitives::document::write(&answer_file, &answer, WHAT)
+            .map_err(CmdError::declaration)?;
+        println!("recorded the statement answering {family} request {digest} of {consumer}");
+        return Ok(());
+    }
     let message = match forced_tool(&asked) {
         Some(tool) => {
             let arguments: Value = serde_json::from_str(stated).map_err(|error| {
