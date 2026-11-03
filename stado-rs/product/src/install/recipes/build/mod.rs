@@ -162,6 +162,11 @@ pub fn release(
                 root.to_string_lossy().into_owned(),
             ),
             ("WISENT_SOURCE_COMMIT".to_owned(), revision.clone()),
+            // Stado's build.rs requires its own revision variable to equal
+            // WISENT_SOURCE_COMMIT; inherited from the launching Stado (a
+            // build job, or an older install's finish) it named another
+            // revision and failed the build. Set here, never inherited.
+            ("STADO_SOURCE_REVISION".to_owned(), revision.clone()),
             ("WISENT_SOURCE_SHA256".to_owned(), archive_sha256),
             (
                 "WISENT_OUTPUT_DIR".to_owned(),

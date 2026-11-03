@@ -452,3 +452,8 @@ The version bump gathers them into the release's own file and removes this one.
   product. Each builder's host channel is now probed first; one that answers on no path is left
   out, named on stderr and under the step's `skipped`, and the submission goes on. A platform none
   of whose builders answers is refused, naming each.
+- **A source install of Stado names its own revision to the build:** a release recipe's build got
+  `WISENT_SOURCE_COMMIT` from the installation but inherited `STADO_SOURCE_REVISION` from whatever
+  launched it, and Stado's `build.rs` refuses the two disagreeing (`STADO_SOURCE_REVISION must
+  match authoritative WISENT_SOURCE_COMMIT`), so an install launched from a build job or another
+  Stado's finish failed. The installation now sets both to the revision it builds.
