@@ -263,3 +263,11 @@ The version bump gathers them into the release's own file and removes this one.
   no link on PATH; a release that stages no file named as the catalog program, or a catalog program
   outside `~/.stado/services`, is refused before anything is placed. Real journey:
   `tests/install/service_tree.mjs`.
+- **`host run attach` returns when its program exits, even if a service it started holds the
+  output:** the attached program wrote straight into the SSH session, so `release local install` on
+  a host, which restarts `stado serve`, left that service holding the session's stdout; the attach
+  waited until its caller killed it and ended with `attached process signal marker is
+  unavailable`. The program now writes into two relays the wrapper owns: once it exits, the
+  wrapper names each process still holding a relay (pid and command), stops relaying and exits
+  with the program's status. A signal forwarded after the program ended names the marker and
+  why it is gone. Real journey: `tests/host_run/attach_descendant.mjs`.
