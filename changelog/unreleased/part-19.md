@@ -457,3 +457,10 @@ The version bump gathers them into the release's own file and removes this one.
   launched it, and Stado's `build.rs` refuses the two disagreeing (`STADO_SOURCE_REVISION must
   match authoritative WISENT_SOURCE_COMMIT`), so an install launched from a build job or another
   Stado's finish failed. The installation now sets both to the revision it builds.
+- **Two waiting installations of one surface both finish:** an installation lets the surface's
+  lock go while its after-install steps run, so another installation with `--wait` took it at once
+  and recorded itself, and the first one's outcome was then refused (`another installation of
+  stado/cli recorded itself while this one's after-install steps ran`). With `--wait` an
+  installation that finds another still running its after-install steps now lets the lock go and
+  waits for that process to end (a `czekam:` process wait ended by the kernel's exit report), then
+  takes the lock again.

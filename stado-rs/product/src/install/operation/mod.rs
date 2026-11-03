@@ -156,3 +156,139 @@ fn post_placement(runtime: &Runtime, id: &str, surface: &str) -> Result<Option<V
     report["lock"] = json!(lock.display().to_string());
     Ok(Some(report))
 }
+
+/// The after-install run the surface's receipt records whose process the
+/// process table still names with its recorded birth time; `None` when there
+/// is none, or when the recorded process has ended (the run then never
+/// recorded an outcome, and the installation that holds the lock next goes
+/// on over it as it does without `--wait`).
+fn running_after_install(runtime: &Runtime, id: &str, surface: &str) -> Result<Option<Value>> {
+    Ok(post_placement(runtime, id, surface)?.filter(|operation| operation["running"] == true))
+}
+
+/// Wait, as a `czekam:` process wait `stado waits` lists, until the process
+/// `running` records (pid and birth time) no longer runs: an older
+/// installation of `id`/`surface` finishing its after-install steps without
+/// the lock. Its birth time is read again on every wake, so a pid handed to
+/// another process ends the wait as the end of the recorded one does.
+fn wait_for_after_install(id: &str, surface: &str, running: &Value) -> Result<()> {
+    let pid = i32::try_from(
+        running["pid"]
+            .as_i64()
+            .context("after-install operation names no pid")?,
+    )?;
+    let born = running["started_at"]
+        .as_str()
+        .context("after-install operation records no process birth time")?
+        .to_owned();
+    eprintln!(
+        "waiting for the installation of {id}/{surface} by pid {pid} to finish its after-install \
+         steps {}",
+        running["steps"]
+    );
+    stado_wait::blocking(
+        stado_wait::Kind::Process,
+        format!("pid {pid} finishing the after-install steps of {id}/{surface}"),
+        format!("pid {pid}"),
+        || -> std::result::Result<(), std::io::Error> {
+            while started_at(pid).map_err(std::io::Error::other)?.as_deref() == Some(born.as_str()) {
+                process_exit(pid)?;
+            }
+            Ok(())
+        },
+    )
+    .with_context(|| format!("waiting for pid {pid}, the installation of {id}/{surface}"))
+}
+
+/// Block until `pid` exits, as the kernel reports it (`kqueue` `NOTE_EXIT`):
+/// no polling interval stands between its end and this return. A pid that
+/// has already exited returns at once.
+#[cfg(target_os = "macos")]
+fn process_exit(pid: i32) -> std::io::Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    // SAFETY: kqueue takes no arguments and returns a new descriptor or -1.
+    let descriptor = unsafe { libc::kqueue() };
+    if descriptor.is_negative() {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: the descriptor was just created and is owned here alone.
+    let queue = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    let change = libc::kevent {
+        ident: pid as libc::uintptr_t,
+        filter: libc::EVFILT_PROC,
+        flags: libc::EV_ADD | libc::EV_ENABLE | libc::EV_ONESHOT,
+        fflags: libc::NOTE_EXIT,
+        data: Default::default(),
+        udata: std::ptr::null_mut(),
+    };
+    let mut observed = [change];
+    loop {
+        // SAFETY: one change and one event slot, both live for the call.
+        let result = unsafe {
+            libc::kevent(
+                queue.as_raw_fd(),
+                &change,
+                1,
+                observed.as_mut_ptr(),
+                1,
+                std::ptr::null(),
+            )
+        };
+        if result >= 0 {
+            return Ok(());
+        }
+        let cause = std::io::Error::last_os_error();
+        match cause.raw_os_error() {
+            // The process ended before it could be watched.
+            Some(libc::ESRCH) => return Ok(()),
+            Some(libc::EINTR) => continue,
+            _ => return Err(cause),
+        }
+    }
+}
+
+/// Block until `pid` exits, as the kernel reports it (`pidfd_open` becomes
+/// readable when the process ends). A pid that has already exited returns at
+/// once.
+#[cfg(target_os = "linux")]
+fn process_exit(pid: i32) -> std::io::Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    // SAFETY: pidfd_open takes a pid and flags and returns a descriptor or -1.
+    let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if descriptor < 0 {
+        let cause = std::io::Error::last_os_error();
+        return match cause.raw_os_error() {
+            Some(libc::ESRCH) => Ok(()),
+            _ => Err(cause),
+        };
+    }
+    // SAFETY: the descriptor was just created and is owned here alone.
+    let pidfd = unsafe { OwnedFd::from_raw_fd(i32::try_from(descriptor).map_err(std::io::Error::other)?) };
+    let mut poll = libc::pollfd {
+        fd: pidfd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        // SAFETY: one pollfd that lives for the call; -1 waits without a deadline.
+        let result = unsafe { libc::poll(&mut poll, 1, -1) };
+        if result >= 0 {
+            return Ok(());
+        }
+        let cause = std::io::Error::last_os_error();
+        if cause.raw_os_error() != Some(libc::EINTR) {
+            return Err(cause);
+        }
+    }
+}
+
+/// No kernel report of a process's end is read on this platform, so an
+/// installation that would wait for another's after-install steps is
+/// refused, naming the process, instead of polling it.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_exit(pid: i32) -> std::io::Result<()> {
+    Err(std::io::Error::other(format!(
+        "this platform reports no process's end to Stado, so pid {pid} cannot be waited for; \
+         install again once it has finished"
+    )))
+}

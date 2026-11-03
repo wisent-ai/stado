@@ -15,7 +15,12 @@ use crate::state::ProductState;
 /// older holder past placement is stopped first (`stop_past_placement`), and
 /// once the lock is held an older installation still running its after-install
 /// steps without it is stopped too (`stop_after_install`), unless the caller
-/// asked to wait for whatever holds it (`--wait`).
+/// asked to wait for whatever holds it (`--wait`). With `--wait` an older
+/// installation running its after-install steps is waited for as well: it
+/// holds no lock while they run, so a waiting installation took the lock at
+/// once, recorded itself, and the older one's outcome was then refused
+/// (`another installation ... recorded itself while this one's after-install
+/// steps ran`), so of two waiting installations one always failed.
 pub(in crate::install) fn lock_surface(
     runtime: &Runtime,
     (id, surface): (&str, &str),
@@ -23,7 +28,14 @@ pub(in crate::install) fn lock_surface(
     recipe: &Value,
 ) -> Result<File> {
     if runtime.wait_for_writer {
-        return runtime.surface_lock(lock);
+        loop {
+            let writer = runtime.surface_lock(lock)?;
+            let Some(running) = super::running_after_install(runtime, id, surface)? else {
+                return Ok(writer);
+            };
+            drop(writer);
+            super::wait_for_after_install(id, surface, &running)?;
+        }
     }
     super::stop_past_placement(lock, recipe)?;
     let writer = runtime.surface_lock(lock)?;
