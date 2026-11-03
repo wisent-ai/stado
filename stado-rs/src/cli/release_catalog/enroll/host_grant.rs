@@ -133,13 +133,23 @@ pub(super) fn secret_references(
 /// Declare each platform's secrets, and those of the deliveries that run on
 /// it, on every registry target that builds that platform, so a host that
 /// builds a platform learns its secrets from its own lists.
+///
+/// A builder whose host channel answers on none of its declared paths is
+/// left out and named under `skipped`, with each path's failure: its own
+/// lists cannot be read, and refusing the whole submission for it stopped
+/// every build of the product while one builder was asleep. A builder left
+/// out never publishes the secret fields, so placement does not pin a job
+/// that needs them to it. A platform none of whose builders answers is
+/// refused, naming each, since no builder could then take its jobs.
 pub(super) async fn declare_on_builders(
     manifest: &ReleasePipelineManifest,
 ) -> Result<Value, CmdError> {
     let registry = crate::deploy::host_channel::canonical_registry()
         .await
         .map_err(CmdError::from)?;
+    let runner = crate::deploy::production_runner();
     let mut declared = Vec::new();
+    let mut skipped = Vec::new();
     for (name, platform) in &manifest.platforms {
         let references = platform
             .secret_env
@@ -157,18 +167,73 @@ pub(super) async fn declare_on_builders(
             continue;
         }
         let missing: Vec<&(String, String)> = references.iter().collect();
+        let mut unanswered = Vec::new();
+        let mut reached = 0usize;
         for target in registry
             .targets
             .iter()
             .filter(|target| target.release_platform == platform.runner_platform)
         {
+            if let Some(why) = unanswered_channel(target, &runner).await {
+                eprintln!(
+                    "{}: builder {} of {name} is left out: {why}",
+                    manifest.product, target.name
+                );
+                unanswered.push(format!("{}: {why}", target.name));
+                skipped.push(json!({ "host": target.name, "platform": name, "cause": why }));
+                continue;
+            }
             declare_on_host(&target.name, &missing).await?;
             declared.push(json!({ "host": target.name, "platform": name }));
+            reached += 1;
+        }
+        if reached == 0 && !unanswered.is_empty() {
+            return Err(CmdError::unreachable(format!(
+                "{}: no builder of {name} ({}) answers its host channel, so no builder could \
+                 take its jobs and nothing was queued: {}",
+                manifest.product,
+                platform.runner_platform,
+                unanswered.join("; ")
+            )));
         }
     }
     Ok(json!({
         "step": "builder-secrets",
         "product": manifest.product,
         "declared_on": declared,
+        "skipped": skipped,
     }))
+}
+
+/// Why `target`'s host channel answers on none of its declared paths, or
+/// `None` when one answers (this host itself always does). Every path is
+/// probed as `stado host` diagnostics probe it, without sending the
+/// operation, so a builder that is asleep is told from one that refuses.
+async fn unanswered_channel(
+    target: &crate::targets::ComputeTarget,
+    runner: &crate::deploy::Runner,
+) -> Option<String> {
+    let probes = match crate::deploy::host_channel::probe_ssh_connections(target, runner).await {
+        Ok(probes) => probes,
+        Err(error) => return Some(format!("its host channel could not be probed: {error}")),
+    };
+    if probes.iter().any(|probe| probe.reachable) {
+        return None;
+    }
+    if probes.is_empty() {
+        return Some("it declares no host channel path".to_string());
+    }
+    Some(format!(
+        "none of its host channel paths answers ({})",
+        probes
+            .iter()
+            .map(|probe| format!(
+                "{} {}: {}",
+                probe.name,
+                probe.destination,
+                probe.error.as_deref().unwrap_or("no answer")
+            ))
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))
 }

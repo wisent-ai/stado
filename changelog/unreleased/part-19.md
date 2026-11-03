@@ -446,3 +446,9 @@ The version bump gathers them into the release's own file and removes this one.
   reached the build and failed it with errors in Stado's own code. A committed build now compiles
   each pinned dependency from its pin, exported once beside the revision, whatever its checkout
   holds; a build of the working tree still reads the checkout.
+- **A builder that does not answer no longer fails a whole build submission:** declaring a
+  product's `secret_env` on every builder of its platforms ran `config show` on each one, so one
+  builder asleep (`ssh: connect to host … Operation timed out`) refused every submission of the
+  product. Each builder's host channel is now probed first; one that answers on no path is left
+  out, named on stderr and under the step's `skipped`, and the submission goes on. A platform none
+  of whose builders answers is refused, naming each.
