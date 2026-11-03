@@ -36,21 +36,23 @@ const save = () => writeFileSync(join(output, 'report.json'), JSON.stringify(rep
 
 function run(args) {
   const answer = spawnSync(stado, args, { encoding: 'utf8', env, timeout: 3_300_000 });
+  // The kept-identity line is said before the build, ahead of thousands of
+  // build lines, so it is read from the whole stderr; the report keeps a tail.
   const record = { args, status: answer.status, signal: answer.signal, stdout: answer.stdout,
     stderr_tail: (answer.stderr || '').slice(-6000) };
   report.commands.push(record);
   save();
-  return record;
+  return { ...record, stderr: answer.stderr || '' };
 }
 
 try {
   const installed = run(['product', 'install', product, '--surface', 'cli', '--source-commit', commit, '--wait', '--json']);
   assert.equal(installed.status, 0, installed.stderr_tail);
-  const said = /signing: role (\S+)'s identity ([0-9A-F]{40}) (is kept|was imported) in (\S+)/.exec(installed.stderr_tail);
+  const said = /signing: role (\S+)'s identity ([0-9A-F]{40}) (is kept|was imported) in (\S+)/.exec(installed.stderr);
   assert.ok(said, 'the installation did not say which role identity it kept');
   const [, role, sha1, , keychain] = said;
   assert.match(keychain, /\/\.stado\/signing\/[^/]+\.keychain-db$/, `kept outside Stado's signing directory: ${keychain}`);
-  assert.doesNotMatch(installed.stderr_tail, /signing identity .* -> /, 'the installation changed the installed identity');
+  assert.doesNotMatch(installed.stderr, /signing identity .* -> /, 'the installation changed the installed identity');
   const status = run(['product', 'status', product, '--surface', 'cli', '--json']);
   assert.equal(status.status, 0, status.stderr_tail);
   const signing = JSON.parse(status.stdout).signing;
