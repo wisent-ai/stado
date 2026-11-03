@@ -2707,3 +2707,40 @@ products:
   approved_by: lukasz.bartoszcze
   approved_at: 2026-11-02T04:43:10Z
   approval_note: 'operator 2026-11-02: to zbuduj repozytorium slajd'
+- id: kasa
+  name: Kasa
+  status: preview
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/kasa
+  description: 'A company valued from its code, its intellectual property and its traction, every figure sourced and nothing invented: repositories measured at a committed revision, traction read from public forges and registries, and four methods (rebuild by COCOMO, spent, comparable rounds, revenue multiple) each with its inputs, range and what it lacks. One engine behind its CLI, loopback API and desktop app.'
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/kasa@3584a6167e3c
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/kasa
+  - kind: desktop
+    repository: wisent-ai/kasa-desktop
+  - kind: web
+    repository: wisent-ai/kasa-landing
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/kasa
+    manifest: .wisent-release.json
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/kasa-desktop
+    manifest: .wisent-desktop-release.json
+  star_repository: wisent-ai/wisent
+  approved_by: lukasz.bartoszcze
+  approved_at: 2026-11-03T07:29:32Z
+  approval_note: 'operator 2026-11-02: a new product named Kasa, valuing a company from its code, IP and traction; plan then code then build'
+  dependencies:
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: stado-wait is a library linked into kasa for its process, lock and network waits, so Kasa needs no Stado installed or running; the line in Cargo.toml is the only use
+    alternative_source: kasa/Cargo.toml
