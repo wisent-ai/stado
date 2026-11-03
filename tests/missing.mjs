@@ -8,8 +8,10 @@
 //
 // Standard output carries one `missing at <revision>: <pattern> in <path>...`
 // line when nothing at that revision matches, and is empty when the construct
-// is present. A revision git cannot read, or a pattern git refuses, fails the
-// command with git's reason.
+// is present or the revision holds none of the paths (another repository's
+// revision, or one from before the code existed). The revision is read in the
+// repository GIT_DIR names, else in this checkout. A revision git cannot read,
+// or a pattern git refuses, fails the command with git's reason.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
