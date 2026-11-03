@@ -214,13 +214,25 @@ pub fn toolchain_command(program: &str) -> Result<Command> {
 /// while the same `cargo` named as the step's program was found here. A
 /// caller that builds a step's environment puts these ahead of the
 /// inherited PATH ([`step_search_path`]).
+///
+/// Cargo's own home is `CARGO_HOME` when it is set, and `~/.cargo` only
+/// otherwise (https://doc.rust-lang.org/cargo/guide/cargo-home.html); its
+/// programs are in its `bin`. Reading only `~/.cargo/bin` found no `cargo`
+/// for a Stado run under another HOME with `CARGO_HOME` naming the toolchain.
 pub fn step_search_directories() -> Vec<PathBuf> {
     let mut directories: Vec<PathBuf> = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        let home = std::path::Path::new(&home);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if let Some(home) = &home {
         directories.push(home.join(".stado").join("bin"));
         directories.push(home.join(".local").join("bin"));
-        directories.push(home.join(".cargo").join("bin"));
+    }
+    match std::env::var_os("CARGO_HOME").filter(|value| !value.is_empty()) {
+        Some(cargo_home) => directories.push(PathBuf::from(cargo_home).join("bin")),
+        None => {
+            if let Some(home) = &home {
+                directories.push(home.join(".cargo").join("bin"));
+            }
+        }
     }
     directories.push(PathBuf::from("/opt/homebrew/bin"));
     directories.push(PathBuf::from("/usr/local/bin"));

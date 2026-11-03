@@ -404,3 +404,8 @@ The version bump gathers them into the release's own file and removes this one.
   `star_repository` was refused with `ster names no star_repository` because the checkout's file
   predated the field. The verbs that build now read the catalog only from the commit they install;
   `status`, `remove` and `rollback` read the working-tree file as before.
+- **Stado finds `cargo` in `CARGO_HOME`:** a build or quality step's bare program was looked up in
+  `~/.cargo/bin` only, though Cargo's home is `CARGO_HOME` when it is set. A Stado run under another
+  HOME with `CARGO_HOME` naming the toolchain was refused with `no executable cargo in Stado's and
+  the toolchains' homes`. The search now reads `$CARGO_HOME/bin`, and `~/.cargo/bin` only when
+  `CARGO_HOME` is unset.
