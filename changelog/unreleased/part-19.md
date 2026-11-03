@@ -409,3 +409,10 @@ The version bump gathers them into the release's own file and removes this one.
   HOME with `CARGO_HOME` naming the toolchain was refused with `no executable cargo in Stado's and
   the toolchains' homes`. The search now reads `$CARGO_HOME/bin`, and `~/.cargo/bin` only when
   `CARGO_HOME` is unset.
+- **The submit queue's harsh review reads the candidate against its own parent:** `stado change
+  run` ran Tama's review in the repository's shared checkout, whose HEAD is whatever the person
+  last checked out, so the reviewer judged every commit between that HEAD and the candidate as the
+  change, and Tama refused rounds over a tree staged on a newer parent. The review now runs in a
+  bare repository of its own under the checkout's Git directory, borrowing its objects, with HEAD
+  the candidate's parent and the candidate's tree in its index. The reviewer's repairs are
+  committed there and fetched into the checkout before that repository is removed.

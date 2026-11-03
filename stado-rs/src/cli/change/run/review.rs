@@ -4,8 +4,10 @@
 //! with `stado change review` by a session that is not its author: no
 //! finding admits it, a finding requests changes. With no such round, it is
 //! Tama's harsh review run (`tama reviews harsh run`), one adapter of the
-//! review, over a tree staged in an index of its own in the checkout's Git
-//! directory, scoped to the candidate's first defect: a reviewer session
+//! review, in a bare repository of its own in the checkout's Git directory
+//! whose HEAD is the candidate's parent and which borrows the checkout's
+//! objects, over the tree staged in its index, scoped to the candidate's
+//! first defect: a reviewer session
 //! that is not the author attacks every changed line and stages its repairs
 //! in that index. It admits the tree, requests changes, or repairs it; its
 //! repairs (of the tree, the message, or both) are kept as a commit, so
@@ -18,7 +20,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::cli::change::git::{git, ran_with};
+use crate::cli::change::git::{git, ran, ran_with};
 use crate::cli::change::record::{Candidate, Review};
 use crate::cli::CmdError;
 use crate::deploy::host_exec::{installed_program, TAMA_CLI};
@@ -113,12 +115,33 @@ pub async fn review(
         .join("stado-change");
     std::fs::create_dir_all(&area)
         .map_err(|error| CmdError::click(format!("cannot create {}: {error}", area.display())))?;
-    let index = area.join(format!("{}-{when}.index", candidate.id));
+    let repository = area.join(format!("{}-{when}.git", candidate.id));
     let message = area.join(format!("{}-{when}.message", candidate.id));
     let author = candidate.session.as_deref();
-    let result = reviewed(checkout, &index, &message, (defect, author), commit, tree).await;
-    for path in [&index, &message] {
-        if let Err(error) = std::fs::remove_file(path) {
+    let result = match prepared(checkout, &repository, commit).await {
+        Ok(index) => {
+            match reviewed(&repository, &index, &message, (defect, author), commit, tree).await {
+                Ok(reviewed) if reviewed.staged == tree && !reviewed.rewritten => {
+                    Ok((reviewed, None))
+                }
+                Ok(reviewed) => {
+                    match repairs_commit(&repository, &reviewed, when, commit, tree).await {
+                        Ok(repairs) => brought(checkout, &repository, &repairs)
+                            .await
+                            .map(|()| (reviewed, Some(repairs))),
+                        Err(error) => Err(error),
+                    }
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    };
+    for (path, removed) in [
+        (&repository, std::fs::remove_dir_all(&repository)),
+        (&message, std::fs::remove_file(&message)),
+    ] {
+        if let Err(error) = removed {
             if error.kind() != std::io::ErrorKind::NotFound {
                 eprintln!(
                     "stado change run: {} was not removed: {error}",
@@ -127,15 +150,11 @@ pub async fn review(
             }
         }
     }
-    let reviewed = result?;
-    let repaired = if reviewed.staged == tree && !reviewed.rewritten {
-        None
-    } else {
-        Some(Repair {
-            commit: repairs_commit(checkout, &reviewed, when, commit, tree).await?,
-            tree: reviewed.staged.clone(),
-        })
-    };
+    let (reviewed, repairs) = result?;
+    let repaired = repairs.map(|commit| Repair {
+        commit,
+        tree: reviewed.staged.clone(),
+    });
     let verdict = if repaired.is_some() {
         REPAIRED
     } else if !reviewed.round {
@@ -270,17 +289,78 @@ async fn repairs_commit(
     Ok(made.stdout.trim().to_string())
 }
 
-/// Run the reviewer over `tree` staged in `index`, with `commit`'s message
-/// in `message`, `defect` its scope and `author` the session it is judged
-/// as written by.
+/// The repository a review reads: a bare one at `repository` borrowing
+/// `checkout`'s objects (`objects/info/alternates`), with HEAD the parent of
+/// `commit`. The reviewer judges the staged tree against HEAD, and Tama
+/// keeps its rounds under that parent; in the shared checkout HEAD is
+/// whatever the person last checked out, so the reviewer read every commit
+/// between it and the candidate as the change and no candidate was admitted.
+/// The index the tree is staged in, inside it.
+async fn prepared(checkout: &Path, repository: &Path, commit: &str) -> Result<PathBuf, CmdError> {
+    let objects = PathBuf::from(git(checkout, &["rev-parse", "--git-path", "objects"]).await?);
+    let objects = if objects.is_absolute() {
+        objects
+    } else {
+        checkout.join(objects)
+    };
+    let parent = git(checkout, &["rev-parse", &format!("{commit}^")]).await?;
+    let made = ran(checkout, &["init", "--quiet", "--bare", &repository.display().to_string()], None).await?;
+    if !made.success {
+        return Err(CmdError::click(format!(
+            "git init --bare {} failed: {}",
+            repository.display(),
+            made.stderr.trim()
+        )));
+    }
+    std::fs::write(
+        repository.join("objects/info/alternates"),
+        format!("{}\n", objects.display()),
+    )
+    .map_err(|error| {
+        CmdError::click(format!(
+            "cannot point {} at {}'s objects: {error}",
+            repository.display(),
+            checkout.display()
+        ))
+    })?;
+    git(repository, &["update-ref", "HEAD", &parent]).await?;
+    Ok(repository.join("index"))
+}
+
+/// Fetch `repairs`, the commit of a reviewer's repairs made in `repository`,
+/// into `checkout`'s objects, so it outlives the review repository and the
+/// queue submits it like any other change. The review repository borrows the
+/// checkout's objects, but what is written in it stays in its own store.
+async fn brought(checkout: &Path, repository: &Path, repairs: &str) -> Result<(), CmdError> {
+    let fetched = ran(
+        checkout,
+        &["fetch", "--quiet", "--no-tags", &repository.display().to_string(), repairs],
+        None,
+    )
+    .await?;
+    if !fetched.success {
+        return Err(CmdError::click(format!(
+            "git fetch of the reviewer's repairs {repairs} from {} into {} failed: {}",
+            repository.display(),
+            checkout.display(),
+            fetched.stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Run the reviewer in `repository` over `tree` staged in `index`, with
+/// `commit`'s message in `message`, `defect` its scope and `author` the
+/// session it is judged as written by.
 async fn reviewed(
-    checkout: &Path,
+    repository: &Path,
     index: &Path,
     message: &Path,
     (defect, author): (&str, Option<&str>),
     commit: &str,
     tree: &str,
 ) -> Result<Reviewed, CmdError> {
+    let checkout = repository;
     let env = [("GIT_INDEX_FILE", index.display().to_string())];
     let read = ran_with(checkout, &["read-tree", tree], None, &env).await?;
     if !read.success {
