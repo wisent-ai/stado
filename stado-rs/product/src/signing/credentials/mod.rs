@@ -81,27 +81,33 @@ impl Credentials {
         Ok(scope)
     }
 
-    /// Unlock the temporary keychain again and put it back first on the
-    /// search list right before `codesign` reads its key. The keychain is
-    /// unlocked and listed when it is made, but a release build signs
-    /// minutes later in another process, and a keychain that locked, or that
-    /// another signing job on the host took off the shared search list, in
-    /// between fails the signature with `errSecInternalComponent` after the
-    /// whole build has run. A keychain the operator named is his own and is
+    /// Unlock the scope's keychain again and put it back first on the search
+    /// list right before `codesign` reads its key: the temporary keychain,
+    /// and a keychain Stado keeps under its signing directory for a recipe's
+    /// role. The keychain is unlocked and listed when it is made, but a
+    /// release build signs minutes later in another process, and a keychain
+    /// that locked, or that another signing job on the host took off the
+    /// shared search list, in between fails the signature with
+    /// `errSecInternalComponent` or `no identity found` after the whole build
+    /// has run. A keychain the operator named elsewhere is his own and is
     /// never unlocked or listed here.
     pub fn unlock_for_signing(&self) -> Result<()> {
-        if !self.temporary_keychain {
+        let Some(keychain) = self.keychain.as_ref() else {
+            return Ok(());
+        };
+        let kept = keychain::signing_home()
+            .map(|home| keychain.parent() == Some(home.as_path()))
+            .unwrap_or(false);
+        if !self.temporary_keychain && !kept {
             return Ok(());
         }
-        if let Some(keychain) = self.keychain.as_ref() {
-            let keychain = keychain.to_str().context("non-UTF8 keychain path")?;
-            command(
-                "/usr/bin/security",
-                &["unlock-keychain", "-p", "", keychain],
-                true,
-            )?;
-            put_first(keychain)?;
-        }
+        let keychain = keychain.to_str().context("non-UTF8 keychain path")?;
+        command(
+            "/usr/bin/security",
+            &["unlock-keychain", "-p", "", keychain],
+            true,
+        )?;
+        put_first(keychain)?;
         Ok(())
     }
 

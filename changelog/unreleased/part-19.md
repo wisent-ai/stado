@@ -370,3 +370,9 @@ The version bump gathers them into the release's own file and removes this one.
   Only one scope runs on a host at a time, so each new scope, once it holds the host's signing
   lock, takes every such keychain off the search list, deletes it, removes the directory and says
   so; a directory that cannot be removed refuses the signature naming it.
+- **The kept role keychain is on the search list when `codesign` signs:** the first Skarbiec
+  install that kept the fleet identity imported it into `fleet-identity.keychain-db`, which
+  `security find-identity` then listed as valid, and `codesign --keychain` still answered `no
+  identity found`: the keychain was not on the user's search list, which `codesign` builds the
+  identity's chain from. Stado now unlocks it and puts it first on the list when it keeps the
+  identity and again right before each signature, as it does its temporary keychains.

@@ -105,6 +105,10 @@ fn import(
         command("/usr/bin/security", &["set-keychain-settings", path], true)?;
     }
     command("/usr/bin/security", &["unlock-keychain", "-p", "", path], true)?;
+    // `codesign` builds the identity's chain from the user's search list and
+    // answered `no identity found` for a keychain named with --keychain that
+    // was not on it.
+    super::keychain::put_first(path)?;
     if chain.len() > 1 {
         keep_apple_issuers(&chain[1..].concat())?;
     }
