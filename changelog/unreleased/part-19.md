@@ -550,3 +550,9 @@ The version bump gathers them into the release's own file and removes this one.
   standing while nothing had run it since 2026-10-28. Such a plan is now a stall naming when it was
   declared and the `stado ci plan set … --every SECONDS` that declares it again with its own
   purpose and steps.
+- **Installing Skrzynka's CLI declares its database:** only the service recipe ran `stado database
+  create skrzynka --provider fleet …` after installing, and both surfaces install the same
+  `~/.local/bin/skrzynka`. A host that installed the CLI (the host sync installs `--surface cli`)
+  got a Skrzynka that keeps every row in the fleet database `skrzynka`, which nothing declared there,
+  so every command and the running service answered `unknown database "skrzynka"`. The CLI recipe
+  runs the same create, which places nothing anew on a host that already has the database.

@@ -1194,6 +1194,17 @@ products:
     manifest: Cargo.toml
     binaries:
     - skrzynka
+    after_install:
+    - - stado
+      - database
+      - create
+      - skrzynka
+      - --provider
+      - fleet
+      - --engine
+      - postgres
+      - --consumer
+      - skrzynka
   - surface: service
     kind: cargo
     repository: wisent-ai/skrzynka
