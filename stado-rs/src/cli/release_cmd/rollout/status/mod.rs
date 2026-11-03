@@ -254,40 +254,40 @@ fn filter_word(value: Option<&str>) -> &str {
 
 /// `release status --run ID | --version V`: the runs the filter admits, and
 /// a refusal naming the runs read when none does. With `--wait` the read
-/// holds, on the store's change watch over the run records, until the one
-/// run `--run` names has stopped moving, and a run that finished without
-/// publishing ends the command as failed, so `--wait && install` installs
-/// only a published release.
+/// holds, on the store's change watch over the named run's own record, until
+/// the one run `--run` names has stopped moving, and a run that finished
+/// without publishing ends the command as failed, so `--wait && install`
+/// installs only a published release.
 async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
     let filter = RunFilter {
         product: args.product.as_deref(),
         run: args.run.as_deref(),
         version: args.version.as_deref(),
     };
-    let mut watch = match args.wait {
-        true => {
-            let store = crate::queue::JobStorage::new()
-                .await
-                .map_err(CmdError::from)?;
-            Some(store.watch_prefixes(&[RUN_RECORDS]).map_err(|error| {
+    let mut runs = matching_runs(filter, run_window(args)?).await?;
+    if args.wait {
+        let store = crate::queue::JobStorage::new()
+            .await
+            .map_err(CmdError::from)?;
+        // A run's record is `runs/release-pipeline/<id>/run.json`, rewritten
+        // in place: a watch on the folder of every run sees a run created and
+        // never a run's record rewritten, so the wait never woke. The watch is
+        // on the named run's own folder, armed once the read has named the
+        // run and followed by a second read, so a write between the two is
+        // read rather than waited for.
+        while let Some(run_id) = unfinished(&runs)? {
+            let folder = format!("{RUN_RECORDS}{run_id}");
+            let armed = store.watch_prefixes(&[&folder]).map_err(|error| {
                 CmdError::click(format!("release status --wait cannot hold: {error}"))
                     .stating(crate::primitives::failure::FailureCode::InfraDown)
-            })?)
-        }
-        false => None,
-    };
-    let mut runs = matching_runs(filter, run_window(args)?).await?;
-    while let Some(armed) = watch.take() {
-        match unfinished(&runs)? {
-            Some(state) => {
-                eprintln!(
-                    "stado release status: run {} is {state}; waiting for it to finish",
-                    args.run.as_deref().unwrap_or_default()
-                );
-                watch = Some(run_changed(armed).await?);
-                runs = matching_runs(filter, run_window(args)?).await?;
-            }
-            None => break,
+            })?;
+            runs = matching_runs(filter, run_window(args)?).await?;
+            let Some(state) = still_moving(&runs, &run_id)? else {
+                break;
+            };
+            eprintln!("stado release status: run {run_id} is {state}; waiting for it to finish");
+            run_changed(armed).await?;
+            runs = matching_runs(filter, run_window(args)?).await?;
         }
     }
     if runs.is_empty() {
@@ -331,13 +331,14 @@ async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Where every release run record is kept, the prefix `--wait` watches.
+/// Where every release run record is kept; `--wait` watches one run's folder
+/// under it.
 const RUN_RECORDS: &str = "runs/release-pipeline/";
 
-/// The state of the run `--run` named while it has not finished, or `None`
-/// once it has (or when no run matched, which the caller refuses). More than
-/// one run matching a `--run` prefix is refused: the wait would not know
-/// which to follow.
+/// The id of the run `--run` named while it has not finished, or `None` once
+/// it has (or when no run matched, which the caller refuses). More than one
+/// run matching a `--run` prefix is refused: the wait would not know which to
+/// follow.
 fn unfinished(runs: &[Value]) -> Result<Option<String>, CmdError> {
     let run = match runs {
         [] => return Ok(None),
@@ -354,12 +355,21 @@ fn unfinished(runs: &[Value]) -> Result<Option<String>, CmdError> {
             )))
         }
     };
+    let id = run["run_id"].as_str().unwrap_or_default();
+    Ok(still_moving(runs, id)?.map(|_| id.to_string()))
+}
+
+/// The state word of run `id` among `runs` while it has not finished, or
+/// `None` once it has or is no longer among them.
+fn still_moving(runs: &[Value], id: &str) -> Result<Option<String>, CmdError> {
+    let Some(run) = runs.iter().find(|run| run["run_id"].as_str() == Some(id)) else {
+        return Ok(None);
+    };
     let word = run["state"].as_str().unwrap_or_default();
     let state = crate::release_pipeline::ReleaseRunState::named(word).ok_or_else(|| {
         CmdError::click(format!(
-            "run {} records state {word:?}, which this Stado does not know, so whether it \
-             finished cannot be read",
-            run["run_id"].as_str().unwrap_or_default()
+            "run {id} records state {word:?}, which this Stado does not know, so whether it \
+             finished cannot be read"
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;

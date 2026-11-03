@@ -18,7 +18,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exitedCleanly, exitedRefusing } from '../../native/process.mjs';
@@ -48,14 +48,18 @@ const report = {
 };
 const save = () => writeFileSync(join(output, 'report.json'), JSON.stringify(report, null, '  '));
 
-// One run as the release pipeline records it; a caller names the id to write
-// a run's next state over it, or ids that share a prefix.
+// One run as the release pipeline records it: a temporary file beside the
+// record, renamed over it, the way the local store writes every object; a
+// caller names the id to write a run's next state over it, or ids that share
+// a prefix.
 function recorded(state, runId = randomUUID(), failure = undefined) {
   const path = join(store, 'runs', 'release-pipeline', runId, 'run.json');
   mkdirSync(dirname(path), { recursive: true });
   const body = { run_id: runId, product, version: '1.0.0', state, source_commit: '0'.repeat(40), platforms: {} };
   if (failure !== undefined) body.failure = failure;
-  writeFileSync(path, JSON.stringify(body, null, '  '));
+  const staged = join(dirname(path), `.run.json.${randomUUID()}`);
+  writeFileSync(staged, JSON.stringify(body, null, '  '));
+  renameSync(staged, path);
   report.runs.push({ path, body });
   return runId;
 }
