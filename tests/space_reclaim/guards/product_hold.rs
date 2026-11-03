@@ -6,12 +6,17 @@
 //! go it takes its hold and gets past it (and stops later, on what the
 //! isolated home does not hold, which is not the janitor).
 //!
-//! A product build is refused while the janitor has asked for its turn,
-//! unless it was asked to `--wait`: then it takes that turn itself. With a
-//! standing turn request in the isolated home, the real install without
+//! A product build is refused while the janitor has asked for its turn and
+//! running work still holds the cleanup lock, unless it was asked to
+//! `--wait`: then it takes that turn itself. With a standing turn request and
+//! a live recorded hold in the isolated home, the real install without
 //! `--wait` is refused naming the request and leaves it standing; with
 //! `--wait` it runs the janitor's pass, the request is answered, and the
 //! install gets past the janitor.
+//!
+//! A turn request that no running work holds the lock against waits on
+//! nothing: the real install without `--wait` runs the pass itself, says so,
+//! answers the request and gets past the janitor.
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
@@ -89,23 +94,68 @@ fn a_product_install_waits_for_the_cleanup_pass_and_runs_once_it_lets_go() {
     assert!(!said.contains("disk janitor reclaims"), "{said}");
 }
 
-#[test]
-fn a_product_install_is_refused_a_janitor_turn_unless_it_waits_and_then_takes_it() {
-    let native = Native::new("product-turn");
-    fs::create_dir_all(native.state_dir()).unwrap();
+/// A live hold on the cleanup lock in the isolated home: the shared lock
+/// taken on the lock file and its record naming this test's process, which
+/// lives for the whole journey. The hold ends when the returned file drops.
+fn hold_cleanup_lock(native: &Native) -> (File, std::path::PathBuf) {
+    let lock = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(native.state_dir().join("disk-cleanup.lock"))
+        .unwrap();
+    // SAFETY: a descriptor this test owns; the lock is released when `lock`
+    // is dropped.
+    let locked =
+        unsafe { nix::libc::flock(lock.as_raw_fd(), nix::libc::LOCK_SH | nix::libc::LOCK_NB) };
+    assert!(
+        !locked.is_negative(),
+        "the test could not hold the cleanup lock"
+    );
+    let holds = native.state_dir().join("disk-cleanup-holds");
+    fs::create_dir_all(&holds).unwrap();
+    let record = holds.join(format!("{}-journey.json", std::process::id()));
+    let acquired_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the clock reads after the Unix epoch")
+        .as_secs_f64();
+    fs::write(
+        &record,
+        serde_json::json!({
+            "pid": std::process::id(),
+            "holder": "the product-turn journey's running work",
+            "acquired_at": acquired_at,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    (lock, record)
+}
+
+fn request_turn(native: &Native) -> std::path::PathBuf {
     let turn = native.state_dir().join("disk-cleanup-turn.json");
     let requested_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("the clock reads after the Unix epoch")
         .as_secs_f64();
     // The request stands behind this test's process, which lives for the
-    // whole journey, so neither install reads it as abandoned.
+    // whole journey, so no install reads it as abandoned.
     let request = serde_json::json!({
         "requested_at": requested_at,
         "reason": "the product-turn journey asks for the janitor's turn",
         "pid": std::process::id(),
     });
     fs::write(&turn, request.to_string()).unwrap();
+    turn
+}
+
+#[test]
+fn a_product_install_is_refused_a_janitor_turn_unless_it_waits_and_then_takes_it() {
+    let native = Native::new("product-turn");
+    fs::create_dir_all(native.state_dir()).unwrap();
+    let turn = request_turn(&native);
+    let (held, record) = hold_cleanup_lock(&native);
 
     let refused = native
         .command(INSTALL)
@@ -114,7 +164,7 @@ fn a_product_install_is_refused_a_janitor_turn_unless_it_waits_and_then_takes_it
         .expect("run the real install");
     let said = String::from_utf8_lossy(&refused.stderr).into_owned();
     native.observe(
-        "install without --wait while the janitor asks for its turn",
+        "install without --wait while the janitor asks for its turn and work holds the lock",
         serde_json::json!({ "status": refused.status.code(), "stderr": said }),
     );
     assert!(!refused.status.success(), "{said}");
@@ -128,6 +178,8 @@ fn a_product_install_is_refused_a_janitor_turn_unless_it_waits_and_then_takes_it
         turn.is_file(),
         "a refused install answered the turn: {said}"
     );
+    drop(held);
+    fs::remove_file(&record).unwrap();
 
     let mut waiting = INSTALL.to_vec();
     waiting.push("--wait");
@@ -150,5 +202,33 @@ fn a_product_install_is_refused_a_janitor_turn_unless_it_waits_and_then_takes_it
     assert!(
         !turn.exists(),
         "the pass the waiting install ran did not answer the turn: {said}"
+    );
+}
+
+#[test]
+fn a_janitor_turn_no_running_work_holds_out_is_taken_by_the_install() {
+    let native = Native::new("product-unheld-turn");
+    fs::create_dir_all(native.state_dir()).unwrap();
+    let turn = request_turn(&native);
+
+    let install = native
+        .command(INSTALL)
+        .stdout(Stdio::null())
+        .output()
+        .expect("run the real install");
+    let said = String::from_utf8_lossy(&install.stderr).into_owned();
+    native.observe(
+        "install without --wait while the janitor's turn waits on no running work",
+        serde_json::json!({ "status": install.status.code(), "stderr": said }),
+    );
+    assert!(
+        said.contains("no running work holds the cleanup lock, so this operation runs the janitor's pass"),
+        "{said}"
+    );
+    assert!(!said.contains("nothing was exported or built"), "{said}");
+    assert!(!said.contains("disk janitor reclaims"), "{said}");
+    assert!(
+        !turn.exists(),
+        "the pass the install ran did not answer the turn: {said}"
     );
 }

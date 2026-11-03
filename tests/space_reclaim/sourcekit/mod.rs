@@ -101,6 +101,27 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
         .expect("open actual lock");
     lock.try_lock()
         .expect("an answering SourceKit server must not hold the cleanup lock");
+    lock.unlock().expect("let the cleanup lock go");
+    // Running work holds the lock in shared mode, as an agent job does, with
+    // its record naming this live test process: a turn request is refused
+    // only while such work holds the lock against it.
+    lock.try_lock_shared()
+        .expect("hold the cleanup lock as running work does");
+    let holds = native.state_dir().join("disk-cleanup-holds");
+    fs::create_dir_all(&holds).expect("create the hold records directory");
+    fs::write(
+        holds.join(format!("{}-sourcekit.json", std::process::id())),
+        json!({
+            "pid": std::process::id(),
+            "holder": "the sourcekit journey's running work",
+            "acquired_at": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("the clock reads after the epoch")
+                .as_secs_f64(),
+        })
+        .to_string(),
+    )
+    .expect("write the running work's hold record");
     // A build waits for a pass that holds the lock and runs once it lets go;
     // it is refused only while the janitor has asked running work for its
     // turn, the request this journey writes as the janitor would, standing
@@ -162,6 +183,8 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
     assert_eq!(fs::read(&turn).expect("retain damaged turn evidence"), b"{");
     fs::remove_file(&turn).expect("remove only the test's damaged record");
     lock.unlock().expect("release isolated cleanup hold");
+    fs::remove_file(holds.join(format!("{}-sourcekit.json", std::process::id())))
+        .expect("remove the running work's hold record");
     let cache = native.home.join("checkout/target");
     native.cache(&cache);
     let user_data = native.fill_with_user_data();

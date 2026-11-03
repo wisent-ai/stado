@@ -101,7 +101,19 @@ pub(super) async fn janitor_hold(
     if let Some(lock) = janitor::wait_workload_lock(&holder).map_err(unheld)? {
         return held(lock);
     }
-    let waits = matches!(arguments.try_get_one::<bool>("wait"), Ok(Some(true)));
+    // A turn the janitor asked for while no workload holds the lock waits on
+    // nothing: the work it waited for has ended, and the janitor process that
+    // asked has not taken its turn. Refusing for it refused every build until
+    // that process ran a pass, which on a host above the disk rule could be
+    // never. This operation runs the pass the turn waits for, as --wait does.
+    let unheld_turn = janitor::live_workload_count().map_err(unheld)? == 0;
+    let waits = unheld_turn || matches!(arguments.try_get_one::<bool>("wait"), Ok(Some(true)));
+    if unheld_turn {
+        eprintln!(
+            "{holder}: the disk janitor asked for its turn and no running work holds the \
+             cleanup lock, so this operation runs the janitor's pass before it builds"
+        );
+    }
     if !waits {
         // The turn is transient: it ends when the pass it waits for has run.
         // It is stated as a wait an unchanged retry gets past (exit 69,
