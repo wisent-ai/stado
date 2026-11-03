@@ -71,7 +71,17 @@ pub async fn main_entry() -> i32 {
         Ok(cli) => cli,
         Err(err) => err.exit(),
     };
-    match dispatch(cli).await {
+    // The configuration is read through infallible accessors everywhere a
+    // command needs a value, so a selection that cannot be used (a
+    // STADO_CONFIG naming a file that does not exist, a malformed file) is
+    // refused here, once, as configuration, instead of panicking in whichever
+    // accessor reads it first. The two commands that write the selected file
+    // before it exists are let through.
+    let selection = match config_selection(&command_words(&matches)) {
+        Ok(()) => dispatch(cli).await,
+        Err(refused) => Err(refused),
+    };
+    match selection {
         // Success.
         Ok(()) => nix::libc::EXIT_SUCCESS,
         Err(err) => {
@@ -162,6 +172,25 @@ fn command_words(matches: &clap::ArgMatches) -> Vec<String> {
         node = sub;
     }
     words
+}
+
+/// Refuse a configuration selection no command can run on, before `words`
+/// (the invocation's subcommand path) runs. `stado config` reads and writes
+/// the profile itself and states each refusal its own way (`config init`
+/// writes the selected file before it exists), and `credentials migrate`
+/// commits a new selector into a file it may create; every other command
+/// would only meet the refusal as a panic inside the first accessor.
+fn config_selection(words: &[String]) -> Result<(), CmdError> {
+    let path: Vec<&str> = words.iter().map(String::as_str).collect();
+    if matches!(path.as_slice(), ["config", ..] | ["credentials", "migrate", ..]) {
+        return Ok(());
+    }
+    crate::config_file::load_config_file()
+        .map(|_| ())
+        .map_err(|error| {
+            CmdError::click(error.to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })
 }
 
 async fn dispatch(cli: Cli) -> Result<(), CmdError> {

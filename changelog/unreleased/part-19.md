@@ -477,3 +477,9 @@ The version bump gathers them into the release's own file and removes this one.
   tested anything (`alerts-skrzynka` among them). Each now selects `tests/config/empty.json`, the
   empty config `tests/config/README.md` names for a journey that must read no operator
   configuration.
+- **A configuration Stado cannot use is refused, never a panic:** a `STADO_CONFIG` naming a file
+  that does not exist, or a malformed config file, reached the first configuration accessor a
+  command called and ended the process with `thread 'stado-cli' panicked … invalid stado config
+  file: Selected { … }` (`stado alerts preferences show` among them). Every command but `stado
+  config` and `stado credentials migrate`, which write the selected file themselves, now refuses
+  first as a configuration failure: `Error: STADO_CONFIG names <path>, which does not exist`.
