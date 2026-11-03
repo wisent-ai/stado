@@ -19,10 +19,26 @@ pub(super) async fn recycle_launchd(
     // Which units are this machine's is this machine's record: the recycle
     // runs inside an install, and an install is how the services serving the
     // registry authority's snapshot are repaired while that snapshot stands.
+    // A machine that holds no registry document at all (one outside any
+    // fleet, or a fresh home) declares no unit, so there is none to recycle;
+    // refusing there failed every first install of Stado on such a machine
+    // after its build passed. A document that cannot be reached or read is
+    // still refused: its units exist and were not read.
     let (registry, notice) =
-        crate::targets::registry_without_authority("recycling this machine's units")
-            .await
-            .map_err(|error| format!("{context}: cannot read registry unit ownership: {error}"))?;
+        match crate::targets::registry_without_authority("recycling this machine's units").await
+        {
+            Ok(read) => read,
+            Err(crate::targets::RegistryFetchError::Absent { location }) => {
+                log_fn(&format!(
+                    "{context}: no registry document at {location}, so this machine declares no \
+                     managed unit and none is recycled"
+                ));
+                return Ok(Vec::new());
+            }
+            Err(error) => {
+                return Err(format!("{context}: cannot read registry unit ownership: {error}"))
+            }
+        };
     if let Some(notice) = notice {
         log_fn(&format!("{context}: {notice}"));
     }

@@ -434,3 +434,9 @@ The version bump gathers them into the release's own file and removes this one.
   checkout when absent and exported beside the revision; a build of the working tree is refused
   first, naming the checkout, its `HEAD`, the pin, `git -C <checkout> pull --ff-only` and
   `--revision`.
+- **An install on a machine with no registry document recycles no unit instead of failing:**
+  `release local converge`, the Stado CLI recipe's first `after_install` step, read the machine's
+  registry record to find its units and refused when there was none, so every install of Stado
+  into a home outside any fleet failed after its build passed with `cannot read registry unit
+  ownership: no registry document at …`. Such a machine declares no managed unit; the recycle now
+  says so and the install goes on. A record that cannot be reached or read still fails it.
