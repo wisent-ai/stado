@@ -47,7 +47,10 @@ pub(crate) fn record(state_dir: &Path, holder: &str) -> Result<PathBuf, JanitorE
         acquired_at: epoch_now(),
     };
     let body = serde_json::to_vec(&hold).map_err(|exc| JanitorError::os(&exc.to_string()))?;
-    std::fs::write(&path, body)?;
+    // Whole or not at all: every workload and the janitor read these records
+    // while they are written, and a record read between its truncation and
+    // its bytes refused the reader as unparseable.
+    crate::primitives::document::persist(&path, &body)?;
     Ok(path)
 }
 
@@ -80,6 +83,11 @@ pub(crate) fn live(state_dir: &Path) -> (Vec<WorkloadHold>, Vec<String>) {
             }
         };
         let path = entry.path();
+        // A record is `<pid>-<uuid>.json`; what else is in the folder is a
+        // record still being written (its staging file), not one to read.
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
         let hold = match std::fs::read(&path) {
             Ok(body) => match serde_json::from_slice::<WorkloadHold>(&body) {
                 Ok(hold) => hold,
@@ -110,7 +118,10 @@ pub(crate) fn request_turn(state_dir: &Path, reason: &str) -> Result<(), Janitor
         "reason": reason,
         "pid": std::process::id(),
     });
-    std::fs::write(state_dir.join(TURN_NAME), body.to_string())?;
+    // Whole or not at all, as [`record`] writes holds: a workload that read
+    // the request between its truncation and its bytes was refused with
+    // `cannot parse the janitor turn request …: EOF while parsing a value`.
+    crate::primitives::document::persist(&state_dir.join(TURN_NAME), body.to_string().as_bytes())?;
     Ok(())
 }
 

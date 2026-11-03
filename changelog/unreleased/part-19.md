@@ -488,3 +488,8 @@ The version bump gathers them into the release's own file and removes this one.
   gathers only the parts the Unreleased section links, so their entries would never have been
   released. They are linked, and `stado quality check` now refuses a revision whose
   `changelog/unreleased/` holds a part the section does not link, naming each and the link to add.
+- **A workload never reads the janitor's turn request or a hold record half written:** both were
+  written by truncating the file and then filling it, so a build that read the turn request in
+  between was refused with `cannot parse the janitor turn request …: EOF while parsing a value`.
+  Both are now written whole (a staging file renamed into place), and the holds listing reads only
+  `.json` records.
