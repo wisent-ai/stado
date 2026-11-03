@@ -390,3 +390,10 @@ The version bump gathers them into the release's own file and removes this one.
   fetch. Every journey that sets HOME now spreads `pinnedGit` from `tests/native/home.mjs`:
   `GIT_CONFIG_GLOBAL` names the real `~/.gitconfig` and `GIT_CONFIG_NOSYSTEM` drops the system
   file, so the person's `gh auth git-credential` helper answers and no keychain is asked.
+- **Placement standby installs a `replace` product's tree itself:** standing a host by for Brama
+  answered `awaiting_release_rollout` with `brama rollout_pending: … its agent stages the desired
+  release`, and no pass ever did: the release agent drives only blue-green policies, and a
+  `replace` release reaches a target only when it is promoted. Standby now installs a `replace`
+  product's desired tree on the host through the same verified fetch and archive installer
+  (`already_active` when that archive is the active one), then stages its unit and writes the host
+  into the profile and the directory.

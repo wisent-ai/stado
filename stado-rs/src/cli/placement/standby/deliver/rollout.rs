@@ -1,6 +1,9 @@
 //! A release-controlled tree reaches a standby host by being declared a
-//! rollout target in the release control that rolls it out; the host's own
-//! agent then stages it.
+//! rollout target in the release control that rolls it out. A blue-green
+//! product's tree is then staged by the host's own agent; a `replace`
+//! product's is not (the agent drives only blue-green policies, and a
+//! replace release reaches a target when it is promoted), so the standby
+//! installs that tree itself.
 
 mod roots;
 
@@ -105,7 +108,10 @@ pub(super) async fn declare_rollout(
         {
             super::tree::rewrite_install_root(product, &portable).await?;
         }
-        if !running && root.is_some_and(|root| !installs_at_tree(root, tree) || foreign(root)) {
+        if !running
+            && (replaced_at_promotion(policy)
+                || root.is_some_and(|root| !installs_at_tree(root, tree) || foreign(root)))
+        {
             let installed = install_tree(product, tree, target, service).await?;
             return Ok(Delivery {
                 service: service.logical.clone(),
@@ -264,7 +270,7 @@ pub(super) async fn declare_rollout(
         Ok(next)
     })
     .await?;
-    if !installs_at_tree(&rooted, tree) {
+    if replaced_at_promotion(policy) || !installs_at_tree(&rooted, tree) {
         let installed = install_tree(product, tree, target, service).await?;
         return Ok(Delivery {
             service: service.logical.clone(),
@@ -287,4 +293,19 @@ pub(super) async fn declare_rollout(
             target.name
         ),
     })
+}
+
+/// Whether `policy` rolls its product out with the `replace` strategy. The
+/// release agent drives only blue-green policies: a replace product's tree
+/// reaches a target only when a release of it is promoted, so a standby left
+/// waiting on the agent waited forever (Brama on a new host stood at
+/// `rollout_pending` with no pass ever staging it). Such a tree is installed
+/// by the standby itself; the archive installer is idempotent, and a tree
+/// already active from the same archive answers `already_active`.
+fn replaced_at_promotion(policy: &Value) -> bool {
+    policy
+        .get("strategy")
+        .and_then(|strategy| strategy.get("kind"))
+        .and_then(Value::as_str)
+        == Some("replace")
 }
