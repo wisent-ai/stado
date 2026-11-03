@@ -91,7 +91,7 @@ async fn process_row(pid: &str) -> Result<Option<(String, String)>, String> {
 /// the admission a value names is honoured only from the Stado operation
 /// that was admitted and started this one, never from a value typed by hand
 /// that names any other process.
-async fn stado_ancestor(pid: &str) -> Result<bool, String> {
+pub(crate) async fn stado_ancestor(pid: &str) -> Result<bool, String> {
     let own = std::env::current_exe()
         .map_err(|error| format!("this Stado's own executable cannot be read: {error}"))?;
     let mut current = std::os::unix::process::parent_id().to_string();

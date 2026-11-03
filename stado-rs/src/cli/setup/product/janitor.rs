@@ -8,6 +8,35 @@ use super::given;
 use crate::cli::CmdError;
 use crate::providers::local::space_reclaim as janitor;
 
+/// The environment variable a building operation that holds the janitor's
+/// lock leaves for every process it starts: its pid, a space, and the holder
+/// it was taken as. An `install` runs its recipe's `stado product cargo
+/// stage` and quality gates as children; each asked for a hold of its own,
+/// and when the janitor had asked for its turn meanwhile (it waits on the
+/// install's own hold) every child was refused, so an install never built.
+pub const HELD: &str = "STADO_JANITOR_HOLD";
+
+/// The holder an ancestor Stado that holds the janitor's lock names, when
+/// this process runs under it: its hold lasts until it exits, which is after
+/// this process, so the build directory is already kept from the janitor.
+/// A value Stado did not write, or one naming a process that is not a
+/// running Stado among this process's ancestors, holds nothing.
+async fn held_above() -> Option<String> {
+    let value = std::env::var(HELD).ok()?;
+    let (pid, holder) = value.split_once(' ')?;
+    if pid == std::process::id().to_string() {
+        return None;
+    }
+    match crate::cli::release_loop::allowed::stado_ancestor(pid).await {
+        Ok(true) => Some(holder.to_owned()),
+        Ok(false) => None,
+        Err(cause) => {
+            eprintln!("stado: {HELD} names process {pid}, whose ancestry cannot be read ({cause}); this operation takes its own hold");
+            None
+        }
+    }
+}
+
 /// The janitor's cleanup lock held in shared mode for the whole of a building
 /// operation run here, as every job the agent runs holds it, or `None` for an
 /// operation that builds nothing. Which operations build is the product
@@ -50,14 +79,27 @@ pub(super) async fn janitor_hold(
         holder.push_str(" --surface ");
         holder.push_str(surface);
     }
+    // A process an operation holding the lock started is held by it: asking
+    // again would be refused by the very turn request that waits on the
+    // ancestor's hold.
+    if let Some(above) = held_above().await {
+        eprintln!("{holder}: the disk janitor's cleanup lock is held for it by {above}, the Stado operation that started it");
+        return Ok(None);
+    }
     let unheld = |error: janitor::JanitorError| {
         CmdError::click(format!(
             "{holder} cannot take the disk janitor's cleanup lock, so a cleanup pass could \
              delete its build directory while it compiles; nothing was exported or built: {error}"
         ))
     };
+    // Set before the operation starts anything, so every process it runs
+    // inherits the hold.
+    let held = |lock: janitor::WorkloadLock| {
+        std::env::set_var(HELD, format!("{} {holder}", std::process::id()));
+        Ok(Some(lock))
+    };
     if let Some(lock) = janitor::wait_workload_lock(&holder).map_err(unheld)? {
-        return Ok(Some(lock));
+        return held(lock);
     }
     let waits = matches!(arguments.try_get_one::<bool>("wait"), Ok(Some(true)));
     if !waits {
@@ -84,7 +126,7 @@ pub(super) async fn janitor_hold(
         )
         .await;
         if let Some(lock) = janitor::wait_workload_lock(&holder).map_err(unheld)? {
-            return Ok(Some(lock));
+            return held(lock);
         }
         eprintln!(
             "{holder}: the disk janitor asks for its turn again after the pass it waited for \
