@@ -183,17 +183,17 @@ impl Resolver<'_> {
     }
 
     /// The tree a Git dependency of `identity` pinned at `rev` by the
-    /// manifest `by` is built from: its canonical checkout `root` when that
-    /// carries the pin; else, for a committed build, the pin itself,
-    /// fetched into the checkout when it lacks it and exported like the
-    /// revision being built, so the build compiles what its lock names.
+    /// manifest `by` is built from. A build of a committed revision
+    /// (`--revision`) compiles the pin itself, fetched into the canonical
+    /// checkout `root` when it lacks it and exported like the revision being
+    /// built: neither a checkout behind the pin nor a session's uncommitted
+    /// edit in a checkout at the pin reaches it, so it compiles what its lock
+    /// names. A build of the working tree compiles the checkout when its
+    /// `HEAD` carries the pin, and is refused when it does not.
     fn pinned_tree(&mut self, root: PathBuf, identity: &str, rev: &str, by: &str) -> Result<PathBuf> {
-        let behind = match carries(&root, identity, rev, by) {
-            Ok(()) => return Ok(root),
-            Err(behind) => behind,
-        };
         if !self.committed {
-            return Err(behind);
+            carries(&root, identity, rev, by)?;
+            return Ok(root);
         }
         source::hold(&root, rev).with_context(|| {
             format!("building {identity} at {rev}, the revision {by} pins")

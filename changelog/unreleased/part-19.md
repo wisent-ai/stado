@@ -440,3 +440,9 @@ The version bump gathers them into the release's own file and removes this one.
   into a home outside any fleet failed after its build passed with `cannot read registry unit
   ownership: no registry document at …`. Such a machine declares no managed unit; the recycle now
   says so and the install goes on. A record that cannot be reached or read still fails it.
+- **A committed build compiles every Git dependency at its pin:** `stado product cargo
+  --revision` still compiled a dependency from its canonical checkout when that checkout's `HEAD`
+  carried the pin, so another session's uncommitted edit there (`autoversion`'s working tree)
+  reached the build and failed it with errors in Stado's own code. A committed build now compiles
+  each pinned dependency from its pin, exported once beside the revision, whatever its checkout
+  holds; a build of the working tree still reads the checkout.
