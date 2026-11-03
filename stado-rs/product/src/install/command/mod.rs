@@ -59,8 +59,17 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
         (None, Some(commit)) => Some(Coordinate::SourceCommit(commit)),
         (Some(_), None) => bail!("--release-version needs the --source-commit bound to it"),
     };
-    let document = catalog::current(runtime)?;
-    let product = catalog::product(&document, id)?;
+    // The verbs that build read the catalog only from a commit
+    // (catalog::committed, below). Reading and validating the checkout's
+    // working-tree file first refused an installation whose own commit holds
+    // a valid catalog whenever the checkout was behind origin: Stado's
+    // finish was refused with `ster names no star_repository` because the
+    // checkout predated the field, though the revision it installed carried it.
+    let builds = matches!(action, "install" | "update" | "finish");
+    let document = match builds {
+        true => None,
+        false => Some(catalog::current(runtime)?),
+    };
     let without: Vec<String> = args
         .optional("--without")?
         .into_iter()
@@ -69,8 +78,11 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .collect();
-    for name in &without {
-        catalog::product(&document, name)?;
+    if let Some(document) = &document {
+        catalog::product(document, id)?;
+        for name in &without {
+            catalog::product(document, name)?;
+        }
     }
     if args.has("--check-arguments") {
         emit(&serde_json::json!({
@@ -93,6 +105,9 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
         )?;
         building.catalog_read = Some(read);
         let product = catalog::product(&document, id)?;
+        for name in &without {
+            catalog::product(&document, name)?;
+        }
         if args.has("--plan") {
             let revision =
                 super::plan::prerequisites::revision(&building, product, surface, coordinate)?;
@@ -117,22 +132,26 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
             &mut Vec::new(),
         )?)?)
     };
-    let report = match action {
-        "status" => {
+    let report = match (action, &document) {
+        ("install" | "update" | "finish", _) => build(runtime)?,
+        ("status", Some(document)) => {
+            let product = catalog::product(document, id)?;
             let mut report = status::inspect(runtime, product, surface, host)?;
             report["operation"] = super::operation::running(runtime, id, surface)?;
             report["update_policy"] = super::policy::Policy::load(&runtime.home)?.describe(id);
             report
         }
-        "install" => build(runtime)?,
-        "update" => build(runtime)?,
-        "finish" => build(runtime)?,
-        "remove" => serde_json::to_value(transaction::lifecycle::remove(
-            runtime, product, surface, host,
+        ("remove", Some(document)) => serde_json::to_value(transaction::lifecycle::remove(
+            runtime,
+            catalog::product(document, id)?,
+            surface,
+            host,
         )?)?,
-        "rollback" => {
-            serde_json::to_value(transaction::lifecycle::rollback(runtime, product, surface)?)?
-        }
+        ("rollback", Some(document)) => serde_json::to_value(transaction::lifecycle::rollback(
+            runtime,
+            catalog::product(document, id)?,
+            surface,
+        )?)?,
         _ => bail!("unknown installation operation {action}"),
     };
     emit(&report)?;

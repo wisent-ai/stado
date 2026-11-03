@@ -397,3 +397,10 @@ The version bump gathers them into the release's own file and removes this one.
   product's desired tree on the host through the same verified fetch and archive installer
   (`already_active` when that archive is the active one), then stages its unit and writes the host
   into the profile and the directory.
+- **An installation reads only its committed catalog:** `product install`, `update` and `finish`
+  first read and validated the checkout's working-tree `catalog/products.yml`, then read the
+  committed one they execute. A checkout behind origin therefore refused an install whose own
+  revision held a valid catalog: Stado's finish of a revision that names every product's
+  `star_repository` was refused with `ster names no star_repository` because the checkout's file
+  predated the field. The verbs that build now read the catalog only from the commit they install;
+  `status`, `remove` and `rollback` read the working-tree file as before.
