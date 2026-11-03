@@ -532,3 +532,9 @@ The version bump gathers them into the release's own file and removes this one.
   candidates were live, also when it had none; on a laptop with no job tree each listing could
   stand for ten minutes while a build waiting for the janitor's turn compiled nothing. With no
   candidate the answer is the empty keep-list and the queue is not read.
+- **`release catalog input pin --source NAME` reads the repository's canonical checkout:** a bare
+  name was joined to the working directory, so `--source jeden` run from inside `jeden` was
+  refused as `cannot change to 'jeden'`. A path that exists is still that path; a name with no `/`
+  reads `wisent-ai/<name>`'s canonical checkout from Stado's workspace, and one with none is
+  refused naming it. A cargo pin whose checkout holds a manifest or lock changed since the pinned
+  revision is refused naming each file and how to repair it, instead of quoting `git diff`.
