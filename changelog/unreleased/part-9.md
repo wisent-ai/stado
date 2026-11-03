@@ -14,6 +14,13 @@ The version bump gathers them into the release's own file and removes this one.
   (`--package-path`, else the current directory); a tree outside every catalogued repository is
   still asked as every product's build.
 
+- **A `Cargo.lock` moved without republishing `private-cargo-sources` is refused at push:**
+  the input was compared with the lock only by the release build, so a commit that moved a
+  private Git package passed every check and every build of it was then refused. `stado quality
+  check` now compares the pinned input's provenance with the pushed tree's lock and refuses a stale
+  input naming each package it lacks or carries beyond the lock and the `input pin --cargo` that
+  repairs it; `stado release catalog input check <checkout>` asks the same of a checkout.
+
 - **Stado no longer asks the person at a Mac about Apple Music, Photos, Contacts or Files and
   Folders it does not need:** the janitor's build-cache walk descended `~/Library`, where it opened
   the Photos syndication library and the media library, and the always-on host process made macOS

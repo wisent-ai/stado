@@ -10,11 +10,13 @@ use serde_json::json;
 use crate::cli::CmdError;
 
 mod bundle;
+mod check;
 mod manifest;
 mod retire;
 mod swiftpm;
 mod tree;
 
+pub(in crate::cli::release_catalog) use check::{check_input, CheckInputArgs};
 pub(in crate::cli::release_catalog) use retire::{retire_input, RetireInputArgs};
 
 const MANIFEST: &str = ".wisent-release.json";

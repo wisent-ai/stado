@@ -68,6 +68,12 @@ pub(super) enum InputCommands {
     /// it under the product's publisher bearer; built releases are never
     /// removed.
     Retire(publisher::RetireInputArgs),
+    /// Whether CHECKOUT's published private-cargo-sources input carries
+    /// exactly the Git packages its Cargo.lock locks: exit 0 when it does or
+    /// the lock locks none; otherwise refused naming each package the input
+    /// lacks or carries beyond the lock and the `pin --cargo` that repairs
+    /// it, before any release build of the commit is refused for it.
+    Check(publisher::CheckInputArgs),
 }
 
 pub(super) async fn publisher(command: PublisherCommands) -> Result<(), CmdError> {
@@ -94,5 +100,6 @@ pub(super) async fn input(command: InputCommands) -> Result<(), CmdError> {
     match command {
         InputCommands::Pin(args) => publisher::pin_input(args).await,
         InputCommands::Retire(args) => publisher::retire_input(args).await,
+        InputCommands::Check(args) => publisher::check_input(args).await,
     }
 }

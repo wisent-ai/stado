@@ -68,6 +68,59 @@ fn locked_packages(root: &Path) -> Result<BTreeSet<Package>> {
     Ok(locked)
 }
 
+/// How a published private Cargo source archive (the bytes of its
+/// `source.tar.gz`) stands against the `Cargo.lock` of `root`: `None` when
+/// its provenance names exactly the Git packages the lock does, else the
+/// difference in words: each package the lock names that the input lacks,
+/// and each the input carries that the lock no longer names. An archive
+/// without a readable `provenance.json` of this schema is refused naming
+/// what was missing.
+pub fn lock_difference(archive: &[u8], root: &Path) -> Result<Option<String>> {
+    let mut entries = tar::Archive::new(flate2::read::GzDecoder::new(archive));
+    let mut provenance = None;
+    for entry in entries
+        .entries()
+        .context("the private Cargo source input is not a gzip tar archive")?
+    {
+        let mut entry = entry.context("reading an entry of the private Cargo source input")?;
+        if entry.path()?.as_ref() == Path::new("provenance.json") {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut bytes)?;
+            provenance = Some(bytes);
+            break;
+        }
+    }
+    let bytes = provenance.context("the private Cargo source input carries no provenance.json")?;
+    let provenance: Provenance = serde_json::from_slice(&bytes)
+        .context("the private Cargo source input's provenance.json is not its provenance")?;
+    if provenance.schema_version != PROVENANCE_SCHEMA_VERSION {
+        bail!(
+            "the private Cargo source input's provenance is schema {}, not {PROVENANCE_SCHEMA_VERSION}",
+            provenance.schema_version
+        );
+    }
+    let locked = locked_packages(root)?;
+    if provenance.packages == locked {
+        return Ok(None);
+    }
+    let named =
+        |package: &Package| format!("{} {} ({})", package.name, package.version, package.source);
+    let mut said = Vec::new();
+    for package in locked.difference(&provenance.packages) {
+        said.push(format!(
+            "Cargo.lock locks {} and the input lacks it",
+            named(package)
+        ));
+    }
+    for package in provenance.packages.difference(&locked) {
+        said.push(format!(
+            "the input carries {} and Cargo.lock no longer locks it",
+            named(package)
+        ));
+    }
+    Ok(Some(said.join("; ")))
+}
+
 fn source_config(packages: &BTreeSet<Package>) -> Result<String> {
     let sources: BTreeSet<_> = packages.iter().map(|package| &package.source).collect();
     let quoted = |value: &str| serde_json::Value::String(value.into()).to_string();

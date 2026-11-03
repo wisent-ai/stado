@@ -25,9 +25,12 @@ use crate::cli::CmdError;
 
 /// Stage every input a selected gate of `declared` reads under `area`, and
 /// every input when the check `builds` the product, answering the variables
-/// they are read from, after confirming every pinned input is stored.
+/// they are read from, after confirming every pinned input is stored and
+/// that a `private-cargo-sources` input carries the Git packages the
+/// `Cargo.lock` of `tree` locks.
 pub(super) async fn stage(
     declared: &DeclaredGates,
+    tree: &Path,
     area: &Path,
     builds: bool,
     report: Report,
@@ -45,6 +48,35 @@ pub(super) async fn stage(
             &format!("release input {name} of {}", declared.product),
         )
         .await?;
+        // A commit that moves a private Git package in Cargo.lock without
+        // publishing the input again is refused here, at push, naming the
+        // pin that repairs it; read later, every release build of it is
+        // refused with `private Cargo sources do not match Cargo.lock`.
+        if name == stado_product::PRIVATE_CARGO_INPUT_NAME && tree.join("Cargo.lock").is_file() {
+            report.say(&format!(
+                "stado quality check: comparing release input {name} of {} with {}",
+                declared.product,
+                tree.join("Cargo.lock").display()
+            ));
+            let bytes = crate::cli::storage::fetch_object(&input.uri).await?;
+            let difference =
+                stado_product::private_cargo_lock_difference(&bytes, tree).map_err(|error| {
+                    CmdError::refused(format!(
+                        "release input {name} of {} at {} cannot be compared with Cargo.lock: \
+                         {error:#}",
+                        declared.product, input.uri
+                    ))
+                })?;
+            if let Some(said) = difference {
+                return Err(CmdError::refused(format!(
+                    "release input {name} of {} at {} is stale: {said}; publish the input the \
+                     lock names with `stado release catalog input pin <checkout> --name {name} \
+                     --source <checkout> --revision <commit> --cargo` and commit \
+                     .wisent-release.json",
+                    declared.product, input.uri
+                )));
+            }
+        }
         let mut readers: Vec<&str> = declared
             .gates
             .iter()

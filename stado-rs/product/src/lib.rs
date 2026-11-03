@@ -62,9 +62,11 @@ pub use install::recipes::build::swift_without_keychain;
 /// builds; `stado quality check` reads its gates there too.
 pub use source::export as export_committed_source;
 
-/// Export the locked private Git crates for a credential-free release worker.
+/// Export the locked private Git crates for a credential-free release worker,
+/// and compare a published export with a checkout's Cargo.lock.
 pub use cargo::private_sources::{
-    export as export_private_cargo_sources, INPUT_NAME as PRIVATE_CARGO_INPUT_NAME,
+    export as export_private_cargo_sources, lock_difference as private_cargo_lock_difference,
+    INPUT_NAME as PRIVATE_CARGO_INPUT_NAME,
 };
 
 /// The code-signing report of one file, as `stado product install` judges a

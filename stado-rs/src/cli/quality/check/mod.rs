@@ -198,7 +198,7 @@ async fn check_tree(
         inputs_area.display()
     ));
     let builds = matches!(selection, Selection::Installation | Selection::CommandTree);
-    let staged = inputs::stage(&declared, inputs_area, builds, report).await?;
+    let staged = inputs::stage(&declared, tree, inputs_area, builds, report).await?;
     // A gate reads the secrets the worker would put in its environment, such
     // as a web install's GITHUB_TOKEN for private dependencies.
     report.say(&format!(

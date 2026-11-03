@@ -22,7 +22,9 @@ mod withdraw;
 
 pub(super) use hosts::{declare_publisher_on_fleet, ensure_publisher};
 pub(crate) use hosts::{fleet_hosts, this_host};
-pub(super) use input::{pin_input, retire_input, PinInputArgs, RetireInputArgs};
+pub(super) use input::{
+    check_input, pin_input, retire_input, CheckInputArgs, PinInputArgs, RetireInputArgs,
+};
 pub(super) use withdraw::withdraw_publisher;
 
 /// Whether this host reads the vault on the owner through its route rather
