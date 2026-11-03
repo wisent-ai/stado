@@ -72,7 +72,10 @@ try {
     'the attach names the child still holding the output');
   report.result = 'passed';
 } finally {
-  if (delivered) run(['host', 'run', 'remove', host, `.stado/work/runs/${runId}`], 300);
+  if (delivered) {
+    const removed = run(['host', 'run', 'remove', host, `${remoteHome}/.stado/work/runs/${runId}`], 300);
+    report.run_tree_removed = removed.status === 0;
+  }
   report.finished_at = new Date().toISOString();
   writeFileSync(join(output, 'report.json'), JSON.stringify(report, null, 2));
   console.log(`report: ${join(output, 'report.json')} (${report.result})`);
