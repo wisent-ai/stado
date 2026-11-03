@@ -132,7 +132,12 @@ pub(crate) async fn set_weles_recordings_dir(
         let Some(name) = plist.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if !name.starts_with("com.wisent.weles-") || !name.ends_with(".plist") {
+        // Weles is one unit, `com.wisent.weles`; the `com.wisent.weles-*`
+        // names are the agents it once was split into. Matching only the
+        // second left the one unit that runs Weles without its root.
+        let weles_unit = name == "com.wisent.weles.plist"
+            || (name.starts_with("com.wisent.weles-") && name.ends_with(".plist"));
+        if !weles_unit {
             continue;
         }
         set_plist_recordings_root(&plist, path)?;
