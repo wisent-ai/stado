@@ -44,19 +44,19 @@ pub fn shared(runtime: &Runtime, product: &str, surface: &str) -> Result<BTreeSe
 /// transcript-lake's cli and service surfaces both place
 /// `~/.stado/bin/transcript-lake` from one stado-release manifest, and each
 /// refused to replace it while the other owned it, so neither could ever be
-/// updated. Only a finished receipt qualifies: `installed`, or
-/// `rolled_back` to the files it restored. `ready` is a readiness verdict
-/// `stado product status` computes, never a stored status, and requiring it
-/// made the rule match nothing.
+/// updated. A finished receipt qualifies: `installed`, or `rolled_back` to the
+/// files it restored. So does `superseded`: an interrupted installation whose
+/// replacement never finished stays superseded until its own surface is
+/// installed again, and Skarbiec's cli surface was refused for its own binary
+/// because its service surface had been left so. `ready` is a readiness
+/// verdict `stado product status` computes, never a stored status, and
+/// requiring it made the rule match nothing.
 pub fn sibling(other: &state::ProductState, product: &str, surface: &str, recipe: &Value) -> bool {
     let same =
         |key: &str| other.recipe.get(key).is_some() && other.recipe.get(key) == recipe.get(key);
     other.product == product
         && other.surface != surface
-        && matches!(
-            other.status,
-            crate::state::InstallStatus::Installed | crate::state::InstallStatus::RolledBack
-        )
+        && (other.status.complete() || other.status == crate::state::InstallStatus::Superseded)
         && same("kind")
         && same("repository")
         && same("manifest")

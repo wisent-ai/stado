@@ -376,3 +376,10 @@ The version bump gathers them into the release's own file and removes this one.
   identity found`: the keychain was not on the user's search list, which `codesign` builds the
   identity's chain from. Stado now unlocks it and puts it first on the list when it keeps the
   identity and again right before each signature, as it does its temporary keychains.
+- **A superseded surface of the same recipe no longer holds its sibling's files:** Skarbiec's
+  `cli` install built, signed and verified its binary, then was refused with `installation would
+  change ~/.stado/bin/skarbiec, which skarbiec/service (Superseded) still owns`: the service
+  surface's interrupted installation had been superseded and never finished, and only `installed`
+  or `rolled_back` siblings could be replaced. A `superseded` surface installed from the same
+  kind, repository and manifest is now a sibling: the install replaces the shared files and
+  re-records that receipt with the new fingerprints and revision.
