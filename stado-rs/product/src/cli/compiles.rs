@@ -34,7 +34,12 @@ pub fn compiles(matches: &ArgMatches) -> bool {
 /// current directory when none is given. A tree that is no Git checkout,
 /// has no GitHub origin or belongs to no catalogued product (a dependency,
 /// a scratch tree) answers `None`, and Oko is asked about every product's
-/// build, as before. A catalog that cannot be read is refused naming it.
+/// build, as before. The catalog is the committed one an installation reads
+/// (its checkout's committed head, or `origin/main` when the head is behind):
+/// a checkout's working-tree file, half written or older than the fields the
+/// catalog now requires, refused every Cargo build of every product with
+/// `ster names no star_repository`. A catalog that cannot be read is refused
+/// naming it.
 pub fn compiled_product(matches: &ArgMatches) -> Result<Option<String>> {
     let path = match matches.subcommand() {
         Some(("cargo", arguments)) => arguments.get_one::<String>("manifest-path"),
@@ -65,12 +70,13 @@ pub fn compiled_product(matches: &ArgMatches) -> Result<Option<String>> {
     }
     let runtime =
         crate::common::Runtime::new(matches.get_one::<String>("catalog").map(PathBuf::from))?;
-    let document = crate::catalog::current(&runtime).with_context(|| {
-        format!(
-            "the catalog {} cannot be read to find which product {identity} is",
-            runtime.catalog.display()
-        )
-    })?;
+    let (document, _) =
+        crate::catalog::committed::for_installation(&runtime, "", None).with_context(|| {
+            format!(
+                "the committed catalog of {} cannot be read to find which product {identity} is",
+                runtime.catalog.display()
+            )
+        })?;
     Ok(owning_product(&document, &identity))
 }
 

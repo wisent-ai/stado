@@ -416,3 +416,8 @@ The version bump gathers them into the release's own file and removes this one.
   bare repository of its own under the checkout's Git directory, borrowing its objects, with HEAD
   the candidate's parent and the candidate's tree in its index. The reviewer's repairs are
   committed there and fetched into the checkout before that repository is removed.
+- **`stado product cargo` and `swift` find their product in the committed catalog:** to ask Oko
+  about the build of the product a manifest belongs to, they read the checkout's working-tree
+  `catalog/products.yml`, so a checkout older than a field the catalog now requires refused every
+  Cargo build of every product with `ster names no star_repository`. They now read the catalog an
+  installation reads: the checkout's committed head, or `origin/main` when the head is behind it.
