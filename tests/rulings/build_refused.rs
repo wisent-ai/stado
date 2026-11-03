@@ -16,6 +16,10 @@
 //! defect register, read for an open defect to name and whether it is open;
 //! the ruling register is removed at the end.
 //!
+//! The operation names the product it builds, the one whose repository holds
+//! the manifest: a withdrawal of that product's build refuses it by name, and
+//! a withdrawal of another product's build does not.
+//!
 //! An `oko` that gives no verdict decided nothing: with a ruling register
 //! that is not JSON the installed `oko admit` answers no decision, and the
 //! same operation is refused saying the admission decision was never read,
@@ -173,6 +177,73 @@ fn a_withdrawn_build_is_refused_until_a_later_ruling_lifts_it() {
     assert!(
         allowed.status.success(),
         "naming a purpose refused a build the operator's consent allows: {}",
+        text(&allowed.stderr)
+    );
+
+    std::fs::remove_dir_all(&root).expect("the run directory is removed");
+}
+
+/// `stado product cargo` names the product it builds: the catalog product
+/// whose repository holds the manifest. A withdrawal of one product's build
+/// (`no-build:stado`) refuses Cargo on this checkout's manifest as a build of
+/// `stado`, and a withdrawal of another product's build lets it run; before,
+/// the operation named no product and was judged as every product's build.
+#[test]
+fn a_cargo_build_is_asked_about_the_product_its_manifest_belongs_to() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../.build/journeys")
+        .join(format!("rulings-build-product-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("the run directory is created");
+    let register = root.join("rulings.json");
+    let consent = ruling(
+        "ruling-consent",
+        "build",
+        "mozesz budowac",
+        "2026-10-02T00:00:00Z",
+    );
+
+    let own = ruling(
+        "ruling-own",
+        "no-build:stado",
+        "nie buduj stada",
+        "2026-10-03T00:00:00Z",
+    );
+    std::fs::write(
+        &register,
+        json!({ "rulings": [consent.clone(), own] }).to_string(),
+    )
+    .expect("the register is written");
+    let refused = stado(&register, &[]);
+    let said = text(&refused.stderr);
+    assert!(
+        !refused.status.success(),
+        "a build of the product its ruling withdraws ran: {}",
+        text(&refused.stdout)
+    );
+    assert!(
+        said.contains("build of stado is not run: the operator's rulings do not allow it now"),
+        "the refusal names the product the manifest belongs to: {said}"
+    );
+    assert!(
+        said.contains("nie buduj stada"),
+        "the refusal quotes him: {said}"
+    );
+
+    let other = ruling(
+        "ruling-other",
+        "no-build:glina",
+        "nie buduj gliny",
+        "2026-10-03T00:00:00Z",
+    );
+    std::fs::write(
+        &register,
+        json!({ "rulings": [consent, other] }).to_string(),
+    )
+    .expect("the register is written");
+    let allowed = stado(&register, &[]);
+    assert!(
+        allowed.status.success(),
+        "another product's withdrawal refused this build: {}",
         text(&allowed.stderr)
     );
 

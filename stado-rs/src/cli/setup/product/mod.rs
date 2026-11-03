@@ -185,14 +185,22 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     let _hold = janitor_hold(&command.matches).await?;
     // An operation that compiles runs only while the operator's rulings allow
     // building this product, as Oko answers it; nothing here keeps the rule.
+    // `install` and `update` name the product; `cargo` and `swift` build the
+    // product whose repository holds their manifest, so Oko is asked about
+    // that product rather than every product's build.
     if stado_product::cli::compiles(&command.matches) {
-        let product = match command.matches.subcommand() {
-            Some((_, arguments)) => given(arguments, "positional")?.map(String::as_str),
+        let named = match command.matches.subcommand() {
+            Some((_, arguments)) => given(arguments, "positional")?.cloned(),
             None => None,
+        };
+        let product = match named {
+            Some(product) => Some(product),
+            None => stado_product::cli::compiled_product(&command.matches)
+                .map_err(|error| CmdError::click(format!("{error:#}")))?,
         };
         crate::cli::release_loop::allowed::require(
             crate::cli::release_loop::allowed::BUILD,
-            product,
+            product.as_deref(),
             &purposes(&command.matches),
         )
         .await?;

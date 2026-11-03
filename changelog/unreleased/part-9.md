@@ -7,6 +7,13 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- **`stado product cargo` and `swift` ask Oko about the product they build:** they named no
+  product, so `oko admit build` judged every one of them as a build of every product and a consent
+  the operator gave for one product never admitted it. The product is now the catalog product whose
+  owner or surface repository is the GitHub origin of the repository holding `--manifest-path`
+  (`--package-path`, else the current directory); a tree outside every catalogued repository is
+  still asked as every product's build.
+
 - **Stado no longer asks the person at a Mac about Apple Music, Photos, Contacts or Files and
   Folders it does not need:** the janitor's build-cache walk descended `~/Library`, where it opened
   the Photos syndication library and the media library, and the always-on host process made macOS

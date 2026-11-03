@@ -1,6 +1,6 @@
 mod catalog;
 mod compiles;
-pub use compiles::compiles;
+pub use compiles::{compiled_product, compiles};
 mod lifecycle;
 mod native;
 pub(crate) mod registry;
