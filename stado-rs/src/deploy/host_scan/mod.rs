@@ -17,6 +17,7 @@
 pub mod admission;
 pub mod priority;
 pub mod record;
+pub mod swap;
 
 pub use admission::{admit, admit_relief, Admission, Verdict};
 pub use priority::{background_prefix, Throttled};

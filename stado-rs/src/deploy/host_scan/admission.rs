@@ -94,7 +94,14 @@ pub fn admit(scan: &str) -> Result<Verdict, String> {
         ceiling,
         ceiling_source,
     };
-    if load > ceiling {
+    // A host out of memory pages every scan as a loaded one runs it slowly:
+    // past its declared swap ceiling a scan is skipped as one over the load
+    // ceiling is, and the reading is said on stderr.
+    let (swap_full, _) = super::swap::over_ceiling()?;
+    if load > ceiling || swap_full.is_some() {
+        if let Some(swap) = &swap_full {
+            eprintln!("[stado host scan] {scan} skipped: {swap}");
+        }
         super::record::skipped(scan, &admission)?;
         Ok(Verdict::Skipped(admission))
     } else {

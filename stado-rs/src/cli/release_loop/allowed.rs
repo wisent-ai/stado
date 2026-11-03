@@ -313,7 +313,10 @@ async fn decision(words: &[&str]) -> Decision {
 
 /// [`refusal`] for a product operation that compiles or publishes, serving
 /// the open defects `purposes` the caller named (none when it named none):
-/// refused, nothing was exported or built.
+/// refused, nothing was exported or built. An admitted operation then waits
+/// for this host's swap to fall under its declared ceiling
+/// (`host.swap_ceiling_pct`) before it exports or compiles anything: a build
+/// started with swap nearly full only pages.
 pub async fn require(
     action: &str,
     product: Option<&str>,
@@ -321,5 +324,12 @@ pub async fn require(
 ) -> Result<(), CmdError> {
     refusal(action, product, purposes)
         .await
-        .map_err(|refused| CmdError::refused(format!("{refused}; nothing was exported or built")))
+        .map_err(|refused| CmdError::refused(format!("{refused}; nothing was exported or built")))?;
+    let what = match product {
+        Some(product) => format!("{action} of {product}"),
+        None => action.to_owned(),
+    };
+    crate::deploy::host_scan::swap::wait_under_ceiling(&what)
+        .await
+        .map_err(|cause| CmdError::declaration(format!("{cause}; nothing was exported or built")))
 }

@@ -111,12 +111,33 @@ pub(crate) async fn publish_and_admit(
     // A drain asked of this worker ([`crate::providers::local::agent::drain`])
     // admits nothing more, and the publication says so with the same reason.
     let drain = crate::providers::local::agent::drain::requested();
+    // A host past its declared swap ceiling claims nothing more: its work
+    // only pages, and every job it holds slows with it. The reading is
+    // published beside the reason.
+    let swap_full = match crate::deploy::host_scan::swap::over_ceiling() {
+        Ok((full, _)) => full,
+        Err(cause) => {
+            log_fn(&format!("swap ceiling unreadable: {cause}"));
+            agent_diag.insert("swap_ceiling".into(), Value::from(cause));
+            None
+        }
+    };
+    match &swap_full {
+        Some(reading) => {
+            agent_diag.insert("swap_ceiling".into(), Value::from(reading.clone()));
+        }
+        None => {
+            agent_diag.remove("swap_ceiling");
+        }
+    }
     let policy_reason = if queue_control.paused {
         Some("queue_paused")
     } else if drain.is_some() {
         Some("drain_requested")
     } else if pressure_active {
         Some("disk_pressure_active")
+    } else if swap_full.is_some() {
+        Some(crate::deploy::host_gates::SWAP_CEILING_EXCEEDED)
     } else {
         lock_reason
     };

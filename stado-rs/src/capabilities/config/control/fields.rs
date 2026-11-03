@@ -136,6 +136,12 @@ pub const HOST_SCAN_LOAD_CEILING_CONFIG: ConfigField = ConfigField::scalar(
     "host.scan_load_ceiling",
 );
 
+pub const HOST_SWAP_CEILING_PCT_CONFIG: ConfigField = ConfigField::scalar(
+    "host-swap-ceiling-pct",
+    "WC_HOST_SWAP_CEILING_PCT",
+    "host.swap_ceiling_pct",
+);
+
 pub const MACHINE_SOURCE_LIMITS_CONFIG: ConfigField = ConfigField::document(
     "machine-source-limits",
     "WC_MACHINE_SOURCE_LIMITS",

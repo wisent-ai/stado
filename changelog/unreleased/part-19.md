@@ -333,3 +333,12 @@ The version bump gathers them into the release's own file and removes this one.
   that is still preparing, as an installation without `--wait` does, saying `superseding the
   automatic product sync …`; a sync that is placing files, and every other holder, is still
   waited for. The sync installs again on its next pass.
+- **A host past its declared swap ceiling starts no new work:** a Mac with its swap 97% used kept
+  claiming queue work, launching routines and starting product builds, and every one only paged: a
+  Stado build took over half an hour with its compiler at two percent of a core. A host may declare
+  `host.swap_ceiling_pct` (`WC_HOST_SWAP_CEILING_PCT`). Above it the worker publishes
+  `swap_ceiling_exceeded` and claims nothing (`diag.swap_ceiling` carries the reading), the host's
+  disk scans are skipped as over the load ceiling, and `product install|update|cargo|swift` wait
+  before exporting or compiling as a `czekam:` host wait naming the reading, starting once swap
+  falls under the ceiling. Nothing is assumed for a host that declares none; an unreadable swap
+  admits the work and says why.

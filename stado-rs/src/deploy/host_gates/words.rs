@@ -19,6 +19,11 @@ pub const DISK_PRESSURE_UNRESOLVED: &str = "disk_pressure_unresolved";
 /// release builds and ordinary queue work because those consume more disk.
 pub const DISK_PRESSURE_ACTIVE: &str = "disk_pressure_active";
 
+/// The agent's exact word for "this host's swap is above the ceiling it
+/// declares (`host.swap_ceiling_pct`)": it claims no new work, because work
+/// started there only pages. The reading is published as `diag.swap_ceiling`.
+pub const SWAP_CEILING_EXCEEDED: &str = "swap_ceiling_exceeded";
+
 /// `stado queue pause` is in effect; the agent publishes this per tick.
 pub const QUEUE_PAUSED: &str = "queue_paused";
 
