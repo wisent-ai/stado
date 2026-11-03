@@ -9,10 +9,29 @@
 use crate::capabilities::HOST_SWAP_CEILING_PCT_CONFIG;
 use crate::providers::local::host_memory::read_host_memory;
 
-/// The ceiling declared for this host, `None` when nothing is declared.
+/// The ceiling declared for this host, `None` when nothing is declared. Read
+/// from the config file as it is now, not the process's cached copy: an
+/// operation waiting under the ceiling must see the operator change it, and
+/// a cached read kept a build waiting on a ceiling already raised.
 pub fn ceiling() -> Result<Option<i64>, String> {
     let field = &HOST_SWAP_CEILING_PCT_CONFIG;
-    let declared = crate::config_file::resolve(field.env, field.path, "");
+    let declared = match std::env::var(field.env) {
+        Ok(value) if !value.trim().is_empty() => value,
+        Ok(_) | Err(std::env::VarError::NotPresent) => {
+            match crate::config_file::get_fresh(field.path)? {
+                Some(serde_json::Value::Number(number)) => number.to_string(),
+                Some(serde_json::Value::String(text)) => text,
+                Some(other) => {
+                    return Err(format!(
+                        "{} = {other} is not a percentage from 1 to 100",
+                        field.path
+                    ))
+                }
+                None => String::new(),
+            }
+        }
+        Err(error) => return Err(format!("{} cannot be read: {error}", field.env)),
+    };
     let declared = declared.trim();
     if declared.is_empty() {
         return Ok(None);
