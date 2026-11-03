@@ -6,6 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { isolatedPath, pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
@@ -81,10 +82,13 @@ try {
   assert.equal(reclaimed.product, 'stado');
   assert.ok(reclaimed.started_at);
   const fixture = join(output, 'lock-holder');
-  const compiled = spawnSync('rustc', ['--edition', '2021',
+  // rustc by its rustup proxy's path: the isolated PATH leaves out
+  // ~/.cargo/bin, which also links the person's stado.
+  const rustc = join(homedir(), '.cargo/bin/rustc');
+  const compiled = spawnSync(rustc, ['--edition', '2021',
     join(dirname(fileURLToPath(import.meta.url)), 'lock_holder.rs'), '-o', fixture],
-    { cwd: root, env: environment, encoding: 'utf8' });
-  report.commands.push({ executable: 'rustc', arguments: compiled.spawnargs,
+    { cwd: root, env: { ...environment, PATH: process.env.PATH }, encoding: 'utf8' });
+  report.commands.push({ executable: rustc, arguments: compiled.spawnargs,
     exit_status: compiled.status, stdout: compiled.stdout, stderr: compiled.stderr });
   succeeds(compiled);
   const live = spawn(fixture, [lock], { stdio: ['pipe', 'pipe', 'pipe'] });
