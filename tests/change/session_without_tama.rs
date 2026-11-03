@@ -57,8 +57,7 @@ impl Run {
         command
             .args(["change", "run"])
             .env("HOME", self.root.join("home"))
-            .env("TMPDIR", self.root.join("tmp"))
-            .env("STADO_CONFIG", self.root.join("home/.stado/config.json"))
+            .env("TMPDIR", self.root.join("tmp")).env("STADO_CONFIG", concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"))
             .env("STADO_CHANGE_QUEUE", self.root.join("queue"))
             .env("WISENT_WORKSPACE", self.root.join("workspace"))
             .env_remove("PI_SESSION_FILE");

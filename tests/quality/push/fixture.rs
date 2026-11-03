@@ -91,8 +91,7 @@ impl Fixture {
                 "PATH",
                 std::env::var_os("PATH").expect("test toolchain PATH"),
             )
-            .env("HOME", &home)
-            .env("STADO_CONFIG", home.join(".stado/config.json"))
+            .env("HOME", &home).env("STADO_CONFIG", concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"))
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", home.join("store"))
             .env("STADO_BIN", env!("CARGO_BIN_EXE_stado"))

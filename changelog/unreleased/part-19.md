@@ -471,3 +471,9 @@ The version bump gathers them into the release's own file and removes this one.
   with none but the release's own active process, it retires the record itself, writes its line in
   the audit trail and rolls the digest out again; while one is taken, `detail` names the pid and
   port.
+- **Every journey selects a Stado config that exists:** 22 Rust journeys named a `STADO_CONFIG`
+  under their own run root that they never write, which Stado refuses (`STADO_CONFIG names <path>,
+  which does not exist`) and the configuration readers turned into a panic before the journey
+  tested anything (`alerts-skrzynka` among them). Each now selects `tests/config/empty.json`, the
+  empty config `tests/config/README.md` names for a journey that must read no operator
+  configuration.

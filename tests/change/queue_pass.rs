@@ -116,7 +116,10 @@ impl Journey {
             .env("HOME", self.root.join("home"))
             .env("TMPDIR", self.root.join("tmp"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("STADO_CONFIG", self.root.join("home/.stado/config.json"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .env("STADO_CHANGE_QUEUE", self.root.join("queue"))
             .env("WISENT_WORKSPACE", self.root.join("workspace"))
             .stdin(Stdio::null());

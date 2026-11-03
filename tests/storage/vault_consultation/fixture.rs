@@ -94,8 +94,7 @@ impl Deployment {
         command
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap())
-            .env("HOME", self.root.join("home"))
-            .env("STADO_CONFIG", self.root.join("home/.stado/config.json"))
+            .env("HOME", self.root.join("home")).env("STADO_CONFIG", concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"))
             .env("TMPDIR", self.root.join("tmp"))
             .stdin(Stdio::null());
         command

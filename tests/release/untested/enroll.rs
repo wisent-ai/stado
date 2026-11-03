@@ -40,8 +40,7 @@ impl Deployment {
         command
             .env_clear()
             .env("PATH", std::env::var_os("PATH").expect("PATH is set"))
-            .env("HOME", &self.root)
-            .env("STADO_CONFIG", self.root.join(".stado").join("config.json"))
+            .env("HOME", &self.root).env("STADO_CONFIG", concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"))
             .env("TMPDIR", self.root.join("tmp"))
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.root.join("store"))
