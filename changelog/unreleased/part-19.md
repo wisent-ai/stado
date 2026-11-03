@@ -538,3 +538,10 @@ The version bump gathers them into the release's own file and removes this one.
   reads `wisent-ai/<name>`'s canonical checkout from Stado's workspace, and one with none is
   refused naming it. A cargo pin whose checkout holds a manifest or lock changed since the pinned
   revision is refused naming each file and how to repair it, instead of quoting `git diff`.
+- **A Stado network connection whose peer vanished ends:** `stado network connect`, the
+  `ProxyCommand` of every `ssh` to a `<host>.stado.internal`, copied until the peer closed, and the
+  node's sockets carried no keepalive, so a peer gone without closing (a host asleep, a route
+  dropped) held the connection and its `ssh` without end: a pre-push probe of `true` stood 61
+  minutes, and on a laptop three such connects stood four days. Every socket the network dials or
+  accepts now turns on TCP keepalive and is ended by the kernel's idle time, interval and probe
+  count, as host-connections.md states.

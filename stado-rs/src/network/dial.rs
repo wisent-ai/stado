@@ -234,7 +234,7 @@ pub(crate) async fn tcp(endpoint: &str) -> Result<TcpStream, String> {
         .ok_or_else(|| format!("endpoint {endpoint:?} is not host:port"))?;
     let addresses = crate::remote::lan::socket_addrs(address, port).await?;
     match TcpStream::connect(&addresses[..]).await {
-        Ok(stream) => Ok(stream),
+        Ok(stream) => kept_alive(stream, endpoint),
         // A refusal macOS gives a program it has not allowed the local network
         // reads like a missing route; it is named as the denial it is.
         Err(error) => Err(
@@ -244,6 +244,20 @@ pub(crate) async fn tcp(endpoint: &str) -> Result<TcpStream, String> {
             },
         ),
     }
+}
+
+/// `stream` with TCP keepalive turned on, so the kernel ends it, by its own
+/// idle time, probe interval and probe count, once the peer stops answering.
+/// A Stado network connection is copied until its peer closes it; a peer
+/// that vanished without closing (a host asleep, a route gone) left it, and
+/// the `ssh` it served through `ProxyCommand stado network connect`, waiting
+/// without end: a pre-push probe of `true` stood 61 minutes, and on a laptop
+/// three such connects stood four days. The kernel's keepalive settings are
+/// the ones host-connections.md names for a session with no declared pair.
+fn kept_alive(stream: TcpStream, endpoint: &str) -> Result<TcpStream, String> {
+    nix::sys::socket::setsockopt(&stream, nix::sys::socket::sockopt::KeepAlive, &true)
+        .map_err(|error| format!("turning on TCP keepalive for {endpoint}: {error}"))?;
+    Ok(stream)
 }
 
 /// Handshake with the node holding `peer`, ask `request`, and return the
