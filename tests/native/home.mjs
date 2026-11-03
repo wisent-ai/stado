@@ -23,6 +23,16 @@ export const pinnedGit = Object.freeze({
   GIT_CONFIG_NOSYSTEM: '1',
 });
 
+// Where Cargo and Rustup keep their toolchains: the caller's own, or those of
+// the HOME the journey itself was started with. Stado finds `cargo` in
+// CARGO_HOME, else under $HOME, and an isolated HOME holds none, so a source
+// build there was refused with "no executable cargo in Stado's and the
+// toolchains' homes or on the PATH it runs with".
+export const toolchainHomes = Object.freeze({
+  CARGO_HOME: process.env.CARGO_HOME ?? join(homedir(), '.cargo'),
+  RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(homedir(), '.rustup'),
+});
+
 // The programs an installation into an isolated home places under one name
 // the person's own installation already answers to.
 const SHADOWED = ['stado'];
