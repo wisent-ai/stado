@@ -248,3 +248,9 @@ The version bump gathers them into the release's own file and removes this one.
   `state: declared-absent … $HOME/.stado/skarbiec.vault.json is not a file on this machine` beside
   a vault that served. A declaration under `$HOME/` (as under `~/`) is now read under the
   account's home by every reader of it.
+- **`release submit --commit` looks for each step's program in that commit:** the check that every
+  release step's script exists read the checkout's working tree, so a checkout standing on another
+  commit refused a submit of a commit that carried its scripts (`skarbiec: darwin-arm64 step
+  serve-one-process runs tests/release/journey.sh … nothing was enrolled`). A submit now checks the
+  submitted commit's tree and names a missing program as `<path>, which commit <commit> does not
+  hold`; enrolling a checkout keeps checking its working tree.

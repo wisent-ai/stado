@@ -164,7 +164,11 @@ pub(crate) async fn publish_source(
 pub(crate) async fn enroll_source(reading: &SourceReading) -> Result<(), CmdError> {
     release_catalog::missing_programs_refusal(
         &reading.manifest.product,
-        &release_catalog::missing_step_programs(&reading.manifest, &reading.root),
+        &release_catalog::missing_step_programs(
+            &reading.manifest,
+            &reading.root,
+            Some(&reading.commit),
+        ),
     )?;
     if let Some(refusal) = reading.manifest.unqualifiable_refusal() {
         return Err(CmdError::declaration(refusal));

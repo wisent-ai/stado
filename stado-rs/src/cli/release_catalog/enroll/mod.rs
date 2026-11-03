@@ -124,10 +124,14 @@ fn steps_matching(
 /// not hold: the path the step runs, directly (`scripts/x.sh`) or through an
 /// interpreter (`bash release/x.sh`). A step that runs a removed script
 /// cannot start in any build, so it is refused before anything is enrolled;
-/// a path that cannot be examined is named with its cause.
+/// a path that cannot be examined is named with its cause. With `commit`,
+/// the path is looked for in that commit's tree, the one the build runs: a
+/// checkout standing on another commit held other files, and a release of
+/// a commit that carried its scripts was refused for the checkout's.
 pub(crate) fn missing_step_programs(
     manifest: &ReleasePipelineManifest,
     root: &std::path::Path,
+    commit: Option<&str>,
 ) -> Vec<String> {
     let program = |argv: &[String]| -> Option<String> {
         let named = match argv {
@@ -138,9 +142,21 @@ pub(crate) fn missing_step_programs(
         if named.starts_with('/') {
             return None;
         }
-        match crate::primitives::presence::present(&root.join(named)) {
+        let held = match commit {
+            Some(commit) => {
+                crate::cli::release_submit::committed_file_if_present(root, commit, named)
+                    .map(|file| file.is_some())
+                    .map_err(|error| error.to_string())
+            }
+            None => crate::primitives::presence::present(&root.join(named))
+                .map_err(|error| error.to_string()),
+        };
+        match held {
             Ok(true) => None,
-            Ok(false) => Some(named.clone()),
+            Ok(false) => Some(match commit {
+                Some(commit) => format!("{named}, which commit {commit} does not hold"),
+                None => named.clone(),
+            }),
             Err(error) => Some(format!("{named}, which cannot be examined: {error}")),
         }
     };

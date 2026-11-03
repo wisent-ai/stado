@@ -173,7 +173,7 @@ async fn enroll_checkout(checkout: &std::path::Path, json: bool) -> Result<(), C
     };
     enroll::missing_programs_refusal(
         &manifest.product,
-        &enroll::missing_step_programs(&manifest, checkout),
+        &enroll::missing_step_programs(&manifest, checkout, None),
     )?;
     if let Some(refusal) = manifest.unqualifiable_refusal() {
         return Err(CmdError::declaration(refusal));
