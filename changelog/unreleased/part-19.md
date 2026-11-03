@@ -326,3 +326,10 @@ The version bump gathers them into the release's own file and removes this one.
   `signing.kept_identity` (role, `kept`/`imported`/`unrefreshed`, SHA-1); Products in Stado
   Desktop says which role is kept. Skarbiec's three recipes declare
   `$HOME/.stado/signing/fleet-identity.keychain-db` and `macos-development-signing`.
+- **An explicit installation no longer waits behind an automatic sync's build:** `product install
+  --wait` waited for whatever held the surface's lock, so on a loaded Mac each pass of the host's
+  `product sync` building origin/main (half an hour of Stado's own build) held every explicit
+  installation of the same surface until it ended. An explicit installation now supersedes a sync
+  that is still preparing, as an installation without `--wait` does, saying `superseding the
+  automatic product sync …`; a sync that is placing files, and every other holder, is still
+  waited for. The sync installs again on its next pass.

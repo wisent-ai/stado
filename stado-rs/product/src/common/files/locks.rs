@@ -91,6 +91,34 @@ fn take(path: &Path, mode: Take, product_scope: bool) -> Result<File> {
             Take::Refuse => {
                 anyhow::bail!("another writer owns {}; {holder}", path.display());
             }
+            // `--wait` keeps an operator's installation in progress, but an
+            // automatic `product sync` is no operator's request: an explicit
+            // installation waited behind each sync's build of origin/main for
+            // as long as it ran (half an hour on a loaded Mac), every time the
+            // sync woke. A sync still preparing is superseded as `Supersede`
+            // supersedes it; the sync installs again on its next pass.
+            Take::Wait
+                if product_scope
+                    && !is_sync(&std::env::args().collect::<Vec<_>>().join(" "))
+                    && is_sync(&recorded.command)
+                    && recorded.phase == PHASE_PREPARING
+                    && recorded.verified_live()? =>
+            {
+                let pid = recorded.pid;
+                eprintln!(
+                    "superseding the automatic product sync {holder}: an explicit installation \
+                     does not wait for a sync that is still preparing; the sync installs again \
+                     on its next pass"
+                );
+                // SAFETY: the process table still names the recorded PID and birth time.
+                match unsafe { libc::kill(pid, libc::SIGTERM) }.is_negative() {
+                    false => format!("{holder} (told to stop)"),
+                    true => format!(
+                        "{holder} (pid {pid} could not be told to stop: {})",
+                        std::io::Error::last_os_error()
+                    ),
+                }
+            }
             Take::Wait => holder,
             Take::Supersede if same_request(&recorded.command) => {
                 format!("{holder} (the same installation, already under way)")
@@ -263,6 +291,21 @@ fn same_request(recorded: &str) -> bool {
     };
     request(recorded.split_whitespace().map(str::to_owned).collect())
         == request(std::env::args().collect())
+}
+
+/// Whether `command` is an automatic `stado product … sync`, the pass the
+/// host's Stado runs by itself, as opposed to an installation someone asked
+/// for.
+fn is_sync(command: &str) -> bool {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    match words.iter().position(|word| *word == "product") {
+        Some(at) => words[at + 1..]
+            .iter()
+            .filter(|word| !word.starts_with('-'))
+            .find(|word| !word.starts_with('/') && !word.starts_with('~'))
+            .is_some_and(|verb| *verb == "sync"),
+        None => false,
+    }
 }
 
 pub fn alive(pid: i32) -> bool {
