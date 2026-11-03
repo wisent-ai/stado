@@ -148,8 +148,13 @@ pub(super) async fn retire(
             }
         };
         if !hosts.contains_key(host) {
+            // Labels, domains, declared and running programs: all that finding
+            // a predecessor reads. The full inventory also greps every
+            // fleet script, forks ps/date/stat per loaded label and walks the
+            // host's PATH for stado copies; on a loaded Mac that ran for over
+            // nine minutes in the serve process each pass.
             let read = match crate::deploy::host_channel::canonical_target(host).await {
-                Ok(target) => match service::loaded_units(&target, runner).await {
+                Ok(target) => match service::loaded_image_units(&target, runner).await {
                     Ok(loaded) => Ok((target, loaded)),
                     Err(error) => Err(format!("its units could not be read: {error}")),
                 },
