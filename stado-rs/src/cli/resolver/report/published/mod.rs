@@ -32,7 +32,7 @@ pub(super) const RESOLVER_SERVING: &str = "serving";
 const RESOLVER_STARTING: &str = "starting";
 /// An upstream read failed; the next one is due on the declared refresh
 /// interval.
-const RESOLVER_BACKING_OFF: &str = "backing_off";
+pub(super) const RESOLVER_BACKING_OFF: &str = "backing_off";
 /// Stopped for a reason no retry clears.
 const RESOLVER_FAILED: &str = "failed";
 /// No state file exists: no resolver has run since one was last removed.

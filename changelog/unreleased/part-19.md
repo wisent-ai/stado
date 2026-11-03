@@ -209,3 +209,9 @@ The version bump gathers them into the release's own file and removes this one.
   and every programmatic registry write that changes the directory under the generation the
   registry already carries is refused before the store sees it (`this registry write changes the
   service directory but leaves its generation at <N>; … nothing was written`), as uploads were.
+- **A wait for the resolver to serve ends when it publishes that its registry read failed:** `service
+  ensure stado`, run by `product install`, waited for the restarted resolver to publish `serving`
+  and took only `failed` as the other verdict, so a resolver that kept publishing `backing_off`
+  (its store refused, here a directory changed under an unadvanced generation) held the install
+  for an hour until it was killed. `backing_off` now ends the wait with the resolver's attempt,
+  next read and reason.

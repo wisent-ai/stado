@@ -3,25 +3,29 @@
 //! has one more registry write to make. Nothing is polled on an interval: the
 //! kernel's change notification on the state file's directory wakes the
 //! reader each time the resolver publishes, and the resolver's own verdict
-//! ends the wait — `serving` with its listeners bound, or `failed` with its
-//! reason. A resolver that exits without a verdict is restarted by its unit,
-//! and the process that replaces it publishes; that publication ends the
-//! wait for the one that exited. The wait stands in this host's register of
-//! open waits while it lasts, so a resolver that publishes nothing (one
-//! standing on its own registry read) is seen waited on, not a silent hang.
+//! ends the wait — `serving` with its listeners bound, `failed` with its
+//! reason, or `backing_off` with the reason its registry read failed. A
+//! resolver that exits without a verdict is restarted by its unit, and the
+//! process that replaces it publishes; that publication ends the wait for
+//! the one that exited. The wait stands in this host's register of open waits
+//! while it lasts, so a resolver that publishes nothing (one standing on its
+//! own registry read) is seen waited on, not a silent hang.
 //!
 //! The authority-level follows live here too: bringing this host's resolver
 //! to the registry the authority serves ([`follow_authority`]), its upstream
 //! first, with the waits themselves in [`super::follow`].
 
 use super::follow::follow_version;
-use super::published::{published_state, publisher_running, state_path, RESOLVER_SERVING};
+use super::published::{
+    published_state, publisher_running, state_path, RESOLVER_BACKING_OFF, RESOLVER_SERVING,
+};
 
 const RESOLVER_FAILED: &str = "failed";
 
 /// Block until the resolver process `pid` publishes that it serves, or
-/// return its own reason when it publishes that it failed, or say that it
-/// exited and which process published since.
+/// return its own reason when it publishes that it failed or that its
+/// registry read failed, or say that it exited and which process published
+/// since.
 pub(crate) fn await_serving(pid: u32) -> Result<(), String> {
     let path = state_path().ok_or_else(|| {
         "the resolver's state file has no location: HOME is unset and STADO_RESOLVER_STATE_FILE is empty"
@@ -54,6 +58,19 @@ pub(crate) fn await_serving(pid: u32) -> Result<(), String> {
                             Some(reason) => reason,
                             None => "it published no reason",
                         }
+                    )));
+                }
+                // Its read of the registry failed and it waits for the next
+                // one on the declared refresh interval. Waiting on, this held
+                // a `service ensure` for an hour behind a resolver that kept
+                // refusing the same store; the resolver's reason is the answer.
+                if state.pid == pid && state.state == RESOLVER_BACKING_OFF {
+                    return Err(std::io::Error::other(format!(
+                        "the resolver (pid {pid}) could not read the registry (attempt {}, next \
+                         read at {}): {}",
+                        state.attempt,
+                        state.next_attempt_at.as_deref().unwrap_or("not published"),
+                        state.reason.as_deref().unwrap_or("it published no reason")
                     )));
                 }
                 if state.pid != pid && publisher_running(&state) {
