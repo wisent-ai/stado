@@ -58,12 +58,18 @@ function started(args) {
   children.push(child);
   return { child, kept };
 }
+// Waits for `text` on the child's stderr. It wakes on more output or on the
+// child's exit: waiting on output alone left nothing for Node to wait on once
+// a child ended quietly, and the journey died with exit 13 and no report.
 async function said(one, text) {
   while (!one.kept.stderr.includes(text)) {
     if (one.child.exitCode !== null || one.child.signalCode !== null) {
       throw new Error(`pid ${one.child.pid} ended before saying ${JSON.stringify(text)}: ${one.kept.stderr.slice(-2000)}`);
     }
-    await new Promise(next => one.child.stderr.once('data', next));
+    await Promise.race([
+      new Promise(next => one.child.stderr.once('data', next)),
+      one.child.ended,
+    ]);
   }
 }
 let failure;

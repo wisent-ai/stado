@@ -58,9 +58,19 @@ function started(program, args) {
   children.push(child);
   return { child, kept };
 }
+// Waits for `text` on the child's stderr. It wakes on more output or on the
+// child's exit, and an exit before the text is the failure it names: waiting
+// on output alone left nothing for Node to wait on once a child ended quietly,
+// and the journey died with exit 13 and no report.
 async function said(started, text) {
   while (!started.kept.stderr.includes(text)) {
-    await new Promise(next => started.child.stderr.once('data', next));
+    if (started.child.exitCode !== null || started.child.signalCode !== null) {
+      throw new Error(`pid ${started.child.pid} ended before saying ${JSON.stringify(text)}: ${started.kept.stderr.slice(-2000)}`);
+    }
+    await Promise.race([
+      new Promise(next => started.child.stderr.once('data', next)),
+      started.child.ended,
+    ]);
   }
 }
 let failure;
@@ -100,7 +110,11 @@ try {
     holder = JSON.parse(success(run(binary, [...lifecycle('status'), '--json']))).operation;
     assert.ok(holder === null || holder.pid !== first.child.pid || holder.running === false,
       `the superseded holder still runs: ${JSON.stringify(holder)}`);
-    if (holder === null) await new Promise(next => newer.child.stderr.once('data', next));
+    if (holder === null) {
+      assert.ok(newer.child.exitCode === null && newer.child.signalCode === null,
+        `pid ${newer.child.pid} ended before it held the lock: ${newer.kept.stderr.slice(-2000)}`);
+      await Promise.race([new Promise(next => newer.child.stderr.once('data', next)), newer.child.ended]);
+    }
   }
   report.superseded_by = holder;
   report.result = 'passed';
