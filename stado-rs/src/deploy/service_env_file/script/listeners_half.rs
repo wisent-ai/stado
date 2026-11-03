@@ -93,7 +93,12 @@ $6 != "LISTEN" { next }
   fi
 fi
 
-report "$(printf '%s' "$env_path" | /usr/bin/awk '{ gsub(/[^ -~]/, "?"); gsub(/["\\]/, "?"); printf "%s", $0 }')" \
+# Sanitized in a plain assignment, never inside a double-quoted "$(...)":
+# macOS /bin/bash 3.2 reads the double quote in the awk bracket below as the
+# end of such a word and refused the whole script with "unexpected EOF while
+# looking for matching" on every Mac.
+safe_path=$(printf '%s' "$env_path" | /usr/bin/awk '{ gsub(/[^ -~]/, "?"); gsub(/["\\]/, "?"); printf "%s", $0 }')
+report "$safe_path" \
   read '' "$mode" "$owner_only" "$bytes" "$entries_state" "$entries_fragment" \
   "$listeners_state" "$listeners_json"
 "##;

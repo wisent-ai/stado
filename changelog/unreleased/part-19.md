@@ -278,3 +278,7 @@ The version bump gathers them into the release's own file and removes this one.
   beacon 40 minutes) and every beacon published its interface changes as unread. Both now take the
   serve loop's period; a one-off `beacon collect` reads the hour and says it has no window. A
   collection that outruns its period is logged with its duration.
+- **`service env check` reads an env file on a Mac:** the script's last line sanitized the path
+  inside a double-quoted `"$(… awk '…["\\]…')"`, which macOS `/bin/bash` 3.2 reads as an unclosed
+  quote, so every check on a Mac ended `unexpected EOF while looking for matching`. The path is
+  sanitized in a plain assignment. Real journey: `tests/service_env/check.mjs`.
