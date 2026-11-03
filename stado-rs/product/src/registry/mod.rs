@@ -120,6 +120,7 @@ fn apply(action: &str, id: &str, args: &Arguments, document: &mut Value) -> Resu
     set_field(&mut record, args, "--family", "family")?;
     set_field(&mut record, args, "--owner-repository", "owner_repository")?;
     set_field(&mut record, args, "--description", "description")?;
+    set_field(&mut record, args, "--star-repository", "star_repository")?;
     if args.has("--evidence") {
         record["evidence"] = json!(args.many("--evidence"));
     }

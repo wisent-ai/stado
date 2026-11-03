@@ -40,6 +40,19 @@ pub fn validate(document: &Value) -> Result<()> {
         text(product, "description")?;
         let status = choice::<ProductStatus>(product, "status")?;
         choice::<Visibility>(product, "visibility")?;
+        // The public OWNER/REPO every product's in-app GitHub star request
+        // links to: the product's own repository when strangers can see it,
+        // another public one when they cannot (a private repository answers
+        // them with a 404). Whether it is public is GitHub's answer, read by
+        // `stado product documentation star-repositories`, never this
+        // record's `visibility`, which is the operator's word for the product.
+        repository(text(product, "star_repository").with_context(|| {
+            format!(
+                "{id} names no star_repository, the public OWNER/REPO its GitHub star request \
+                 links to; set it with `stado product registry set {id} --star-repository OWNER/REPO`"
+            )
+        })?)
+        .with_context(|| format!("{id}.star_repository"))?;
         choice::<Family>(product, "family")?;
         strings(product, "evidence")?;
         for field in ["approved_by", "approved_at", "approval_note"] {

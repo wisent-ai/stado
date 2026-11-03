@@ -237,6 +237,11 @@ pub fn documentation() -> Command {
                     "Inspect archived repositories as well as active ones",
                 )),
         )
+        .subcommand(Command::new("star-repositories").about(
+            "Ask GitHub whether the star_repository each catalog product's GitHub star request \
+             links to is public and not archived; a product whose link a stranger cannot star is \
+             a violation naming GitHub's answer",
+        ))
         .subcommand(
             Command::new("index")
                 .about(

@@ -11,6 +11,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/ster
+  star_repository: wisent-ai/ster
   description: Native representation reading, direction learning, evaluation and activation steering.
   roadmap: []
   integrations:
@@ -58,6 +59,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/jeden
+  star_repository: wisent-ai/jeden
   description: Private, local-first coding-agent harness with controlled tools and durable sessions.
   roadmap:
   - title: Freeze the production contracts
@@ -157,6 +159,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/brama
+  star_repository: wisent-ai/brama
   description: Authenticated provider-neutral gateway for LLM inference and routing.
   roadmap: []
   integrations:
@@ -269,6 +272,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/weles
+  star_repository: wisent-ai/weles
   description: Authorized browser-workflow execution across managed hosts.
   roadmap: []
   rivals:
@@ -401,6 +405,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/skarbiec
+  star_repository: wisent-ai/skarbiec
   description: Credential and authentication management for people, agents and services.
   roadmap: []
   integrations:
@@ -482,6 +487,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/most
+  star_repository: wisent-ai/wisent
   description: Messaging and real-world communication for AI agents.
   roadmap:
   - title: Add Twilio RCS transport
@@ -554,6 +560,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/stado
+  star_repository: wisent-ai/stado
   description: Fleet control plane for queues, jobs, placement, leases, hosts, declared services, and the Wisent product catalog with every product's installation and signing.
   submit:
     criticality: critical
@@ -721,6 +728,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/lem
+  star_repository: wisent-ai/wisent
   description: Research and conference-management harness for producing and validating papers.
   roadmap: []
   integrations:
@@ -771,6 +779,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/echo
+  star_repository: wisent-ai/wisent
   description: Operational and growth platform for products built by AI agents.
   roadmap: []
   integrations: []
@@ -845,6 +854,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/probierz
+  star_repository: wisent-ai/probierz
   description: Quality-evidence platform for testing software through real journeys.
   roadmap: []
   integrations:
@@ -953,6 +963,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/tama-desktop
+  star_repository: wisent-ai/tama-desktop
   description: Interactive management and enforcement of coding-agent policy.
   roadmap:
   - title: Publish the supported binary release
@@ -1020,6 +1031,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/byk-desktop
+  star_repository: wisent-ai/wisent
   description: Wisent trading assistant.
   roadmap: []
   integrations: []
@@ -1060,6 +1072,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/las
+  star_repository: wisent-ai/las
   description: Local catalogue of Wisent tools and their supported combinations.
   roadmap:
   - title: Add the managed organization catalogue
@@ -1157,6 +1170,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/skrzynka
+  star_repository: wisent-ai/skrzynka
   description: Self-hosted email operations for people and local tools.
   roadmap: []
   integrations:
@@ -1241,6 +1255,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/oko
+  star_repository: wisent-ai/wisent
   description: Catalogue and operational view of agent sessions and goals.
   submit:
     criticality: critical
@@ -1349,6 +1364,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/singularity
+  star_repository: wisent-ai/singularity
   description: Autonomous digital being that creates value, earns revenue, learns, self-modifies, and creates child beings.
   roadmap: []
   integrations:
@@ -1431,6 +1447,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/transcript-lake
+  star_repository: wisent-ai/transcript-lake
   description: Durable local storage and streaming of agent transcripts.
   roadmap:
   - title: Add verified Gemini and Qwen adapters
@@ -1485,6 +1502,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/kronika
+  star_repository: wisent-ai/kronika
   description: Automated documentation creation and maintenance.
   roadmap:
   - title: Add retained provenance and freshness
@@ -1537,6 +1555,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/rachuba
+  star_repository: wisent-ai/rachuba
   description: Payroll for a company with one employee, and the projection of that employee's
     own federal return.
   roadmap: []
@@ -1558,6 +1577,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/spis
+  star_repository: wisent-ai/spis
   description: Evidence-grade open reference corpus of real interfaces, with provenance, hashes, and measured state for every record.
   roadmap: []
   integrations:
@@ -1632,6 +1652,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/glina
+  star_repository: wisent-ai/glina
   description: AI-sculpted game assets. Brama-modeled Blender sculpting with a verified GLB quality gate.
   roadmap: []
   integrations:
@@ -1693,6 +1714,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/skryba
+  star_repository: wisent-ai/wisent
   description: Detector-directed text rewriting with a native Rust GRPO policy.
   roadmap: []
   integrations:
@@ -1738,6 +1760,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: wisent-ai/handtohuman
+  star_repository: wisent-ai/wisent
   description: Standardized human work with automatic staffing, recovery, delivery evidence, and provider-independent task lifecycles.
   roadmap: []
   integrations:
@@ -1786,6 +1809,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/wisent-app
+  star_repository: wisent-ai/wisent
   description: The operated customer-facing application for discovering, creating and running every Wisent AI capability under one account, on the web and on iOS.
   roadmap: []
   integrations: []
@@ -1856,6 +1880,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: wisent-ai/preferences
+  star_repository: wisent-ai/wisent
   description: Pairwise preference voting that ranks generators per category with Bradley-Terry, builds a taste profile for each voter, and exports text choices as Ster contrastive pairs.
   roadmap: []
   integrations:
@@ -1894,6 +1919,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: lbartoszcze/humanmaxx-web
+  star_repository: wisent-ai/wisent
   description: A fitness app that counts calories and macros, keeps custom training
     logs, gives rule-based training and nutrition suggestions and scores repetition
     quality in sets; a native iOS client on a Supabase backend, with its own brand
@@ -1938,6 +1964,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: lbartoszcze/peptomaxx-web
+  star_repository: wisent-ai/wisent
   description: A care-plan application that organizes a plan supplied by a clinician;
     Next.js web client and canonical Supabase backend, with a native iOS companion
     and its own product website.
@@ -1969,6 +1996,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: wisent-ai/needher-ai-web
+  star_repository: wisent-ai/wisent
   description: A private consumer web application for consented AI companion experiences
     and policy-controlled image and video generation, combining companion and creator
     surfaces with an operated media pipeline. Its own brand at needher.ai with its
@@ -2006,6 +2034,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: wisent-ai/ai-text-detector-web
+  star_repository: wisent-ai/wisent
   description: An AI-pattern score for text that shows its evidence and its limits; the web app at app.aiwritecheck.com and the product site at aiwritecheck.com, its own brand.
   roadmap: []
   integrations: []
@@ -2045,6 +2074,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: wisent-ai/ai-text-generator-web
+  star_repository: wisent-ai/wisent
   description: Turns stiff AI copy into natural writing without losing the facts; the web app at app.undetectabletext.com and the product site at undetectabletext.com, its own brand.
   roadmap: []
   integrations: []
@@ -2084,6 +2114,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: wisent-ai/turbot-web
+  star_repository: wisent-ai/wisent
   description: Secure conversations with AI characters, served at turbot.wisent.ai
     from a Next.js sign-in shell over its own Supabase project; the earlier SwiftUI
     iOS app is archived in wisent-ai/turbot-ios.
@@ -2118,6 +2149,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: lbartoszcze/needsomeone-ai-web
+  star_repository: wisent-ai/wisent
   description: 'Someone to talk to, create with, or count on: AI characters, practical
     assistants, shared rooms and generated media in one place. A Next.js web app in
     lbartoszcze/needsomeone-ai-web, not deployed; its landing repository
@@ -2152,6 +2184,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: lbartoszcze/needhim-ai-web
+  star_repository: wisent-ai/wisent
   description: A private consumer web application for consented AI companion experiences,
     the counterpart of NeedHer in the same family. Its own brand at needhim.ai with
     its own identity project.
@@ -2185,6 +2218,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/wisent-enterprise
+  star_repository: wisent-ai/wisent
   description: 'The operated web console over the Wisent platform: representations, activation analysis, classifiers, contrastive pairs, evaluation, models, deployment, and the compute instances and jobs behind them.'
   roadmap: []
   integrations: []
@@ -2221,6 +2255,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/creator-portal
+  star_repository: wisent-ai/wisent
   description: 'Commissioning user-generated content from real creators: discovery, briefs, rights, assets, statistics and payment records. Creators sign up and are paid through the creator portal; the campaign ledger and its CLI are packages of the estate rather than records here.'
   roadmap: []
   integrations: []
@@ -2259,6 +2294,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/transcript-label-trainer
+  star_repository: wisent-ai/transcript-label-trainer
   description: Small Models for Your Custom Harness Needs.
   roadmap: []
   integrations:
@@ -2316,6 +2352,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/compute.wisent.com
+  star_repository: wisent-ai/wisent
   description: 'A private, conditional Stado surface for evaluating an operator-controlled
     GPU catalogue and direct capacity resale: a web interface, one backend process
     per host, and instances that run as Stado machine jobs.'
@@ -2371,6 +2408,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/film
+  star_repository: wisent-ai/wisent
   description: 'Film renders a Wisent video: one service that owns which renderer
     does it, what that renderer is asked for, who owns the identifier that comes back,
     and what still rendering means.'
@@ -2427,6 +2465,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/obraz
+  star_repository: wisent-ai/wisent
   description: 'Obraz renders and edits a Wisent image: the recipe that turns a creator,
     a pose and a description into a prompt, the adapter that makes the image that
     creator''s, the ComfyUI render, the picture that comes back, and photo-editor
@@ -2491,6 +2530,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/trends
+  star_repository: wisent-ai/wisent
   description: Watches topics across public sources and reports which ones are rising, with the observations behind each verdict.
   submit:
     criticality: standard
@@ -2521,6 +2561,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/competitors-cli
+  star_repository: wisent-ai/competitors-cli
   description: Finds a product's competitors from public evidence, crawls their sites and compares them.
   roadmap: []
   integrations: []
@@ -2541,6 +2582,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/kupiec
+  star_repository: wisent-ai/wisent
   description: 'The Wisent CRM: accounts, contacts, a pipeline of deals with measured win rates, activities and tasks in the fleet database kupiec.'
   roadmap: []
   integrations: []
@@ -2576,6 +2618,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/zrodlo
+  star_repository: wisent-ai/wisent
   description: 'Full-weight pretraining of GPT2 decoder language models: token corpora, initialization, training with checkpointed AdamW, exact resume and evaluation, writing the Transformers model directory Ster posttrains.'
   roadmap: []
   integrations: []
@@ -2594,6 +2637,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/prawo
+  star_repository: wisent-ai/wisent
   description: 'Prawo keeps a legal matter as a case file: original documents, facts each tied to its source, a timeline, contradictions and missing evidence, and the law in force on the relevant date, so a person or their lawyer sees what is established, what is only claimed and what would change the case.'
   roadmap: []
   integrations: []
@@ -2612,6 +2656,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/zdrowie
+  star_repository: wisent-ai/wisent
   description: Zdrowie keeps a person's health history from many sources with dates, units and provenance, shows disagreements between sources instead of silently correcting them, and prepares each consultation from that history; family and carers get only the scope the person grants, revocable at any time.
   roadmap: []
   integrations: []
@@ -2630,6 +2675,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: wisent-ai/para
+  star_repository: wisent-ai/wisent
   description: 'Para introduces adults to each other only when both are interested: declared intentions and boundaries come first, matching is mutual, an introduction needs both to say yes, and a refusal, block or account deletion holds on every contact path.'
   roadmap: []
   integrations: []
@@ -2648,6 +2694,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/slajd
+  star_repository: wisent-ai/wisent
   description: Timed Markdown talks rendered as designed presentations in the Wisent design tokens, refused by slide when they run over or do not fit, and any presentation judged by Probierz against the documents it presents. One engine behind its CLI and loopback API.
   roadmap: []
   integrations: []

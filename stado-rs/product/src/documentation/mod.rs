@@ -2,6 +2,7 @@ mod github;
 mod index;
 mod markdown;
 mod pages;
+mod stars;
 use crate::{
     catalog,
     common::{emit, Arguments, Runtime},
@@ -39,6 +40,12 @@ pub fn run(operation: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> R
                 bail!("documentation index does not take positional arguments");
             }
             index::report(arguments.optional("--root")?, arguments.has("--check"))?
+        }
+        "star-repositories" => {
+            if !arguments.positional.is_empty() {
+                bail!("documentation star-repositories does not take positional arguments");
+            }
+            stars::report(&catalog::current(runtime)?)?
         }
         other => bail!("unknown documentation operation {other}"),
     };
