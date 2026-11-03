@@ -840,10 +840,13 @@ fn a_prioritized_candidate_is_carried_before_the_older_ones() {
 /// the rounds recorded over the tree the next pass lands, instead of
 /// repeating what the last pass waited on.
 ///
-/// The product's format gate is a shell script the export runs: when it
-/// runs for the second candidate (whose tree holds `second.txt`), it
-/// records a no-findings round over the first one from a reviewer's own
-/// session, as a reviewer working beside the pass would.
+/// The reviewer works beside the pass through the checkout's origin: an
+/// `ssh://` origin whose `core.sshCommand` serves the bare repository and,
+/// on the pass's second fetch of `main` (the one it makes for the second
+/// candidate, after it held the first for review), records a no-findings
+/// round over the first candidate from a reviewer's own session. The pass
+/// runs no format gate (no check formats or lints a tree), so the fetch is
+/// the step every candidate takes that the journey can hook.
 #[test]
 fn a_round_recorded_during_a_pass_lands_the_held_candidate_in_that_pass() {
     let mut journey = Journey::start();
@@ -859,12 +862,10 @@ fn a_round_recorded_during_a_pass_lands_the_held_candidate_in_that_pass() {
     )
     .unwrap();
     let first_id_file = journey.root.join("first-id");
-    let script = "if [ -f second.txt ] && [ -f \"$ROUND_FOR\" ]; then \
-                  PI_SESSION_FILE=\"$REVIEWER\" \"$STADO\" change review \"$(cat \"$ROUND_FOR\")\" \
-                  --findings \"$NONE\" --improvements \"$NONE\" && rm \"$ROUND_FOR\"; fi";
+    let fetched_once = journey.root.join("fetched-once");
     let base = repository(
         &mut journey,
-        json!([{"name": "style", "kind": "format", "argv": ["sh", "-c", script]}]),
+        json!([{"name": "style", "kind": "format", "argv": ["true"]}]),
     );
     let checkout = journey.checkout.to_string_lossy().into_owned();
     let submit = |journey: &mut Journey, commit: &str| -> String {
@@ -886,6 +887,31 @@ fn a_round_recorded_during_a_pass_lands_the_held_candidate_in_that_pass() {
     let second = commit(&mut journey, "second.txt", "second\n", "the second change");
     let second_id = submit(&mut journey, &second);
     fs::write(&first_id_file, &first_id).unwrap();
+    // Git runs `<sshCommand> fixture.invalid "git-upload-pack '<path>'"`
+    // (or git-receive-pack for the push): the hook takes the service from
+    // that command's first word and serves the bare repository with it. On
+    // the second upload-pack, the pass is past the first candidate.
+    let remote = journey.remote.to_string_lossy().into_owned();
+    let hook = journey.root.join("origin-hook.sh");
+    fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\n\
+             service=\"${{2%% *}}\"\n\
+             if [ \"$service\" = git-upload-pack ] && [ -f \"$ROUND_FOR\" ]; then\n\
+             \x20 if [ -f \"$FETCHED_ONCE\" ]; then\n\
+             \x20   PI_SESSION_FILE=\"$REVIEWER\" \"$STADO\" change review \"$(cat \"$ROUND_FOR\")\" \
+             --findings \"$NONE\" --improvements \"$NONE\" >&2 && rm \"$ROUND_FOR\"\n\
+             \x20 else\n\
+             \x20   : > \"$FETCHED_ONCE\"\n\
+             \x20 fi\n\
+             fi\n\
+             exec \"$service\" '{remote}'\n"
+        ),
+    )
+    .unwrap();
+    let ssh_origin = format!("ssh://fixture.invalid/{OWNER}/{NAME}.git");
+    journey.origin(&ssh_origin, Some(&format!("sh {}", hook.display())));
 
     let args = ["change", "run", checkout.as_str()];
     let output = journey
@@ -893,6 +919,7 @@ fn a_round_recorded_during_a_pass_lands_the_held_candidate_in_that_pass() {
         .env("STADO", env!("CARGO_BIN_EXE_stado"))
         .env("REVIEWER", &reviewer)
         .env("ROUND_FOR", &first_id_file)
+        .env("FETCHED_ONCE", &fetched_once)
         .env("NONE", &none)
         .args(args)
         .output()
@@ -900,10 +927,11 @@ fn a_round_recorded_during_a_pass_lands_the_held_candidate_in_that_pass() {
     let mut recorded = vec!["stado"];
     recorded.extend(args);
     journey.record(&recorded, &output);
+    journey.origin(&remote, None);
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(
         !first_id_file.exists(),
-        "the second candidate's gate recorded the first one's round: {stderr}"
+        "the reviewer beside the pass recorded no round over the first candidate: {stderr}"
     );
     assert!(
         stderr.contains(&format!(
@@ -914,7 +942,6 @@ fn a_round_recorded_during_a_pass_lands_the_held_candidate_in_that_pass() {
     );
     let landed = journey.candidate(&first_id);
     assert_eq!(landed["state"], json!("landed"), "{landed}");
-    let remote = journey.remote.to_string_lossy().into_owned();
     let shown = journey.git(&["--git-dir", &remote, "show", "refs/heads/main:first.txt"]);
     assert_eq!(shown, "first", "origin's main holds the first change");
 
