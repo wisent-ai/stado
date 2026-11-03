@@ -545,3 +545,8 @@ The version bump gathers them into the release's own file and removes this one.
   minutes, and on a laptop three such connects stood four days. Every socket the network dials or
   accepts now turns on TCP keepalive and is ended by the kernel's idle time, interval and probe
   count, as host-connections.md states.
+- **`stado ci delivery` names a plan with no cadence as a stall:** a delivery plan declared without
+  `--every` fires no pass, and the path's `stalled` list said nothing of it, so the routine read as
+  standing while nothing had run it since 2026-10-28. Such a plan is now a stall naming when it was
+  declared and the `stado ci plan set … --every SECONDS` that declares it again with its own
+  purpose and steps.

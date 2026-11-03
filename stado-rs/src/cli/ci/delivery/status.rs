@@ -99,8 +99,23 @@ pub async fn path() -> Result<Value, CmdError> {
         stalled.push(format!("{label} on this machine is failing: {failing}"));
     }
     // The coordinator's tick fires a pass only on a host that declares a
-    // plan, so a host without one, or with one it cannot read, runs no pass.
+    // plan with a cadence, so a host without one, with one it cannot read,
+    // or with one that states no cadence, runs no pass. A plan without a
+    // cadence was shown as standing while nothing had fired it for weeks.
     match plan::read() {
+        Ok(Some(declared)) if declared.every_seconds.is_none() => stalled.push(format!(
+            "this host's delivery plan, declared at {}, states no cadence, so the coordinator's \
+             tick fires no pass here: declare it again with `stado ci plan set --purpose {} {} \
+             --every SECONDS`",
+            declared.declared_at,
+            declared.purpose,
+            declared
+                .steps
+                .iter()
+                .map(|step| format!("--step {}:{}", step.key(), step.checkout.display()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )),
         Ok(Some(_)) => {}
         Ok(None) => stalled.push(
             "this host declares no delivery plan (`stado ci plan set`), so the coordinator's tick fires no pass here"
