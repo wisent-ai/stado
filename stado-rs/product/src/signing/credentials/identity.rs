@@ -13,6 +13,7 @@ impl Credentials {
         let chain = blocks(certificate)?;
         let home = signing_home()?;
         self.host_lock = Some(hold_signing_lock(&home)?);
+        remove_left_scopes(&home)?;
         let directory = home.join(format!(".wisent-identity-{}", uuid::Uuid::new_v4()));
         let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
@@ -183,4 +184,42 @@ impl Credentials {
             .join("; ");
         Some(format!("signing keychain {keychain} ({observed})"))
     }
+}
+
+/// The identity directories and keychains scopes left behind when their
+/// process was killed before `close` ran: a private key in plain PEM and a
+/// keychain holding it, kept on disk with nobody to remove them. Only one
+/// scope runs on a host at a time (`hold_signing_lock`), so every
+/// `.wisent-identity-*` present while this one holds the lock belongs to a
+/// scope that ended; each is taken off the search list and removed, and a
+/// removal that fails is the error, naming the path.
+fn remove_left_scopes(home: &std::path::Path) -> Result<()> {
+    for entry in fs::read_dir(home).with_context(|| format!("reading {}", home.display()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(".wisent-identity-") || !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let left = entry.path();
+        let keychain = left.join("identity.keychain-db");
+        if keychain.exists() {
+            let path = keychain.to_string_lossy().into_owned();
+            if let Err(error) = super::keychain::take_off(&path) {
+                eprintln!("signing: the left keychain {path} could not be taken off the search list: {error}");
+            }
+            if let Err(error) = command("/usr/bin/security", &["delete-keychain", &path], false) {
+                eprintln!("signing: the left keychain {path} could not be deleted by security: {error}");
+            }
+        }
+        fs::remove_dir_all(&left).with_context(|| {
+            format!(
+                "removing {}, the signing material a scope left when its process ended before \
+                 cleaning up",
+                left.display()
+            )
+        })?;
+        eprintln!("signing: removed {}, left by a scope that ended before cleaning up", left.display());
+    }
+    Ok(())
 }

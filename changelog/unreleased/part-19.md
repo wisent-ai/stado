@@ -364,3 +364,9 @@ The version bump gathers them into the release's own file and removes this one.
   found nothing on macOS, because lsof prints no device field for a FIFO, so the attach still
   waited 90 s for a program's lingering child. Holders are matched by inode among records of type
   FIFO.
+- **A signing scope removes the identity material killed scopes left:** a scope that was ended
+  before its cleanup ran left `~/.stado/signing/.wisent-identity-<uuid>/` on disk with the
+  signing role's private key in plain PEM and a keychain holding it (two were found on one Mac).
+  Only one scope runs on a host at a time, so each new scope, once it holds the host's signing
+  lock, takes every such keychain off the search list, deletes it, removes the directory and says
+  so; a directory that cannot be removed refuses the signature naming it.
