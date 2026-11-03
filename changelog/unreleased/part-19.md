@@ -242,3 +242,9 @@ The version bump gathers them into the release's own file and removes this one.
   `WELES_API_PORT=$STADO_LISTEN_PORT`. The word is replaced in a host's own unit declaration as in
   the catalog's, and a unit that would still carry it is refused naming where it stands and how to
   record the port.
+- **A vault declared as `$HOME/<path>` is read under the account's home:** `credentials vault
+  move` declares the moved vault on its new host as `$HOME/.stado/skarbiec.vault.json`, and that
+  host's own credential verbs read the declaration literally, so `credentials vault show` answered
+  `state: declared-absent … $HOME/.stado/skarbiec.vault.json is not a file on this machine` beside
+  a vault that served. A declaration under `$HOME/` (as under `~/`) is now read under the
+  account's home by every reader of it.

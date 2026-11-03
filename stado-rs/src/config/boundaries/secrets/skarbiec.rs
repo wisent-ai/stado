@@ -50,13 +50,22 @@ static SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
 });
 /// The vault this machine's owner writes go through, declared rather than
 /// discovered. Empty means "discover", which is correct on a host holding one
-/// vault and refused on a host holding two under one owner.
+/// vault and refused on a host holding two under one owner. A declaration
+/// under `~/` or `$HOME/` is read under this account's home: `credentials
+/// vault move` declares `$HOME/<vault>` on the host it moves the vault to, so
+/// the declaration names the same file whichever account reads it, and read
+/// literally it named a file no machine has (`state: declared-absent`).
 static SKARBIEC_VAULT_FILE: LazyLock<String> = LazyLock::new(|| {
     let declared = cfg("SKARBIEC_VAULT_FILE", "secrets.skarbiec.vault_file", "");
-    if declared.trim().is_empty() {
+    let declared = declared.trim();
+    if declared.is_empty() {
         return String::new();
     }
-    expand_tilde(declared.trim()).to_string_lossy().into_owned()
+    let homed = match declared.strip_prefix("$HOME/") {
+        Some(tail) => format!("~/{tail}"),
+        None => declared.to_string(),
+    };
+    expand_tilde(&homed).to_string_lossy().into_owned()
 });
 
 /// The address of the Skarbiec this machine uses; empty when none resolves,
