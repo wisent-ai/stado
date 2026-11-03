@@ -40,9 +40,29 @@ fn hold_awake_while_running(pid: i32, job_id: &str, log_fn: &mut dyn FnMut(&str)
         .stderr(std::process::Stdio::null())
         .spawn()
     {
-        Ok(_) => log_fn(&format!(
-            "holding this host awake while {job_id} runs (caffeinate -i -w {pid})"
-        )),
+        Ok(mut assertion) => {
+            log_fn(&format!(
+                "holding this host awake while {job_id} runs (caffeinate -i -w {pid})"
+            ));
+            // `caffeinate -w` ends with the job; its status is collected
+            // here so it does not stay a zombie of the host process. The
+            // handle was dropped, and the host process kept one zombie per
+            // job it ever ran (44 within an hour of Oko's routines).
+            let job = job_id.to_owned();
+            if let Err(error) = std::thread::Builder::new()
+                .name(format!("caffeinate-{pid}"))
+                .spawn(move || {
+                    if let Err(error) = assertion.wait() {
+                        eprintln!("the awake assertion of {job} could not be collected: {error}");
+                    }
+                })
+            {
+                log_fn(&format!(
+                    "the awake assertion of {job_id} will not be collected when it ends, so it \
+                     stays a zombie: no thread could be started ({error})"
+                ));
+            }
+        }
         Err(error) => log_fn(&format!(
             "cannot hold this host awake while {job_id} runs: /usr/bin/caffeinate: {error}; idle sleep will end the job"
         )),

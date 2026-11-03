@@ -342,3 +342,8 @@ The version bump gathers them into the release's own file and removes this one.
   before exporting or compiling as a `czekam:` host wait naming the reading, starting once swap
   falls under the ceiling. Nothing is assumed for a host that declares none; an unreadable swap
   admits the work and says why.
+- **The host process no longer keeps a zombie per job it held the Mac awake for:** each job a
+  worker started on a Mac took an idle-sleep assertion (`caffeinate -i -w <job pid>`) whose handle
+  was dropped, so every assertion that ended with its job stayed a zombie child of `stado serve`
+  (44 within an hour of Oko's routines on one laptop). Each assertion's status is now collected
+  when it ends; a thread that cannot be started to collect it is logged.
