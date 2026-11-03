@@ -348,8 +348,8 @@ The version bump gathers them into the release's own file and removes this one.
   (44 within an hour of Oko's routines on one laptop). Each assertion's status is now collected
   when it ends; a thread that cannot be started to collect it is logged.
 - **The service reconciler reads a host's units without the full inventory:** each pass of the
-  host process's predecessor reconciliation ran the full loaded-unit inventory, which greps every
+  coordinator's predecessor reconciliation ran the full loaded-unit inventory, which greps every
   fleet script, forks `ps`, `date` and `stat` per loaded label and walks the host's PATH, though
   it reads only labels, domains and declared and running programs. On a loaded Mac that read ran
-  for over nine minutes inside `stado serve` and the beacon stood still beside it (193 s against a
-  60 s period). It now takes the image read `service images` already uses for the same fields.
+  for over eleven minutes inside `stado serve` each pass, adding to the host's load. It now takes
+  the image read `service images` already uses for the same fields.
