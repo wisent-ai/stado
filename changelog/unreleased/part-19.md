@@ -360,3 +360,7 @@ The version bump gathers them into the release's own file and removes this one.
   the newest link block collected beside it (its `collected_at` says when); before the first one
   finishes the block's `source` is `pending` and `unread` says the collection runs beside it. A
   one-off `beacon collect` still collects its own block.
+- **`host run attach` matches relay holders among FIFOs by inode:** the device-and-inode match
+  found nothing on macOS, because lsof prints no device field for a FIFO, so the attach still
+  waited 90 s for a program's lingering child. Holders are matched by inode among records of type
+  FIFO.
