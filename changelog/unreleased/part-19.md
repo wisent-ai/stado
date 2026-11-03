@@ -521,3 +521,9 @@ The version bump gathers them into the release's own file and removes this one.
   resident killed it with SIGKILL within seconds: the host-routine journey could never see its
   routine fire. A role process started under another HOME, or whose environment cannot be read,
   is now left to that home's own pass; the home is read from the kernel's record of the process.
+- **`product sync --clone-missing` clones what a product's build reads, not only the product:** the
+  sync cloned a product's own source and then installed it with a runtime that could clone nothing,
+  so a build whose Git dependency had no checkout in the workspace was refused (`no canonical
+  checkout answers for lbartoszcze/autoversion …; no checkout was created`) on every pass and
+  Skrzynka stayed six weeks behind its origin. The installation now runs with the sync's cloning
+  runtime.

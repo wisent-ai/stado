@@ -72,7 +72,13 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     runtime.wait_for_writer = true;
     let runtime = &runtime;
     // `--clone-missing`: a workspace Stado owns starts empty, and each product's
-    // source is cloned into it the first time the product is reconciled.
+    // source is cloned into it the first time the product is reconciled, and
+    // so is every source its build reads (a Git dependency's canonical
+    // checkout). The installation runs with the same runtime: run with the
+    // sweep's own, it cloned the product and then refused its build for a
+    // dependency it was never allowed to clone ("no canonical checkout answers
+    // for <dependency> ...; no checkout was created"), so the product stayed
+    // on its old build pass after pass.
     let cloning = args.has("--clone-missing") && !args.has("--dry-run");
     if cloning {
         fs::create_dir_all(&runtime.workspace)
@@ -205,7 +211,7 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
             }
             let before = crate::state::ProductState::load(runtime, id, surface)?;
             perform(
-                runtime,
+                &sourcing,
                 &document,
                 product,
                 surface,
