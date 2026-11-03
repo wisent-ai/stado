@@ -132,6 +132,7 @@ impl Component {
             &host.label,
             &host.exec_args,
             &host.env,
+            host.process_type(),
         )
     }
 }

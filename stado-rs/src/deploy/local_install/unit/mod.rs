@@ -72,6 +72,19 @@ impl InstallPlan {
         }
     }
 
+    /// The launchd `ProcessType` this unit declares: the host unit's
+    /// ([`render::HOST_PROCESS_TYPE`]) when it runs `stado serve`, however it
+    /// was planned (installed as kind `host`, or rendered by `service ensure
+    /// stado`, which plans it as a service), and none for any other unit,
+    /// which keeps launchd's default for a service Stado deploys.
+    pub fn process_type(&self) -> Option<&'static str> {
+        let serves = self.kind == "host"
+            || matches!(self.exec_args.as_slice(), [program, command, ..]
+                if command == "serve"
+                    && Path::new(program).file_name().is_some_and(|name| name == "stado"));
+        serves.then_some(render::HOST_PROCESS_TYPE)
+    }
+
     /// The plist (Darwin) or unit (Linux) content for an account home.
     pub fn content(&self, home: &Path) -> String {
         if let Some(startup) = &self.startup {
@@ -81,11 +94,21 @@ impl InstallPlan {
             .join(".stado")
             .join("logs")
             .join(format!("{}.log", self.label));
+        let process_type = self.process_type();
         if let Some(account) = self.daemon.as_deref() {
-            return daemon_plist_text(&self.label, &self.exec_args, &self.env, &log, account);
+            return daemon_plist_text(
+                &self.label,
+                &self.exec_args,
+                &self.env,
+                &log,
+                account,
+                process_type,
+            );
         }
         match self.os {
-            LocalOs::Darwin => plist_text(&self.label, &self.exec_args, &self.env, &log),
+            LocalOs::Darwin => {
+                plist_text(&self.label, &self.exec_args, &self.env, &log, process_type)
+            }
             LocalOs::Linux => systemd_user_unit(&self.description(), &self.exec_args, &self.env),
         }
     }

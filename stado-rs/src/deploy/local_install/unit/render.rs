@@ -6,14 +6,27 @@ use std::borrow::Cow;
 use std::fmt::Write;
 use std::path::Path;
 
-/// Render a launchd agent plist with an explicit owner-controlled log path.
+/// The launchd `ProcessType` the host unit declares. A job that declares
+/// none gets the light resource limits launchd.plist(5) describes, its CPU
+/// and I/O throttled, and every process it starts inherits them: every
+/// fleet job this unit ran (a build an operator's session waits on) ran at
+/// scheduling priority 20 while the session that asked ran at 31. The host
+/// process runs work somebody asked for, so it runs as apps do; work nobody
+/// waits on (the host scan) moves itself into the background band
+/// (`deploy::host_scan::priority`). The rendered unit and the one rewritten
+/// from a resident's definition both declare it.
+pub const HOST_PROCESS_TYPE: &str = "Interactive";
+
+/// Render a launchd agent plist with an explicit owner-controlled log path;
+/// `process_type` is the `ProcessType` it declares, none for launchd's default.
 pub fn plist_text(
     label: &str,
     exec_args: &[String],
     env: &[(String, String)],
     log: &Path,
+    process_type: Option<&str>,
 ) -> String {
-    plist_document(label, exec_args, env, log, None, Some("Aqua"))
+    plist_document(label, exec_args, env, log, None, Some("Aqua"), process_type)
 }
 
 /// The same job rendered for launchd's **system** domain, running as `user`.
@@ -28,8 +41,9 @@ pub fn daemon_plist_text(
     env: &[(String, String)],
     log: &Path,
     user: &str,
+    process_type: Option<&str>,
 ) -> String {
-    plist_document(label, exec_args, env, log, Some(user), None)
+    plist_document(label, exec_args, env, log, Some(user), None, process_type)
 }
 
 /// One renderer for both domains, so the command, environment and logging of
@@ -44,6 +58,7 @@ fn plist_document(
     log: &Path,
     user: Option<&str>,
     session_type: Option<&str>,
+    process_type: Option<&str>,
 ) -> String {
     let user_xml = match user {
         Some(user) => format!(
@@ -56,6 +71,13 @@ fn plist_document(
         Some(session) => {
             format!("    <key>LimitLoadToSessionType</key>\n    <string>{session}</string>\n")
         }
+        None => String::new(),
+    };
+    let process_xml = match process_type {
+        Some(class) => format!(
+            "    <key>ProcessType</key>\n    <string>{}</string>\n",
+            xml_text(class)
+        ),
         None => String::new(),
     };
     let args_xml: String = exec_args
@@ -86,7 +108,7 @@ fn plist_document(
     <key>ProgramArguments</key>
     <array>
 {args_xml}    </array>
-{user_xml}{session_xml}    <key>RunAtLoad</key>
+{user_xml}{session_xml}{process_xml}    <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>

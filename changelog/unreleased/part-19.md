@@ -504,3 +504,8 @@ The version bump gathers them into the release's own file and removes this one.
   has stopped moving, prints it, and exits non-zero when it finished without publishing, so
   `stado release status --run ID --wait && stado product install …` installs it as soon as it is
   out. A `--run` prefix naming several runs is refused with each id.
+- **Fleet jobs on a Mac run at an app's priority, not throttled in the background:** the host
+  unit (`stado serve`) declared no launchd `ProcessType`, so launchd throttled its CPU and I/O and
+  every build it ran inherited that: a build an operator's session waited on compiled at
+  scheduling priority 20 beside the session's 31. The unit now declares `Interactive`; the host
+  scan still moves itself into the background band. A host takes it on its next unit install.

@@ -83,12 +83,15 @@ pub(crate) fn plist_program(document: &Dictionary) -> Result<Option<&str>, Deplo
         .transpose()
 }
 
-/// Replace the startup contract while preserving other native launchd properties.
+/// Replace the startup contract while preserving other native launchd
+/// properties. `process_type` is the `ProcessType` the rewritten unit
+/// declares; `None` keeps whatever the definition says.
 pub(crate) fn rewrite_plist_startup(
     mut document: Dictionary,
     label: &str,
     arguments: &[String],
     environment: &[(String, String)],
+    process_type: Option<&str>,
 ) -> Result<String, DeployError> {
     let program = arguments
         .first()
@@ -108,6 +111,9 @@ pub(crate) fn rewrite_plist_startup(
         env.insert(name.clone(), Value::String(value.clone()));
     }
     document.insert("EnvironmentVariables".to_string(), Value::Dictionary(env));
+    if let Some(class) = process_type {
+        document.insert("ProcessType".to_string(), Value::String(class.to_string()));
+    }
     let mut output = Vec::new();
     Value::Dictionary(document)
         .to_writer_xml(&mut output)

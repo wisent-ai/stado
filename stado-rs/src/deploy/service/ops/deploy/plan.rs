@@ -186,6 +186,7 @@ pub fn plan_deploy_labelled(
                 .join("logs")
                 .join(format!("{label}.log")),
             REMOTE_USER_PLACEHOLDER,
+            darwin.process_type(),
         ),
         linux_unit: linux.content(remote_home),
         force_daemon: requires_daemon_domain(target, &label),
