@@ -13,7 +13,14 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
+// The repository the revision belongs to: the one a caller names through
+// GIT_DIR (Oko runs a sweep in an export of each product's repository with
+// GIT_DIR naming its object store), else this checkout. Reading this checkout
+// for another repository's revision answered every product's sweep with
+// Stado's history, so a revision Stado does not hold failed and one it did
+// was read as that product's.
 const root = resolve(import.meta.dirname, '..');
+const repository = process.env.GIT_DIR ? ['--git-dir', process.env.GIT_DIR] : ['-C', root];
 // argv holds node and this script before the caller's words.
 const [, , revision, pattern, ...paths] = process.argv;
 assert.ok(
@@ -26,7 +33,7 @@ assert.ok(
 // ends the child; only git's own complaint is kept to report a failure.
 const found = spawnSync(
   'git',
-  ['-C', root, 'grep', '-n', '-E', '-e', pattern, revision, '--', ...paths],
+  [...repository, 'grep', '-n', '-E', '-e', pattern, revision, '--', ...paths],
   {
     encoding: 'utf8',
     stdio: ['ignore', 'inherit', 'pipe'],
