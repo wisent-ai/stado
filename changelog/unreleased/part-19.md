@@ -527,3 +527,8 @@ The version bump gathers them into the release's own file and removes this one.
   checkout answers for lbartoszcze/autoversion …; no checkout was created`) on every pass and
   Skrzynka stayed six weeks behind its origin. The installation now runs with the sync's cloning
   runtime.
+- **A janitor pass with no job work tree on disk asks the fleet queue nothing:** the work-tree
+  cleaner listed every queue prefix of the fleet store through the object API to learn which of its
+  candidates were live, also when it had none; on a laptop with no job tree each listing could
+  stand for ten minutes while a build waiting for the janitor's turn compiled nothing. With no
+  candidate the answer is the empty keep-list and the queue is not read.
