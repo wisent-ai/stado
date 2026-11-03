@@ -40,10 +40,10 @@ pub(super) fn cargo_version() -> Result<String> {
 
 /// Refuse a resolved `graph` that kept a Git dependency instead of its
 /// canonical source, and require every path package's manifest to sit in
-/// its canonical checkout (or the `pinned` export).
+/// its canonical checkout (or one of the `exports`).
 pub(super) fn canonical_graph(
     runtime: &Runtime,
-    pinned: Option<&Pinned>,
+    exports: &[Pinned],
     graph: &Value,
 ) -> Result<()> {
     for package in graph["packages"]
@@ -62,7 +62,7 @@ pub(super) fn canonical_graph(
         if package["source"].is_null() {
             sources::manifest_in(
                 runtime,
-                pinned,
+                exports,
                 Path::new(
                     package["manifest_path"]
                         .as_str()

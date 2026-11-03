@@ -17,27 +17,31 @@ pub struct Sources {
     pub metadata: Value,
     pub overrides: Vec<String>,
     pub records: Vec<Value>,
+    /// Every committed tree the build reads instead of a checkout: the
+    /// pinned revision, and each Git dependency built from its pin.
+    pub exports: Vec<Pinned>,
 }
 
 /// The manifest at `requested` as (its physical path, the root of the tree
-/// it belongs to, that tree's repository identity). A manifest inside a
-/// pinned export belongs to the pinned repository at its commit; every other
+/// it belongs to, that tree's repository identity). A manifest inside one of
+/// the `exports` belongs to that repository at its commit; every other
 /// manifest must sit in its canonical checkout.
 pub fn manifest_in(
     runtime: &Runtime,
-    pinned: Option<&Pinned>,
+    exports: &[Pinned],
     requested: &Path,
 ) -> Result<(PathBuf, PathBuf, String)> {
-    if let Some(pinned) = pinned {
-        let absolute = crate::common::absolute(requested)?;
-        if absolute.starts_with(&pinned.exported) {
-            if absolute.file_name().and_then(|s| s.to_str()) != Some("Cargo.toml")
-                || !absolute.is_file()
-            {
-                bail!("Cargo manifest is absent: {}", absolute.display());
-            }
-            return Ok((absolute, pinned.exported.clone(), pinned.identity.clone()));
+    let absolute = crate::common::absolute(requested)?;
+    if let Some(export) = exports
+        .iter()
+        .find(|export| absolute.starts_with(&export.exported))
+    {
+        if absolute.file_name().and_then(|s| s.to_str()) != Some("Cargo.toml")
+            || !absolute.is_file()
+        {
+            bail!("Cargo manifest is absent: {}", absolute.display());
         }
+        return Ok((absolute, export.exported.clone(), export.identity.clone()));
     }
     manifest(runtime, requested)
 }
@@ -67,6 +71,41 @@ pub fn manifest(runtime: &Runtime, requested: &Path) -> Result<(PathBuf, PathBuf
         );
     }
     Ok((physical, root, identity))
+}
+
+/// Whether `root`, the canonical checkout of `identity` that replaces a Git
+/// dependency, carries `rev`, the revision the manifest `by` pins: `Err`
+/// naming the checkout, its `HEAD` and the pin when it does not, since a
+/// build of it would compile the dependency older than the manifest was
+/// written against and fail on items the pin added, with errors that name
+/// the depending crate, not the checkout. A `HEAD` at or past the pin is
+/// built as the checkout is.
+fn carries(root: &Path, identity: &str, rev: &str, by: &str) -> Result<()> {
+    let head = source::git(root, &["rev-parse", "HEAD"])?;
+    let known = source::git(root, &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")]);
+    let carried = known.is_ok()
+        && Command::new("git")
+            .args(["merge-base", "--is-ancestor", rev, &head])
+            .current_dir(root)
+            .status()
+            .with_context(|| format!("git merge-base did not run in {}", root.display()))?
+            .success();
+    if carried {
+        return Ok(());
+    }
+    let why = match known {
+        Ok(_) => "is not carried by its HEAD",
+        Err(_) => "is not in it at all (it was never fetched)",
+    };
+    bail!(
+        "the canonical checkout {} of {identity} stands at {head}, and the revision {rev} that \
+         {by} pins {why}: Stado builds a Git dependency from its canonical checkout, so this \
+         build would compile {identity} older than its pin. Bring the checkout up to its origin \
+         (`git -C {} pull --ff-only`), or build a committed revision with --revision, which \
+         builds such a dependency from its pin",
+        root.display(),
+        root.display()
+    )
 }
 
 fn package(root: &Path, name: &str) -> Result<PathBuf> {
@@ -111,7 +150,10 @@ fn package(root: &Path, name: &str) -> Result<PathBuf> {
 
 struct Resolver<'a> {
     runtime: &'a Runtime,
-    pinned: Option<&'a Pinned>,
+    /// Whether the build reads a committed revision (`--revision`), so a
+    /// dependency behind its pin is exported at the pin instead of refused.
+    committed: bool,
+    exports: Vec<Pinned>,
     visited: BTreeSet<PathBuf>,
     roots: BTreeMap<String, PathBuf>,
     patches: BTreeMap<(String, String), PathBuf>,
@@ -120,31 +162,54 @@ struct Resolver<'a> {
 
 impl Resolver<'_> {
     /// `name`'s package directory under `root`: in the checkout's tracked
-    /// files, re-rooted into the export when `root` is the pinned tree.
+    /// files, re-rooted into the export when `root` is an exported tree.
     fn package_under(&self, root: &Path, name: &str) -> Result<PathBuf> {
-        match self.pinned.filter(|pinned| pinned.exported == root) {
-            Some(pinned) => {
-                let in_checkout = package(&pinned.checkout, name)?;
+        match self.exports.iter().find(|export| export.exported == root) {
+            Some(export) => {
+                let in_checkout = package(&export.checkout, name)?;
                 let relative = in_checkout
-                    .strip_prefix(&pinned.checkout)
+                    .strip_prefix(&export.checkout)
                     .with_context(|| {
                         format!(
                             "{} is not under {}",
                             in_checkout.display(),
-                            pinned.checkout.display()
+                            export.checkout.display()
                         )
                     })?;
-                Ok(pinned.exported.join(relative))
+                Ok(export.exported.join(relative))
             }
             None => package(root, name),
         }
+    }
+
+    /// The tree a Git dependency of `identity` pinned at `rev` by the
+    /// manifest `by` is built from: its canonical checkout `root` when that
+    /// carries the pin; else, for a committed build, the pin itself,
+    /// fetched into the checkout when it lacks it and exported like the
+    /// revision being built, so the build compiles what its lock names.
+    fn pinned_tree(&mut self, root: PathBuf, identity: &str, rev: &str, by: &str) -> Result<PathBuf> {
+        let behind = match carries(&root, identity, rev, by) {
+            Ok(()) => return Ok(root),
+            Err(behind) => behind,
+        };
+        if !self.committed {
+            return Err(behind);
+        }
+        source::hold(&root, rev).with_context(|| {
+            format!("building {identity} at {rev}, the revision {by} pins")
+        })?;
+        let full = source::git(&root, &["rev-parse", "--verify", &format!("{rev}^{{commit}}")])?;
+        let export = super::pinned::exported(self.runtime, root, identity.to_owned(), full)?;
+        let tree = export.exported.clone();
+        self.exports.push(export);
+        Ok(tree)
     }
 
     fn visit(&mut self, candidate: &Path) -> Result<()> {
         if self.visited.contains(candidate) {
             return Ok(());
         }
-        let (path, root, identity) = manifest_in(self.runtime, self.pinned, candidate)?;
+        let (path, root, identity) = manifest_in(self.runtime, &self.exports, candidate)?;
         if !self.visited.insert(path.clone()) {
             return Ok(());
         }
@@ -170,7 +235,7 @@ impl Resolver<'_> {
                     .as_str()
                     .context("Cargo package has no manifest path")?,
             );
-            manifest_in(self.runtime, self.pinned, member_path)?;
+            manifest_in(self.runtime, &self.exports, member_path)?;
             self.visited.insert(member_path.to_path_buf());
             for dependency in member["dependencies"]
                 .as_array()
@@ -179,6 +244,10 @@ impl Resolver<'_> {
                 let origin = dependency["source"].as_str();
                 if let Some(remote) = origin.and_then(|s| s.strip_prefix("git+")) {
                     let mut url = url::Url::parse(remote)?;
+                    let pinned_rev = url
+                        .query_pairs()
+                        .find(|(key, _)| key == "rev")
+                        .map(|(_, rev)| rev.into_owned());
                     url.set_query(None);
                     url.set_fragment(None);
                     let remote = url.to_string();
@@ -189,6 +258,17 @@ impl Resolver<'_> {
                         root.clone()
                     } else {
                         source::required_checkout(self.runtime, &identity)?
+                    };
+                    // An exported tree is one commit, not a checkout: the
+                    // revision the build was asked for, or a pin already
+                    // exported.
+                    let exported = self.exports.iter().any(|export| export.exported == root);
+                    let root = match (&pinned_rev, exported) {
+                        (Some(rev), false) => {
+                            let by = member_path.display().to_string();
+                            self.pinned_tree(root, &identity, rev, &by)?
+                        }
+                        _ => root,
                     };
                     let name = dependency["name"]
                         .as_str()
@@ -223,7 +303,8 @@ pub fn prepare(
 ) -> Result<Sources> {
     let mut resolver = Resolver {
         runtime,
-        pinned,
+        committed: pinned.is_some(),
+        exports: pinned.cloned().into_iter().collect(),
         visited: BTreeSet::new(),
         roots: BTreeMap::new(),
         patches: BTreeMap::new(),
@@ -242,10 +323,10 @@ pub fn prepare(
     }
     let mut records = Vec::new();
     for (index, root) in resolver.roots.values().enumerate() {
-        // The pinned export is a committed tree, not a checkout: its record
+        // An exported tree is a committed tree, not a checkout: its record
         // is the commit and the archive digest, and nothing in it can be a
         // working-tree change.
-        let record = match pinned.filter(|pinned| &pinned.exported == root) {
+        let record = match resolver.exports.iter().find(|export| &export.exported == root) {
             Some(pinned) => {
                 let record = pinned.record();
                 let place = evidence.join("sources").join(index.to_string());
@@ -269,5 +350,6 @@ pub fn prepare(
         metadata: resolver.metadata.context("Cargo source graph is empty")?,
         overrides,
         records,
+        exports: resolver.exports,
     })
 }

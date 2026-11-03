@@ -426,3 +426,11 @@ The version bump gathers them into the release's own file and removes this one.
   ran the review anyway and Tama judged the tree as written by the session running the pass. The
   pass now runs no review then: the candidate leaves the head of the queue with `no-round`, naming
   the entry that holds its author. A machine without Oko still runs the review and says so.
+- **`stado product cargo` builds a dependency checkout older than the manifest's pin from the
+  pin:** a Git dependency is built from its canonical checkout, so a checkout whose `HEAD`
+  predated the pinned `rev` compiled the dependency older than the manifest expects and failed
+  with unresolved imports in the depending crate (`wisent_errors::Operation` in Stado). A build of
+  a committed revision (`--revision`) now builds that dependency from its pin, fetched into its
+  checkout when absent and exported beside the revision; a build of the working tree is refused
+  first, naming the checkout, its `HEAD`, the pin, `git -C <checkout> pull --ff-only` and
+  `--revision`.

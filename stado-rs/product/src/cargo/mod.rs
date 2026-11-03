@@ -195,7 +195,7 @@ pub(crate) fn execute_revision(
                 .env("GIT_ALLOW_PROTOCOL", ""),
         )?;
         let graph: Value = serde_json::from_slice(&graph.stdout)?;
-        checks::canonical_graph(runtime, pinned.as_ref(), &graph)?;
+        checks::canonical_graph(runtime, &sources.exports, &graph)?;
         atomic_json(&evidence.join("resolved-graph.json"), &graph)?;
         fs::copy(&lockfile, evidence.join("Cargo.lock"))?;
         let mut process = command(operation)?;
