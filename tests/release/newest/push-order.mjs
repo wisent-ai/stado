@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { exitedCleanly } from '../../native/process.mjs';
 
@@ -42,6 +43,7 @@ const runId = randomUUID();
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const environment = {
   ...process.env,
+  ...pinnedGit,
   HOME: home,
   STADO_CONFIG: join(output, 'config.json'),
   WC_STORAGE_BACKEND: 'local',

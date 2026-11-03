@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { isIPv4, isIPv6 } from 'node:net';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { exitedCleanly } from '../../native/process.mjs';
 import { snapshotSubject, verifyRevision } from '../../native/subject.mjs';
@@ -89,7 +90,7 @@ try {
       'each fixture must name one isolated namespace');
     const home = join(output, randomUUID());
     mkdirSync(join(home, 'scratch'), { recursive: true });
-    const environment = { PATH: required('PATH'), HOME: home, TMPDIR: join(home, 'scratch'),
+    const environment = { ...pinnedGit, PATH: required('PATH'), HOME: home, TMPDIR: join(home, 'scratch'),
       STADO_CONFIG: join(home, '.stado', 'config.json') };
     const command = args => {
       const result = invoke(subject.path, args, environment);

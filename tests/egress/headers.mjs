@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { command, proxy, receiver, transmit } from './support.mjs';
 
@@ -21,7 +22,7 @@ mkdirSync(join(root, '.build'), { recursive: true });
 const output = mkdtempSync(join(root, '.build', 'egress-headers-'));
 const home = join(output, 'home');
 mkdirSync(home);
-const options = { cwd: root, env: { ...process.env, HOME: home, STADO_CONFIG: join(home, 'config.json') } };
+const options = { cwd: root, env: { ...process.env, ...pinnedGit, HOME: home, STADO_CONFIG: join(home, 'config.json') } };
 const report = { revision, binary, interface: iface, started_at: new Date().toISOString(), commands: [], cases: [], result: 'failed' };
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 let upstream;

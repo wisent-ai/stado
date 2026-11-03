@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { exitedCleanly, exitedRefusing } from '../../native/process.mjs';
 
@@ -29,7 +30,7 @@ const sourceManifest = JSON.parse(readFileSync(join(source, '.wisent-release.jso
 for (const directory of [home, checkout]) mkdirSync(directory, { recursive: true });
 writeFileSync(manifestPath, JSON.stringify({ ...sourceManifest, product: 'example-cargo-input' }));
 const environment = {
-  ...process.env, HOME: home, CARGO_HOME: cargoHome, RUSTUP_HOME: rustupHome,
+  ...process.env, ...pinnedGit, HOME: home, CARGO_HOME: cargoHome, RUSTUP_HOME: rustupHome,
   STADO_CONFIG: join(home, 'config.json'), WC_STORAGE_BACKEND: 'local',
   WC_LOCAL_STORAGE_PATH: join(fixture, 'objects'), WISENT_OUTPUT_DIR: join(fixture, 'output'),
 };

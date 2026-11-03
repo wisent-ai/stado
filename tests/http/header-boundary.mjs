@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { createConnection } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 function required(name) {
@@ -97,7 +98,7 @@ try {
   report.test_sha256 = createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).digest('hex');
   report.head_budget = budget;
   const args = ['serve', '--api', '--enrollment-only', '--bind', loopback.address, '--port', required('STADO_TEST_PORT')];
-  const environment = { ...process.env, HOME: home, STADO_CONFIG: join(home, 'config.json'), WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'store') };
+  const environment = { ...process.env, ...pinnedGit, HOME: home, STADO_CONFIG: join(home, 'config.json'), WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'store') };
   delete environment.WC_DASHBOARD_REQUEST_LIMITS;
   const limits = { head_bytes: budget, body_bytes: budget + Buffer.byteLength('body'), registry_import_bytes: Buffer.byteLength('import-body') };
   const consoleArgs = ['config', 'show', '--json'];

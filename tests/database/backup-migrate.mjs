@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real journey of `stado database backup` and `stado database migrate`
@@ -60,6 +61,7 @@ const output = mkdtempSync(join(build, 'database-backup-migrate-'));
 const temporary = join(output, 'temporary');
 mkdirSync(temporary, { mode: constants.S_IRWXU });
 const environment = {
+  ...pinnedGit,
   PATH: process.env.PATH, HOME: home, STADO_CONFIG: config, GNUPGHOME: keyring, TMPDIR: temporary,
   SKARBIEC_VAULT_FILE: vault, SKARBIEC_AUDIT_FILE: join(output, 'audit.jsonl'), SKARBIEC_BIN: skarbiec,
 };

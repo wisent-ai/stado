@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
+import { pinnedGit } from "../native/home.mjs";
 import { fileURLToPath } from "node:url";
 
 // Real qualification of `stado ci status` when this host reaches Skarbiec
@@ -66,7 +67,7 @@ function home(name, bind, state) {
 }
 
 function status(name, directory) {
-	const environment = { ...process.env, HOME: directory };
+	const environment = { ...process.env, ...pinnedGit, HOME: directory };
 	for (const inherited of [
 		"STADO_CONFIG",
 		"WC_SKARBIEC_URL",

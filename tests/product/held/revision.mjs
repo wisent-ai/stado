@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real qualification of the hold on a revision whose `stado serve` stops
@@ -30,7 +31,7 @@ const workspace = dirname(realpathSync(source));
 const report = { started_at: new Date().toISOString(), product, source, workspace, cases: [], commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function run(program, args, home) {
-  const env = home ? { ...process.env, HOME: home } : process.env;
+  const env = home ? { ...process.env, ...pinnedGit, HOME: home } : process.env;
   const answer = spawnSync(program, args, { cwd: root, env, encoding: 'utf8' });
   report.commands.push({ program, arguments: args, home, exit_status: answer.status,
     signal: answer.signal, error: answer.error?.message, stdout: answer.stdout, stderr: answer.stderr });

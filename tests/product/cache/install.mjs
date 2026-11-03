@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync, readdirSync, statSync, lstatSync, renameSync, symlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Installs an actual catalogued Cargo CLI twice from the same canonical
@@ -29,7 +30,7 @@ const home = join(output, 'home');
 mkdirSync(home);
 const temporary = join(home, 'tmp');
 mkdirSync(temporary);
-const environment = { PATH: required('PATH'), HOME: home, TMPDIR: temporary,
+const environment = { ...pinnedGit, PATH: required('PATH'), HOME: home, TMPDIR: temporary,
   CARGO_HOME: cargoHome, RUSTUP_HOME: rustupHome,
   WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'store'),
   STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'), WISENT_OUTPUT_DIR: join(output, 'commands') };

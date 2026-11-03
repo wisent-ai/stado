@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real source installation against the canonical Skarbiec checkout and a real
@@ -40,7 +41,7 @@ const report = {
   test_sha256: hash(readFileSync(fileURLToPath(import.meta.url))),
   commands: [], cases: [], result: 'failed',
 };
-const environment = { ...process.env, HOME: home, WC_SKARBIEC_URL: stopped };
+const environment = { ...process.env, ...pinnedGit, HOME: home, WC_SKARBIEC_URL: stopped };
 for (const variable of ['WISENT_CODESIGN_ROLE', 'WISENT_CODESIGN_KEYCHAIN',
   'WISENT_CODESIGN_CERTIFICATE_PEM', 'WISENT_CODESIGN_PRIVATE_KEY_PEM']) {
   delete environment[variable];

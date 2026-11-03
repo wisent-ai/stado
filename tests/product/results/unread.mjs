@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real qualification of `stado product cargo --all --json results` over the
@@ -33,7 +34,7 @@ const workspace = join(home, 'workspace');
 const checkout = join(workspace, 'results-fixture');
 const report = { started_at: new Date().toISOString(), home, workspace, checkout, commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
-const environment = { ...process.env, HOME: home, WISENT_WORKSPACE: workspace };
+const environment = { ...process.env, ...pinnedGit, HOME: home, WISENT_WORKSPACE: workspace };
 function run(program, args) {
   const answer = spawnSync(program, args, { cwd: root, env: environment, encoding: 'utf8' });
   report.commands.push({ program, arguments: args, exit_status: answer.status,

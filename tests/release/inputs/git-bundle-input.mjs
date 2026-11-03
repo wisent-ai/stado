@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { exitedCleanly, exitedRefusing } from '../../native/process.mjs';
 
@@ -32,6 +33,7 @@ const manifestPath = join(checkout, '.wisent-release.json');
 const declaration = JSON.parse(readFileSync(join(root, '.wisent-release.json'), 'utf8'));
 writeFileSync(manifestPath, JSON.stringify({ ...declaration, product: 'example-git-input', inputs: {} }));
 const environment = {
+  ...pinnedGit,
   PATH: process.env.PATH, HOME: home, TMPDIR: temporary,
   STADO_CONFIG: join(home, 'config.json'), WC_STORAGE_BACKEND: 'local',
   WC_LOCAL_STORAGE_PATH: join(fixture, 'objects'),

@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { expectedRevision, snapshotSubject, verifyRevision } from '../native/subject.mjs';
 
@@ -79,7 +80,7 @@ try {
   const fixture = JSON.parse(fixtureBytes);
   assert.equal(fixture.dedicated, true, 'only an explicitly dedicated host fixture is accepted');
   assert.ok(fixture.target && fixture.expected_hostname && fixture.baseline_binary && fixture.binary);
-  environment = { PATH: process.env.PATH, NO_COLOR: '1',
+  environment = { ...pinnedGit, PATH: process.env.PATH, NO_COLOR: '1',
     HOME: privatePath(fixture.home), STADO_CONFIG: privatePath(fixture.config) };
   report.baseline = snapshot(fixture.baseline_binary, 'baseline', fixture.baseline_revision);
   report.candidate = snapshot(fixture.binary, 'candidate', expectedRevision(report.source_revision));

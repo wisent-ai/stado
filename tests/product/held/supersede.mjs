@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real journey of an installation operation that holds a product surface's
@@ -31,7 +32,7 @@ const output = mkdtempSync(join(realpathSync(join(root, '.build')), 'product-hel
 const workspace = dirname(realpathSync(source));
 const home = join(output, 'home');
 mkdirSync(join(home, '.stado'), { recursive: true });
-const env = { ...process.env, HOME: home };
+const env = { ...process.env, ...pinnedGit, HOME: home };
 const report = { started_at: new Date().toISOString(), product, source, workspace, commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function run(program, args) {

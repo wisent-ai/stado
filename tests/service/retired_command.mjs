@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Run on a dedicated macOS service test host. The registry and managed Stado
@@ -37,7 +38,7 @@ assert.ok(relative(home, unitFile) && !relative(home, unitFile).startsWith('..')
   'The managed unit file must belong to the dedicated test home');
 
 const output = mkdtempSync(join(build, 'service-retired-command-'));
-const environment = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
+const environment = { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
 const domain = `gui/${process.getuid()}`;
 const retired = `com.wisent.stado.test.retired-${randomUUID()}`;
 const kept = `com.wisent.stado.test.kept-${randomUUID()}`;

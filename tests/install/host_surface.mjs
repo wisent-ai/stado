@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real qualification of `--host` on a surface that installs on the machine
@@ -31,7 +32,7 @@ const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
 function run(program, args, home) {
   const env = home
-    ? { PATH: process.env.PATH, HOME: home, STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'), TMPDIR: join(home, 'tmp') }
+    ? { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'), TMPDIR: join(home, 'tmp') }
     : process.env;
   const answer = spawnSync(program, args, { cwd: root, env, encoding: 'utf8' });
   report.commands.push({ program, arguments: args, home, exit_status: answer.status, signal: answer.signal,

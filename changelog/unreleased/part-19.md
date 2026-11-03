@@ -383,3 +383,10 @@ The version bump gathers them into the release's own file and removes this one.
   or `rolled_back` siblings could be replaced. A `superseded` surface installed from the same
   kind, repository and manifest is now a sibling: the install replaces the shared files and
   re-records that receipt with the new fingerprints and revision.
+- **A journey under an isolated HOME no longer opens keychain dialogs:** every git a journey's Stado
+  ran found no `~/.gitconfig` under the isolated HOME, fell back to the system file's
+  `credential.helper osxkeychain`, and asked macOS to store the GitHub token in a login keychain
+  that HOME does not have: the person saw one "Keychain Not Found ... Reset To Defaults" dialog per
+  fetch. Every journey that sets HOME now spreads `pinnedGit` from `tests/native/home.mjs`:
+  `GIT_CONFIG_GLOBAL` names the real `~/.gitconfig` and `GIT_CONFIG_NOSYSTEM` drops the system
+  file, so the person's `gh auth git-credential` helper answers and no keychain is asked.

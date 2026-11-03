@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -28,7 +29,7 @@ const toolEnvironment = Object.fromEntries(['PATH', 'CARGO_HOME', 'RUSTUP_HOME']
   assert.ok(value, `${name} is required`);
   return [name, value];
 }));
-const environment = { ...toolEnvironment, HOME: home, TMPDIR: temporary,
+const environment = { ...toolEnvironment, ...pinnedGit, HOME: home, TMPDIR: temporary,
   WISENT_WORKSPACE: dirname(root), STADO_CI_MAIN_RECORD: ciRecord,
   WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'store'),
   STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'),

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, constants, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real qualification of `stado credentials grant renew` keeping every
@@ -55,6 +56,7 @@ chmodSync(keyring, constants.S_IRWXU);
 chmodSync(output, constants.S_IRWXU);
 const vault = join(home, 'vault.json');
 const environment = {
+  ...pinnedGit,
   PATH: process.env.PATH,
   HOME: home,
   TMPDIR: output,

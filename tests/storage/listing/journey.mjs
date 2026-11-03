@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { exitedCleanly } from '../../native/process.mjs';
 import { snapshotSubject, verifyRevision } from '../../native/subject.mjs';
@@ -33,6 +34,7 @@ const store = join(home, 'store');
 mkdirSync(store, { recursive: true });
 mkdirSync(join(home, 'tmp'));
 const environment = {
+  ...pinnedGit,
   PATH: required('PATH'), HOME: home, TMPDIR: join(home, 'tmp'),
   STADO_CONFIG: join(home, '.stado', 'config.json'),
   WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: store,

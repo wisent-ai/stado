@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real qualification of where an installation of Stado reads its
@@ -70,7 +71,7 @@ try {
   mkdirSync(join(home, '.stado'), { recursive: true });
   const installed = JSON.parse(success(run(binary,
     ['product', '--workspace', workspace, '--catalog', catalog, 'install', 'stado', '--surface', 'cli', '--source-commit', commit],
-    { HOME: home })));
+    { ...pinnedGit, HOME: home })));
   report.installed = installed;
   const where = installed.extra?.catalog ?? installed.catalog;
   assert.ok(where, 'the install report names the catalog it executed');

@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -21,7 +22,7 @@ const home = join(output, 'home');
 mkdirSync(home, { recursive: true });
 const ciRecord = process.env.STADO_CI_MAIN_RECORD
   ? process.env.STADO_CI_MAIN_RECORD : join(process.env.HOME, '.stado', 'ci-main.json');
-const environment = { ...process.env, HOME: home, WISENT_WORKSPACE: dirname(root),
+const environment = { ...process.env, ...pinnedGit, HOME: home, WISENT_WORKSPACE: dirname(root),
   STADO_CI_MAIN_RECORD: ciRecord };
 const report = { result: 'failed', source_revision: revision, host, ci_record: ciRecord, commands: [] };
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');

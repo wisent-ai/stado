@@ -18,6 +18,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { exitedCleanly } from '../../native/process.mjs';
 
@@ -41,6 +42,7 @@ mkdirSync(home, { recursive: true });
 mkdirSync(origins, { recursive: true });
 const environment = {
   ...process.env,
+  ...pinnedGit,
   HOME: home,
   STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'),
   WC_STORAGE_BACKEND: 'local',

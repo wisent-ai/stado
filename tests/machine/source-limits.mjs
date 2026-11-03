@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 
@@ -21,7 +22,7 @@ const config = join(home, 'config.json');
 const archive = join(output, 'source.tar.gz');
 mkdirSync(home);
 mkdirSync(source);
-const environment = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: config, WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: store };
+const environment = { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: config, WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: store };
 const report = { started_at: new Date().toISOString(), verdict: 'failed', commands: [], cases: [] };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function command(program, args, overrides = {}) {

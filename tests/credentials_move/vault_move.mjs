@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, createReadStream, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real relocation qualification on two isolated homes reached by genuine host
@@ -150,6 +151,7 @@ try {
   const scratch = join(output, 'tmp');
   mkdirSync(scratch);
   environment = {
+    ...pinnedGit,
     PATH: required('PATH'), HOME: fixture.source.home, STADO_CONFIG: config,
     GNUPGHOME: fixture.source.keyring, WC_STORAGE_BACKEND: 'local',
     WC_LOCAL_STORAGE_PATH: join(fixture.source.home, 'store'),

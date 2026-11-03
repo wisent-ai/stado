@@ -9,6 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, constants, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -34,6 +35,7 @@ const vault = join(home, 'vault.json');
 const source = join(home, 'source.token');
 const destination = join(home, 'destination.token');
 const environment = {
+  ...pinnedGit,
   PATH: process.env.PATH, HOME: home, TMPDIR: output, GNUPGHOME: keyring,
   STADO_CONFIG: join(home, '.config', 'stado', 'config.json'),
   WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'objects'),

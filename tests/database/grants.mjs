@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real installed Stado and Skarbiec; no service, operator vault or cloud account.
@@ -20,6 +21,7 @@ for (const directory of [home, keyring, temporary, join(home, '.stado')]) {
 const config = join(home, 'config.json');
 const vault = join(home, 'vault.json');
 const environment = {
+  ...pinnedGit,
   PATH: process.env.PATH, HOME: home, STADO_CONFIG: config, GNUPGHOME: keyring,
   TMPDIR: temporary, SKARBIEC_VAULT_FILE: vault,
   SKARBIEC_AUDIT_FILE: join(home, 'audit.jsonl'),

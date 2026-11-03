@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, constants, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real journey of `stado product paths --json`: the Stado under test runs with
@@ -39,7 +40,7 @@ writeFileSync(join(home, '.stado', 'products', 'example', 'cli.json'), JSON.stri
   recipe: {}, installed_paths: [owned], backups: [], host: null, source_revision: null, previous: null,
 }));
 
-const env = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'), TMPDIR: join(home, 'tmp') };
+const env = { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'), TMPDIR: join(home, 'tmp') };
 const answer = spawnSync(stado, ['product', 'paths', '--json'], { cwd: root, env, encoding: 'utf8' });
 writeFileSync(join(home, 'report.json'), JSON.stringify({ exit_status: answer.status, stdout: answer.stdout, stderr: answer.stderr }));
 assert.ok(!answer.status && !answer.signal && !answer.error, answer.stderr || answer.error?.message);

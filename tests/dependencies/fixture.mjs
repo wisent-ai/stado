@@ -11,6 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { pinnedGit } from "../native/home.mjs";
 import { fileURLToPath } from "node:url";
 
 // The isolated workspace the `stado product dependencies` journeys read: real
@@ -31,7 +32,7 @@ export async function journey(name, scope, testFile, body) {
 	const home = join(output, "home");
 	const workspace = join(home, "workspace");
 	let catalogPath = join(output, "products.yml");
-	const isolated = { ...process.env, HOME: home, WISENT_WORKSPACE: workspace };
+	const isolated = { ...process.env, ...pinnedGit, HOME: home, WISENT_WORKSPACE: workspace };
 	const report = {
 		started_at: new Date().toISOString(),
 		commands: [],

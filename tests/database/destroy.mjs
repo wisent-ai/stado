@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Destructive qualification against an already provisioned, dedicated SQLite
@@ -37,6 +38,7 @@ const output = mkdtempSync(join(build, 'database-destroy-'));
 const temporary = join(output, 'temporary');
 mkdirSync(temporary, { mode: 0o700 });
 const environment = {
+  ...pinnedGit,
   PATH: process.env.PATH, HOME: home, STADO_CONFIG: config, GNUPGHOME: keyring,
   TMPDIR: temporary, SKARBIEC_VAULT_FILE: vault,
   SKARBIEC_AUDIT_FILE: join(output, 'audit.jsonl'),

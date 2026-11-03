@@ -5,6 +5,7 @@ import {
   constants, copyFileSync, mkdtempSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // A unit whose program an install replaced in place (a new file renamed over
@@ -37,7 +38,7 @@ const managed = registry.targets.find(entry => entry.name === host)?.services?.f
   entry.label === 'com.wisent.stado' || entry.unit === 'com.wisent.stado');
 assert.ok(managed?.program, `${host} must declare an isolated com.wisent.stado with its program`);
 const output = mkdtempSync(join(build, 'service-replaced-program-'));
-const environment = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
+const environment = { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
 const report = { commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function run(program, args) {

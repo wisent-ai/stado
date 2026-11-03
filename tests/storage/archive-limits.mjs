@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { exitedCleanly } from '../native/process.mjs';
 
@@ -18,7 +19,7 @@ const source = join(output, 'source');
 const extracted = join(output, 'extracted');
 for (const directory of [home, source, extracted]) mkdirSync(directory);
 const config = join(home, 'config.json');
-const environment = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
+const environment = { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
 const report = { started_at: new Date().toISOString(), commands: [], cases: [], verdict: 'failed' };
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 function command(program, args, overrides = {}) {

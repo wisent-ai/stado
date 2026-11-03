@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real qualification of the build an install keeps when it fails after its
@@ -101,7 +102,7 @@ try {
   // before the build, and signing after the build refuses.
   const keychain = join(output, 'empty.keychain-db');
   success(run('security', ['create-keychain', '-p', 'journey', keychain]));
-  const environment = { HOME: home, WISENT_CODESIGN_KEYCHAIN: keychain };
+  const environment = { ...pinnedGit, HOME: home, WISENT_CODESIGN_KEYCHAIN: keychain };
   const install = ['product', '--workspace', workspace, 'install', product, '--surface', 'service', '--source-commit', commit];
   // A record an earlier Stado kept when a quality gate refused: the checkout
   // lies outside the isolated home, so its area is under `outside-home`.

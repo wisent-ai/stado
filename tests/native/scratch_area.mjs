@@ -5,6 +5,7 @@ import {
   constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real qualification of where `stado product swift` builds: the Stado under
@@ -37,7 +38,7 @@ function success(answer) {
   assert.equal(answer.status, SUCCESS, answer.stderr || answer.error?.message || answer.signal);
   return answer.stdout.trim();
 }
-const isolated = { ...process.env, HOME: home, WISENT_WORKSPACE: workspace };
+const isolated = { ...process.env, ...pinnedGit, HOME: home, WISENT_WORKSPACE: workspace };
 function swift(operation, packagePath) {
   return JSON.parse(success(run(stado,
     ['product', '--workspace', workspace, 'swift', '--package-path', packagePath, '--json', operation],

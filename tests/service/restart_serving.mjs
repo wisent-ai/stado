@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { constants, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Qualification of `stado service restart` answering on what the restarted
@@ -55,7 +56,7 @@ const declaredEndpoint = (service) => {
   return { hostname: url.hostname, port: Number(url.port) };
 };
 const output = mkdtempSync(join(build, 'service-restart-'));
-const environment = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
+const environment = { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
 const stado = process.env.STADO_BIN || 'stado';
 const report = { started_at: new Date().toISOString(), commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');

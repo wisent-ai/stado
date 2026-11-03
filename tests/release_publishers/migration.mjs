@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 const usage = 'usage: STADO_BIN=<stado> node tests/release_publishers/migration.mjs --bearer-file <existing-stado-bearer>';
@@ -24,7 +25,7 @@ const output = mkdtempSync(join(runs, 'run-'));
 const home = join(output, 'home');
 mkdirSync(home, { mode: ownerOnlyDirectory });
 const config = join(home, '.stado', 'config.json');
-const environment = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
+const environment = { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
 const report = { started_at: new Date().toISOString(), binary, commands: [], result: 'failed' };
 const backupPrefix = 'config.json.before-identity-migration-';
 

@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, constants, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // A product runs as one process per host. A unit that would start a catalog
@@ -29,7 +30,7 @@ const executable = process.env.STADO_BIN;
 assert.ok(host && executable, 'STADO_SERVICE_TEST_HOST and STADO_BIN are required');
 
 const output = mkdtempSync(join(build, 'service-second-process-'));
-const environment = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
+const environment = { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
 const report = { commands: [], result: 'failed' };
 function run(program, args) {
   const answer = spawnSync(program, args, { cwd: root, env: environment, encoding: 'utf8' });

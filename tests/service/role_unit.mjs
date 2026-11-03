@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // A unit that runs one of the host Stado process's roles under a label of
@@ -35,7 +36,7 @@ assert.equal(process.platform, 'darwin', 'This journey drives launchd');
 const binary = realpathSync(executable);
 
 const output = mkdtempSync(join(build, 'service-role-unit-'));
-const environment = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
+const environment = { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
 const domain = `gui/${process.getuid()}`;
 const roleUnit = `com.wisent.stado.test.role-${randomUUID()}`;
 const report = { commands: [], result: 'failed' };

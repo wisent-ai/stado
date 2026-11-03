@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { exitedCleanly } from '../../native/process.mjs';
 
@@ -30,6 +31,7 @@ const binary = realpathSync(required('STADO_BIN'));
 const store = inside(home, required('STADO_TEST_QUARANTINE_STORE'));
 const temporary = inside(home, required('STADO_TEST_QUARANTINE_TMP'));
 const environment = {
+  ...pinnedGit,
   PATH: required('PATH'), HOME: home, STADO_CONFIG: config, TMPDIR: temporary,
   WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: store,
 };

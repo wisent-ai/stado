@@ -11,6 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { pinnedGit } from "../native/home.mjs";
 import { fileURLToPath } from "node:url";
 
 // Real qualification of `stado product registry set --add-dependency` and
@@ -51,7 +52,7 @@ function run(program, args, environment = process.env) {
 	return answer;
 }
 const SUCCESS = run("/usr/bin/true", []).status;
-const isolated = { ...process.env, HOME: home, WISENT_WORKSPACE: home };
+const isolated = { ...process.env, ...pinnedGit, HOME: home, WISENT_WORKSPACE: home };
 function record(id) {
 	return [
 		`- id: ${id}`,

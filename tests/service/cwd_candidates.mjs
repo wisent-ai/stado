@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real qualification of the working-directory candidates in `stado service
@@ -30,7 +31,7 @@ const outside = join(output, 'outside');
 const config = join(output, 'config.json');
 const stado = process.env.STADO_BIN || 'stado';
 const marker = `sleep ${86000 + Math.floor(Math.random() * 399)}`;
-const fixture = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
+const fixture = { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
 const report = { started_at: new Date().toISOString(), host, marker, commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function run(program, args, env = process.env, cwd = root) {

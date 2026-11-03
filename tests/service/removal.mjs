@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Destructive qualification of `stado service remove` against a dedicated,
@@ -36,7 +37,7 @@ const routesNaming = (service) => Object.entries(registry().service_directory?.s
   .filter(([, route]) => route.active_host === host
     && [service.name, service.label, service.unit].filter(Boolean).includes(route.managed_service));
 const output = mkdtempSync(join(build, 'service-remove-'));
-const environment = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
+const environment = { ...pinnedGit, PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
 const stado = process.env.STADO_BIN || 'stado';
 const report = { started_at: new Date().toISOString(), commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');

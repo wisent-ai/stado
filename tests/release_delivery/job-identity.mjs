@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { exitedCleanly, exitedRefusing } from '../native/process.mjs';
 
@@ -53,7 +54,7 @@ try {
   const requestFailures = join(output, 'request-failures');
   const requestHome = join(requestFailures, 'home');
   mkdirSync(requestHome, { recursive: true });
-  const requestEnvironment = { PATH: required('PATH'), HOME: requestHome, STADO_CONFIG: join(requestHome, 'config.json') };
+  const requestEnvironment = { ...pinnedGit, PATH: required('PATH'), HOME: requestHome, STADO_CONFIG: join(requestHome, 'config.json') };
   const absentRequest = join(requestFailures, 'absent-request.json');
   let missingErrno;
   try {
@@ -91,7 +92,7 @@ try {
     mkdirSync(home, { recursive: true });
     const retained = join(fixture, 'delivery-request.json');
     writeFileSync(retained, requestBytes);
-    const env = { PATH: required('PATH'), HOME: home, STADO_CONFIG: join(home, 'config.json'), ...item.environment };
+    const env = { ...pinnedGit, PATH: required('PATH'), HOME: home, STADO_CONFIG: join(home, 'config.json'), ...item.environment };
     const result = command(binary, ['release', 'delivery', 'worker', '--request', retained], env, fixture);
     assert.ok(exitedRefusing(result), 'missing queue identity cannot admit a delivery');
     assert.ok(result.stderr.includes(item.cause), `wrong operation/cause: ${result.stderr}`);

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real journey of `stado product advisories list|apply`: the Stado under test
@@ -73,7 +74,7 @@ const legacy = checkout('example-legacy', 'rustls-webpki = "=0.101.7"', [['rustl
 const locked = (path, crate) =>
   readFileSync(join(path, 'Cargo.lock'), 'utf8').match(new RegExp(`name = "${crate}"\\nversion = "(?<version>[^"]+)"`)).groups.version;
 
-const env = { ...toolchain, HOME: home, STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'), TMPDIR: join(home, 'tmp') };
+const env = { ...toolchain, ...pinnedGit, HOME: home, STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'), TMPDIR: join(home, 'tmp') };
 const runs = [];
 function advisoriesIn(environment, ...args) {
   const answer = run(stado, ['product', '--workspace', workspace, 'advisories', ...args], root, environment);
