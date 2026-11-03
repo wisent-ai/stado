@@ -35,7 +35,11 @@ const output = mkdtempSync(join(realpathSync(join(root, '.build')), 'product-fin
 const workspace = dirname(realpathSync(source));
 const home = join(output, 'home');
 mkdirSync(join(home, '.stado'), { recursive: true });
-const env = { ...process.env, ...pinnedGit, HOME: home };
+// The isolated home's own ~/.local/bin leads PATH: the finish places `stado`
+// there and refuses an install that would change which `stado` PATH runs, so
+// with the person's own ~/.local/bin first every finish was refused and the
+// handoff this journey proves never ran to its end.
+const env = { ...process.env, ...pinnedGit, HOME: home, PATH: `${join(home, '.local/bin')}:${process.env.PATH}` };
 const report = { started_at: new Date().toISOString(), source, commit, workspace, commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function run(program, args) {
@@ -89,6 +93,7 @@ try {
     assert.notEqual(ended.signal, 'SIGTERM', `pid ${ended.pid} was told to stop: ${ended.stderr.slice(-2000)}`);
     assert.notEqual(ended.exit_status, 143, `pid ${ended.pid} ended 143: ${ended.stderr.slice(-2000)}`);
     assert.doesNotMatch(ended.stderr, /superseding the installation/, `pid ${ended.pid} superseded a waiting install`);
+    assert.equal(ended.exit_status, 0, `pid ${ended.pid} did not finish its installation: ${ended.stderr.slice(-2000)}`);
   }
   report.result = 'passed';
 } catch (error) {
