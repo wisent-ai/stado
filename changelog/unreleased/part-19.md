@@ -282,3 +282,8 @@ The version bump gathers them into the release's own file and removes this one.
   inside a double-quoted `"$(… awk '…["\\]…')"`, which macOS `/bin/bash` 3.2 reads as an unclosed
   quote, so every check on a Mac ended `unexpected EOF while looking for matching`. The path is
   sanitized in a plain assignment. Real journey: `tests/service_env/check.mjs`.
+- **A sync's finish no longer stops the operator's own install:** `product sync` waits for an
+  installation under way and never supersedes it, but the `product finish` it hands its built Stado
+  to was started without `--wait`, so it took the surface lock by superseding: an operator's
+  `product install stado --wait` that had taken the lock in between was sent SIGTERM mid-build and
+  ended 143 with nothing said. The finish now takes the lock the way its installation did.

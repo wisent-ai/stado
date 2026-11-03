@@ -152,6 +152,15 @@ impl HandOff {
             .arg(&runtime.workspace)
             .args(runtime.signing.arguments())
             .stdin(Stdio::null());
+        // The finish takes the surface's lock again, so it takes it the way
+        // this installation did. Without `--wait` a finish handed off by
+        // `product sync`, which never supersedes, superseded the operator's
+        // own installation that took the lock while the sync's build was
+        // handed over: it was told to stop (SIGTERM) in the middle of its
+        // build and ended 143 with no word of why.
+        if runtime.wait_for_writer {
+            command.arg("--wait");
+        }
         if !runtime.embedded_catalog {
             command.arg("--catalog").arg(&runtime.catalog);
         }
