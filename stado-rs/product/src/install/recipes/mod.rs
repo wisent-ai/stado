@@ -47,7 +47,7 @@ pub fn prepare(
         .with_context(|| format!("unsupported installation kind {kind}"))?;
     match recipe_kind {
         crate::catalog::RecipeKind::StadoRelease => {
-            build::release(runtime, product, recipe, root, source_commit)
+            build::release(runtime, product, recipe, root, source_commit, surface)
         }
         packaged if packaged.packaged() => packages::prepare(runtime, product, recipe, root),
         crate::catalog::RecipeKind::LocalBuild => {

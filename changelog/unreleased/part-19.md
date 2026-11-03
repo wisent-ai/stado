@@ -254,3 +254,11 @@ The version bump gathers them into the release's own file and removes this one.
   serve-one-process runs tests/release/journey.sh … nothing was enrolled`). A submit now checks the
   submitted commit's tree and names a missing program as `<path>, which commit <commit> does not
   hold`; enrolling a checkout keeps checking its working tree.
+- **A service surface built from source is placed where its catalog program runs:** `product install
+  <product> --surface service` placed a source build as a CLI is, each `bin/` member into the shared
+  `~/.stado/bin`, so Weles' `bin/start` launcher was refused as `~/.stado/bin/start belongs to another
+  recorded product` (Skarbiec's and Brama's launcher of the same name), and the catalog program
+  `$HOME/.stado/services/<service>/current/<platform>/<launcher>` was never written by the install.
+  A service build is placed whole under that directory, each staged member at its staged path, with
+  no link on PATH; a release that stages no file named as the catalog program, or a catalog program
+  outside `~/.stado/services`, is refused before anything is placed.
