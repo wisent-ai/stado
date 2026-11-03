@@ -311,3 +311,7 @@ The version bump gathers them into the release's own file and removes this one.
   age (`events: ok (<n>s ago, read beside the beacon)`, or `not read yet` before the first); the
   event reads run in one background pass per period, a pass still running is not started again,
   and a pass longer than the period is logged.
+- **`host run attach` names a relay's holders on macOS:** the wrapper asked `lsof -t <fifo>`, which
+  on macOS names no process holding a FIFO, so a program's lingering child went unseen and the
+  attach still waited for it (93 s in `tests/host_run/attach_descendant.mjs`). Holders are now
+  found by the relays' device and inode among every open file.

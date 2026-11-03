@@ -68,13 +68,21 @@ done
 # Who still holds the relays, filtered outside any "$(...)": macOS /bin/bash
 # 3.2 misparses a `case` pattern's `)` inside a command substitution, and
 # lsof is looked for where each system keeps it, not on a non-login PATH.
+# macOS lsof names no holder of a FIFO asked for by its path (`lsof -t FIFO`
+# answers nothing while a process writes to it), so every open file is
+# listed and matched by the relays' device and inode numbers, the device in
+# the hexadecimal lsof prints.
 holders=''
 lister=''
 for candidate in /usr/sbin/lsof /usr/bin/lsof; do
   if [ -x "$candidate" ]; then lister=$candidate; break; fi
 done
-if [ -n "$lister" ]; then
-  for pid in $("$lister" -t -- "$out_fifo" "$err_fifo" 2>/dev/null | /usr/bin/sort -u); do
+if [ -n "$lister" ] && identities=$(/usr/bin/stat -f '%d %i' "$out_fifo" "$err_fifo" 2>/dev/null || /usr/bin/stat -c '%d %i' "$out_fifo" "$err_fifo" 2>/dev/null); then
+  wanted=' '
+  while read -r device inode; do wanted="$wanted$(printf '%#x' "$device")/$inode "; done <<EOF
+$identities
+EOF
+  for pid in $("$lister" -nP -F pDi 2>/dev/null | /usr/bin/awk -v wanted="$wanted" '/^p/ { pid = substr($0, 2) } /^D/ { device = substr($0, 2) } /^i/ { if (index(wanted, " " device "/" substr($0, 2) " ")) print pid }' | /usr/bin/sort -u); do
     if [ "$pid" = "$out_relay" ] || [ "$pid" = "$err_relay" ] || [ "$pid" = "$$" ]; then continue; fi
     holders="$holders$pid ($(/bin/ps -o comm= -p "$pid" 2>/dev/null)) "
   done
