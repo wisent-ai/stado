@@ -278,12 +278,29 @@ The version bump gathers them into the release's own file and removes this one.
   beacon 40 minutes) and every beacon published its interface changes as unread. Both now take the
   serve loop's period; a one-off `beacon collect` reads the hour and says it has no window. A
   collection that outruns its period is logged with its duration.
-- **`service env check` reads an env file on a Mac:** the script's last line sanitized the path
-  inside a double-quoted `"$(… awk '…["\\]…')"`, which macOS `/bin/bash` 3.2 reads as an unclosed
-  quote, so every check on a Mac ended `unexpected EOF while looking for matching`. The path is
-  sanitized in a plain assignment. Real journey: `tests/service_env/check.mjs`.
+- **`service env check` and `service env show --env-file` read an env file on a Mac:** a comment
+  inside the single-quoted awk program held an apostrophe (`a key's name`), which ended the
+  program's word and left the rest of the script unbalanced, so every read ended `unexpected EOF
+  while looking for matching`; the last line also sanitized the path inside a double-quoted
+  `"$(… awk '…["\\]…')"`. The comment holds no apostrophe and the path is sanitized in a plain
+  assignment. Real journey: `tests/service_env/check.mjs`.
 - **A sync's finish no longer stops the operator's own install:** `product sync` waits for an
   installation under way and never supersedes it, but the `product finish` it hands its built Stado
   to was started without `--wait`, so it took the surface lock by superseding: an operator's
   `product install stado --wait` that had taken the lock in between was sent SIGTERM mid-build and
   ended 143 with nothing said. The finish now takes the lock the way its installation did.
+- **`stado placement rehome PROFILE --host HOST --from-home DIR`:** a move made before the home
+  rewrite left every home-rooted file it carried naming the source account's home (Weles'
+  `worker.env` named `STADO_BIN=<source home>/.stado/bin/stado` on the destination, byte for byte
+  the source's copy). This rewrites DIR to HOST's own home in each such file state of the profile
+  on the host it runs on, through the read, rewrite and staged install a move uses, keeping the
+  previous file as `<path>.replaced-by-placement-<id>`. Directories, work-rooted states and files
+  naming no DIR are reported and left as they are; a profile that runs elsewhere, an unknown
+  profile and a relative DIR are refused.
+- **The Weles unit is rendered with its host's recordings directory:** the Weles launcher refuses
+  to start without `WELES_RECORDINGS_ROOT`, which only the `weles-recordings` workload wrote into
+  the plists already on a host, so a unit `placement standby`, a move or `service ensure` rendered
+  for a new host started without it and exited at once. The catalog's Weles unit now takes it from
+  the host's `weles.recordings_dir` (`${declared:weles.recordings_dir}`); a `${declared:<field>}`
+  placeholder reads a dotted path into the registry entry, and a host that declares none is
+  refused naming the field and how to declare it.

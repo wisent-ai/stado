@@ -197,7 +197,7 @@ pub(in crate::cli::placement::transfer) async fn read_state(
 /// Only the home followed by `/` or the end of a line is replaced, so a
 /// longer name that starts with it is left alone. A file that is not UTF-8
 /// is left as it is: a binary state does not hold paths a reader rewrites.
-fn rehome(local: &std::path::Path, source_home: &str, destination_home: &str) -> Result<usize, CmdError> {
+pub(super) fn rehome(local: &std::path::Path, source_home: &str, destination_home: &str) -> Result<usize, CmdError> {
     let source = source_home.trim_end_matches('/');
     let destination = destination_home.trim_end_matches('/');
     if source.is_empty() || source == destination {

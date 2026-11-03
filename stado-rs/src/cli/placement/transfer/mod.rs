@@ -23,7 +23,7 @@ pub(in crate::cli::placement) use readiness::preflight;
 pub(in crate::cli::placement) use role::{
     apply_role, ensure_runs_on, move_role, prepare_role, store_fence,
 };
-pub(in crate::cli::placement) use state::{discard_staging, settle_state_backup};
+pub(in crate::cli::placement) use state::{discard_staging, rehome_states, settle_state_backup, Rehomed};
 pub(in crate::cli::placement) use vault_fence::write_fenced;
 
 use std::sync::Arc;

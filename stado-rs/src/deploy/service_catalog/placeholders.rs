@@ -43,7 +43,8 @@ pub(super) fn with_addresses(mut entry: super::CatalogService) -> super::Catalog
 }
 
 /// `word` with every `${declared:<field>}` replaced by the value the target's
-/// registry entry declares under `<field>`.
+/// registry entry declares under `<field>`, a dotted path into the entry
+/// (`health_interval_seconds`, `weles.recordings_dir`).
 pub fn resolve_declared(
     word: &str,
     target: &ComputeTarget,
@@ -69,7 +70,14 @@ pub fn resolve_declared(
 
 fn declared_value(target: &ComputeTarget, field: &str, service: &str) -> Result<String, String> {
     let host = &target.name;
-    match target.extra.get(field) {
+    let entry = serde_json::to_value(target).map_err(|error| {
+        format!("{host}'s registry entry cannot be read for {field}: {error}")
+    })?;
+    let found = field
+        .split('.')
+        .try_fold(&entry, |value, key| value.get(key))
+        .filter(|value| !value.is_null());
+    match found {
         Some(Value::String(text)) if !text.trim().is_empty() => Ok(text.clone()),
         Some(Value::Number(number)) => Ok(number.to_string()),
         Some(other) => Err(format!(

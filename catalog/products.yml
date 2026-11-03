@@ -337,6 +337,7 @@ products:
     env:
       WELES_API_HOST: $STADO_ALL_INTERFACES
       WELES_API_PORT: $STADO_LISTEN_PORT
+      WELES_RECORDINGS_ROOT: ${declared:weles.recordings_dir}
     summary: One Weles process per host serving the API and admission, the resident task dispatcher that executes authorized browser workflows, and the keyword-planner routes.
     answering:
       method: GET

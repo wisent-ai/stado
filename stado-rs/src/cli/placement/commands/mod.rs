@@ -5,6 +5,7 @@ mod check;
 mod evacuate;
 mod eviction;
 mod moves;
+mod rehome;
 mod role;
 
 pub(crate) use moves::placed_host;
@@ -194,6 +195,27 @@ pub enum PlacementCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Rewrite another account's home in the file states PROFILE keeps on
+    /// --host, the host it runs on: the rewrite a move makes in each
+    /// home-rooted file it carries, for states a move put in place without
+    /// it. Each such file naming --from-home is reinstalled naming --host's
+    /// own home, with the previous file kept beside it as
+    /// `<path>.replaced-by-placement-<id>`; directories, work-rooted states
+    /// and files naming no --from-home are left as they are.
+    Rehome {
+        /// The placement profile whose states are rewritten.
+        profile: String,
+        /// The host the profile runs on.
+        #[arg(long)]
+        host: String,
+        /// The home of the account the states were carried from, as it is
+        /// written in them (e.g. the source host's `$HOME`).
+        #[arg(long)]
+        from_home: String,
+        /// Emit each state's outcome as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
@@ -280,5 +302,11 @@ pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
             json,
         } => evacuate::holds(&host, json).await,
         PlacementCommands::Holds { host: None, json } => evacuate::holds_everywhere(json).await,
+        PlacementCommands::Rehome {
+            profile,
+            host,
+            from_home,
+            json,
+        } => rehome::rehome(&profile, &host, &from_home, json).await,
     }
 }

@@ -141,7 +141,7 @@ function has_userinfo(text) {
 # An endpoint, a port, a number, or a reference to another variable. Every
 # one of these is a value an operator has to be able to read, and none of them
 # can carry a credential by its shape: the URL form admits no @, ? or #.
-# Everything else is withheld unless the caller reveals that key: a key's name
+# Everything else is withheld unless the caller reveals that key: the name of a key
 # does not say whether its value is a secret (DATABASE_URL names none and
 # holds one), and a list of secret-sounding names or harmless-looking words
 # decides by spelling, in one language.

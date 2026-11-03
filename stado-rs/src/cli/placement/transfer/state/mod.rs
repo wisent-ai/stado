@@ -8,11 +8,13 @@
 //! large volume of the other.
 
 mod copy;
+mod rehome;
 mod settle;
 mod space;
 
 pub(in crate::cli::placement) use copy::discard_staging;
 pub(in crate::cli::placement::transfer) use copy::{read_state, state_exists, write_state};
+pub(in crate::cli::placement) use rehome::{rehome_states, Rehomed};
 pub(in crate::cli::placement) use settle::settle_state_backup;
 pub(in crate::cli::placement::transfer) use space::{ensure_room, ensure_room_for, Ends};
 

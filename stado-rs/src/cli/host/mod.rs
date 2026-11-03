@@ -22,7 +22,7 @@ pub use crate::cli::host::upgrade::{upgrade, UpgradeRequest};
 
 pub use crate::cli::host::checks::health::health;
 pub use crate::cli::host::checks::health::ports::port_owner;
-pub(crate) use crate::cli::host::checks::health::ports::{port_holders, PortHolder};
+pub(crate) use crate::cli::host::checks::health::ports::port_holders;
 pub use crate::cli::host::checks::health::publish::publish_beacon;
 pub use crate::cli::host::checks::health::publish::{
     collect_beacon, collect_beacons_every, privacy,

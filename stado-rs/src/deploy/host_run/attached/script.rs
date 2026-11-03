@@ -65,11 +65,19 @@ while :; do
   status=$?
   if ! /bin/kill -0 "$child" 2>/dev/null; then break; fi
 done
+# Who still holds the relays, filtered outside any "$(...)": macOS /bin/bash
+# 3.2 misparses a `case` pattern's `)` inside a command substitution, and
+# lsof is looked for where each system keeps it, not on a non-login PATH.
 holders=''
-if lister=$(command -v lsof); then
-  holders=$("$lister" -t -- "$out_fifo" "$err_fifo" 2>/dev/null | /usr/bin/sort -u | while IFS= read -r pid; do
-    case "$pid" in "$out_relay"|"$err_relay"|"$$") ;; *) printf '%s (%s) ' "$pid" "$(/bin/ps -o comm= -p "$pid" 2>/dev/null)" ;; esac
-  done)
+lister=''
+for candidate in /usr/sbin/lsof /usr/bin/lsof; do
+  if [ -x "$candidate" ]; then lister=$candidate; break; fi
+done
+if [ -n "$lister" ]; then
+  for pid in $("$lister" -t -- "$out_fifo" "$err_fifo" 2>/dev/null | /usr/bin/sort -u); do
+    if [ "$pid" = "$out_relay" ] || [ "$pid" = "$err_relay" ] || [ "$pid" = "$$" ]; then continue; fi
+    holders="$holders$pid ($(/bin/ps -o comm= -p "$pid" 2>/dev/null)) "
+  done
 else
   holders_unread='no lsof on this host names them'
 fi

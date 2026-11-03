@@ -48,6 +48,13 @@ try {
   assert.equal(answer.file_state ?? answer.env_file?.file_state, 'read', 'the env file was read on the host');
   assert.equal(answer.listeners_state ?? answer.env_file?.listeners_state, 'read', 'the socket table was read with owners');
 
+  // `env show` reads the file through the same host script.
+  const shown = spawnSync(stado, ['service', 'env', 'show', service, '--host', host, '--env-file', file, '--json'],
+    { encoding: 'utf8', timeout: 300_000 });
+  report.commands.push({ env_show: file, status: shown.status, stderr_tail: (shown.stderr || '').slice(-3000) });
+  assert.equal(shown.status, 0, `env show of ${file} failed: ${(shown.stderr || '').slice(-600)}`);
+  assert.doesNotMatch(shown.stderr, /unexpected EOF|syntax error/, 'the host shell refused the show script');
+
   const outside = check('/etc/hosts');
   const [refused] = JSON.parse(outside.stdout || '[]');
   assert.equal(refused?.file_state ?? refused?.env_file?.file_state, 'refused_outside_home',
