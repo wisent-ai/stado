@@ -483,3 +483,8 @@ The version bump gathers them into the release's own file and removes this one.
   file: Selected { … }` (`stado alerts preferences show` among them). Every command but `stado
   config` and `stado credentials migrate`, which write the selected file themselves, now refuses
   first as a configuration failure: `Error: STADO_CONFIG names <path>, which does not exist`.
+- **Every spilled changelog part is linked, and an unlinked one is refused at push:** twelve parts
+  under `changelog/unreleased/` were linked from no `CHANGELOG.md` line, and the version bump
+  gathers only the parts the Unreleased section links, so their entries would never have been
+  released. They are linked, and `stado quality check` now refuses a revision whose
+  `changelog/unreleased/` holds a part the section does not link, naming each and the link to add.

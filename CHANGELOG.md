@@ -25,6 +25,18 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 - [Unreleased (part 1)](changelog/unreleased-part-1.md)
 - [Unreleased (part 2)](changelog/unreleased/part-2.md)
+- [Unreleased (part 5)](changelog/unreleased/part-5.md)
+- [Unreleased (part 6)](changelog/unreleased/part-6.md)
+- [Unreleased (part 7)](changelog/unreleased/part-7.md)
+- [Unreleased (part 8)](changelog/unreleased/part-8.md)
+- [Unreleased (part 9)](changelog/unreleased/part-9.md)
+- [Unreleased (part 10)](changelog/unreleased/part-10.md)
+- [Unreleased (part 11)](changelog/unreleased/part-11.md)
+- [Unreleased (part 12)](changelog/unreleased/part-12.md)
+- [Unreleased (part 13)](changelog/unreleased/part-13.md)
+- [Unreleased (part 14)](changelog/unreleased/part-14.md)
+- [Unreleased (part 15)](changelog/unreleased/part-15.md)
+- [Unreleased (part 19)](changelog/unreleased/part-19.md)
 ### Fixed
 - **A product the update policy marks `tested` installs only a revision its gates passed on:** an installation built whatever revision it chose, so a commit no test had run on reached a host as soon as it was pushed. `stado product policy set PRODUCT --mode automatic --tested` (Desktop: Set a product's update rule → Install only a revision the main check recorded green) makes every installation of that product, by `sync` or by hand, refuse before building a revision the main check record (`stado ci run`) never checked or recorded red, naming the last green revision and the `--source-commit` that installs it, or, when no revision ever passed, that none installs until one does; a red run that records no refusals is named with the run itself. Journey: `tests/product/update_policy.mjs`.
 - **A push, submit or queue pass names its agent session to Oko without Tama:** `oko admit` was told the session from `tama sessions self` alone, so with Tama uninstalled no session was named, a consent the operator held to one session (and its subagents) never reached its pushes, and his older withdrawal refused every gate. With no Tama installed, the session is now the one `PI_SESSION_FILE` names, read from that transcript's session record; a run no harness names is still asked as no one's, and a variable naming a file that is gone or holds no session is said with what to do. Journey: `tests/change/session_without_tama.rs`.

@@ -115,6 +115,51 @@ pub fn unreleased_entries(text: &str) -> Option<String> {
     Some(unreleased_section(text)?.trim().to_owned())
 }
 
+/// Why the tree at `root` is refused for a changelog the version bump would
+/// lose: a spilled part under `changelog/unreleased/` that `CHANGELOG.md`
+/// does not link under `## Unreleased`. The bump gathers the parts the
+/// section links and nothing else, so an unlinked part's entries were never
+/// released and stayed unread; parts written by hand beside a spill, or a
+/// link dropped in a merge, left seventeen of them so. `None` when every part
+/// is linked, or the tree keeps no spilled parts.
+pub fn unlinked_parts(root: &Path) -> Result<Option<String>> {
+    let folder = root.join(RANGE_DIRECTORY).join(SPILLED);
+    let entries = match fs::read_dir(&folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", folder.display()))
+        }
+    };
+    let text = fs::read_to_string(root.join(CHANGELOG))
+        .with_context(|| format!("reading {}", root.join(CHANGELOG).display()))?;
+    let section = unreleased_section(&text).unwrap_or_default();
+    let mut linked = std::collections::BTreeSet::new();
+    for line in section.lines() {
+        if let Some((_, name)) = spilled_part(line)? {
+            linked.insert(name.to_owned());
+        }
+    }
+    let mut unlinked = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("reading {}", folder.display()))?;
+        let name = format!("{SPILLED}/{}", entry.file_name().to_string_lossy());
+        if name.ends_with(".md") && !linked.contains(&name) {
+            unlinked.push(format!("{RANGE_DIRECTORY}/{name}"));
+        }
+    }
+    unlinked.sort();
+    if unlinked.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{CHANGELOG} does not link {} under {UNRELEASED}, so the version bump would leave \
+         their entries out of the release; add a `- [Unreleased (part N)](changelog/unreleased/part-N.md)` \
+         line under {UNRELEASED} for each",
+        unlinked.join(", ")
+    )))
+}
+
 /// Why `stado build submit` refuses revision `commit` of `version` whose
 /// `CHANGELOG.md` reads `text`: its Unreleased section still holds entries or
 /// spilled parts the version bump should have moved. `None` when it holds

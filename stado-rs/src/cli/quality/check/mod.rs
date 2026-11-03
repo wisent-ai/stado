@@ -184,6 +184,17 @@ async fn check_tree(
     ));
     modules::check(tree, checkout, revision)?;
     report.say(&format!(
+        "stado quality check: checking that {revision}'s changelog links every spilled part"
+    ));
+    if let Some(refused) = stado_product::changelog::unlinked_parts(tree)
+        .map_err(|error| CmdError::click(format!("{error:#}")))?
+    {
+        return Err(CmdError::refused(format!(
+            "stado quality check: {revision} of {}: {refused}",
+            checkout.display()
+        )));
+    }
+    report.say(&format!(
         "stado quality check: checking that the lines {revision} adds reach no other product's \
          service without its alternatives"
     ));
