@@ -493,3 +493,8 @@ The version bump gathers them into the release's own file and removes this one.
   between was refused with `cannot parse the janitor turn request …: EOF while parsing a value`.
   Both are now written whole (a staging file renamed into place), and the holds listing reads only
   `.json` records.
+- **A scheduled host routine finds the programs this host installed:** a host job (the scheduled
+  `stado product sync`, `oko routines`) ran with the unit's declared PATH, which names neither
+  `~/.stado/bin` nor `~/.local/bin`, so every scheduled sync held each product as `… is not on
+  PATH` and installed nothing (Skrzynka stayed six weeks behind its origin). A host job now runs
+  with those directories ahead of the inherited PATH, the search path every product step uses.

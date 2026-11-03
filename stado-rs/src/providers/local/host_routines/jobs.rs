@@ -69,6 +69,17 @@ pub(super) async fn start(
             Ok((stado, output, errors))
         });
     let spawned = opened.and_then(|(stado, output, errors)| {
+        // A host routine runs the products this host installed (`stado
+        // product sync`, `oko routines`), and they are placed in `~/.stado/bin`
+        // and `~/.local/bin`, which the unit's declared PATH names neither of:
+        // every scheduled sync then held each product as "not on PATH" and
+        // installed nothing for weeks. The job searches those directories
+        // first, the search path every product step runs with.
+        let path = stado_product::common::step_search_path(
+            None,
+            std::env::var_os("PATH").as_deref(),
+        )
+        .map_err(|error| format!("the host job's search path cannot be formed: {error:#}"))?;
         let mut command = tokio::process::Command::new("/bin/sh");
         crate::providers::local::slots::apply_job_runtime_environment(
             &mut command,
@@ -76,6 +87,7 @@ pub(super) async fn start(
             &stado,
         );
         command
+            .env("PATH", path)
             .arg("-c")
             .arg(crate::providers::local::build_job_command(job))
             .current_dir(&work)
