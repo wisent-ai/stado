@@ -12,7 +12,7 @@ mod team;
 
 pub(super) use keychain::keep_apple_issuers;
 use keychain::{blocks, put_first, take_off};
-pub use kept::{keep, Kept};
+pub use kept::keep;
 pub(crate) use source::environment;
 pub use source::{Choice, Source, IDENTITY_VARIABLE, KEYCHAIN_VARIABLE};
 pub use team::Team;
