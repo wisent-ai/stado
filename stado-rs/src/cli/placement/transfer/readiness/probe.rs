@@ -130,16 +130,20 @@ pub(in crate::cli::placement::transfer) async fn health_probe(
     )
 }
 
-/// The started unit `spec` on `target` answers 2xx at `url`. Until it does,
-/// the URL is read again while the unit's process runs, and each answer that
-/// differs from the one before is printed. A 4xx answer refuses the move at
-/// once, naming it and the URL; once the unit no longer runs, the move is
-/// refused naming the unit and the URL's last answer. A unit whose process
-/// listens on TCP ports none of which is the URL's is refused naming them.
-/// While its process listens on no port it is still starting, and while it
-/// listens on the URL's port its answer is the service's own statement; both
-/// are read again, a restart of the process is printed, and the wait stands
-/// in the register of open waits for as long as it lasts.
+/// The started unit `spec` on `target` answers 2xx at `url`, from its own
+/// process. Until it does, the URL is read again while the unit's process
+/// runs, and each answer that differs from the one before is printed. A 2xx
+/// counts only once the socket table shows the unit's process listening on
+/// the URL's port: another program on that port answered 2xx for a unit that
+/// had exited, and the move committed a service that never ran. A 4xx answer
+/// refuses the move at once, naming it and the URL; once the unit no longer
+/// runs, the move is refused naming the unit, the URL's last answer and who
+/// listens on its port. A unit whose process listens on TCP ports none of
+/// which is the URL's is refused naming them. While its process listens on
+/// no port it is still starting, and while it listens on the URL's port its
+/// answer is the service's own statement; both are read again, a restart of
+/// the process is printed, and the wait stands in the register of open waits
+/// for as long as it lasts.
 pub(in crate::cli::placement::transfer) async fn await_healthy(
     target: &ComputeTarget,
     spec: &PlacementUnit,
@@ -154,10 +158,16 @@ pub(in crate::cli::placement::transfer) async fn await_healthy(
         let mut process = None;
         loop {
             let answer = answer(target, url, &payload, runner).await?;
-            if answer.healthy() {
+            let running = probe_unit(target, spec, runner).await?.running;
+            let sockets = match running {
+                true => Some(listening(target, spec, runner).await?),
+                false => None,
+            };
+            let own = sockets.as_ref().is_some_and(|sockets| sockets.ports.contains(&port));
+            if answer.healthy() && own {
                 return Ok(());
             }
-            if answer.refused_by_service() {
+            if answer.refused_by_service() && own {
                 return Err(CmdError::click(format!(
                     "{}: {url} answered {answer} while unit {} runs; the probe path or the \
                      service refuses the request, so the move does not wait for it",
@@ -167,18 +177,29 @@ pub(in crate::cli::placement::transfer) async fn await_healthy(
             }
             if previous.as_ref() != Some(&answer) {
                 eprintln!(
-                    "  {}: unit {} runs; {url} answered {answer}; reading it again",
-                    target.name, managed.unit
+                    "  {}: unit {} {}; {url} answered {answer}; reading it again",
+                    target.name,
+                    managed.unit,
+                    if own { "runs" } else { "does not listen on that port yet" }
                 );
             }
-            if !probe_unit(target, spec, runner).await?.running {
+            let Some(sockets) = sockets else {
                 return Err(CmdError::click(format!(
-                    "{}: unit {} is no longer running; {url} last answered {answer}",
-                    target.name, managed.unit
+                    "{}: unit {} is no longer running; {url} last answered {answer}{}",
+                    target.name,
+                    managed.unit,
+                    if answer.healthy() || answer.refused_by_service() {
+                        format!(
+                            ", from another program listening on port {port}: the unit's own \
+                             log says why it exited, and the port the directory gives it is \
+                             taken"
+                        )
+                    } else {
+                        String::new()
+                    }
                 ))
                 .stating(FailureCode::InfraDown));
-            }
-            let sockets = listening(target, spec, runner).await?;
+            };
             for row in &sockets.unread {
                 eprintln!(
                     "  {}: socket table of unit {}: {row}",

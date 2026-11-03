@@ -223,3 +223,10 @@ The version bump gathers them into the release's own file and removes this one.
   or the line's end) rewritten to the destination's home in the copy before it is sent; the move
   prints how many it rewrote. A directory state and a file that is not UTF-8 are carried as they
   are.
+- **A move's health probe takes a 2xx only from the moved unit's own process:** a placement move
+  read the destination's probe URL and committed on the first 2xx, so another program listening on
+  the port the directory gives the service (here a different product on Weles' port) answered for a
+  `weles-admission` unit that had exited, and the move committed a service that never ran. A 2xx
+  or a 4xx now counts only once the socket table shows the unit's process listening on the URL's
+  port; a unit that stops running while another program answers there is refused naming that
+  the port is taken.
