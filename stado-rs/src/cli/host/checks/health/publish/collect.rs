@@ -12,7 +12,9 @@ use crate::cli::CmdError;
 use crate::deploy::service::{
     STATE_ACTIVE, STATE_FAILED, STATE_INACTIVE, STATE_UNKNOWN, STATE_UNREADABLE,
 };
-use crate::deploy::service_label_print::{inspect_label_carrying, LabelState};
+use crate::deploy::service_label_print::{
+    inspect_label_state, last_events, read_events_behind, LabelState,
+};
 
 #[path = "acting.rs"]
 mod acting;
@@ -192,24 +194,33 @@ async fn collect_document(
     let mut verdicts = std::collections::BTreeMap::new();
     let services = crate::deploy::service::declared_services(&target);
     let mut questions = std::collections::HashMap::new();
+    let mut labels = Vec::new();
     for service in &services {
         let unit = service.unit_id();
         if unit.is_empty() || unit.contains(char::is_whitespace) || unit.contains(',') {
             continue;
         }
-        // The carrying read: launchd's event log, the costly half, is read
-        // only when the unit is not as it was at the previous pass and the
-        // host is under its scan load ceiling.
-        let mut entry = match inspect_label_carrying(
+        labels.push(unit.to_string());
+        // The unit's state alone: launchd's event log, which a loaded Mac
+        // reads for minutes per unit, is read beside the beacon
+        // (`read_events_behind` below), and this pass carries what its last
+        // completed read found, so a slow read never holds a beacon.
+        let mut entry = match inspect_label_state(
             &target,
             unit,
             crate::deploy::service::BootoutScope::Any,
             &runner,
-            cadence,
         )
         .await
         {
-            Ok(state) => {
+            Ok(mut state) => {
+                state.event_read_status = Some(match last_events(&target, unit) {
+                    Some((events, status)) => {
+                        state.recent_events = events;
+                        status
+                    }
+                    None => "not read yet: the first read runs beside this beacon".to_string(),
+                });
                 let failing = state.failing();
                 // The line a failing unit last wrote to its stderr file,
                 // read on this host, which is the one the unit runs on.
@@ -254,6 +265,10 @@ async fn collect_document(
             }
         }
         units.insert(unit.to_string(), entry);
+    }
+    // A one-off collection reads nothing behind it: it ends once printed.
+    if cadence.is_some() {
+        read_events_behind(target.clone(), labels, runner.clone(), cadence);
     }
     crate::deploy::service_answering::retain_declared(&questions);
     // A unit read failing is a crash loop the operator is paged about and

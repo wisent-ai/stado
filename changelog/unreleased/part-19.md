@@ -304,3 +304,10 @@ The version bump gathers them into the release's own file and removes this one.
   the host's `weles.recordings_dir` (`${declared:weles.recordings_dir}`); a `${declared:<field>}`
   placeholder reads a dotted path into the registry entry, and a host that declares none is
   refused naming the field and how to declare it.
+- **launchd's event log is read beside the beacon, never before it:** the period fix still had the
+  serve loop read each unit's launchd events before it published, and on a loaded Mac the first
+  `log show` of one unit ran past seven minutes, so the beacon stood still that long. The beacon
+  now reads each unit's state alone and carries the events of the last completed read with its
+  age (`events: ok (<n>s ago, read beside the beacon)`, or `not read yet` before the first); the
+  event reads run in one background pass per period, a pass still running is not started again,
+  and a pass longer than the period is logged.

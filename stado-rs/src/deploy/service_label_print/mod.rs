@@ -52,6 +52,70 @@ struct Carried {
 /// the one reader that reads every unit once a minute.
 static CARRIED: LazyLock<Mutex<HashMap<(String, String), Carried>>> = LazyLock::new(Mutex::default);
 
+/// Whether a background event pass ([`read_events_behind`]) is running in
+/// this process: a pass still reading when the next beacon asks for one is
+/// not started again.
+static EVENT_PASS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The events this process's last completed read of `label` on `target`
+/// found, with how that read went and how long ago it was; `None` before
+/// the first read completed. The beacon carries these, so launchd's log,
+/// which a loaded Mac reads for minutes per unit, never holds a beacon.
+pub fn last_events(target: &ComputeTarget, label: &str) -> Option<(Vec<String>, String)> {
+    let key = (target.name.clone(), label.to_string());
+    let carried = crate::primitives::lock::held(&CARRIED).get(&key).cloned()?;
+    let age = carried.checked_at.elapsed().as_secs();
+    let status = carried.status.unwrap_or_else(|| "ok".to_string());
+    Some((carried.events, format!("{status} ({age}s ago, read beside the beacon)")))
+}
+
+/// Read every one of `labels`' launchd events on `target` in one background
+/// pass, through [`inspect_label_carrying`], unless a pass is still running;
+/// returns whether one was started. What it reads, [`last_events`] answers
+/// from the next beacon on.
+pub fn read_events_behind(
+    target: ComputeTarget,
+    labels: Vec<String>,
+    runner: Runner,
+    cadence: Option<std::time::Duration>,
+) -> bool {
+    use std::sync::atomic::Ordering;
+    if EVENT_PASS
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
+    /// Lets the next pass start however this one ends, a panic included.
+    struct Running;
+    impl Drop for Running {
+        fn drop(&mut self) {
+            EVENT_PASS.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+    let running = Running;
+    tokio::spawn(async move {
+        let _running = running;
+        let started = std::time::Instant::now();
+        for label in &labels {
+            if let Err(error) =
+                inspect_label_carrying(&target, label, BootoutScope::Any, &runner, cadence).await
+            {
+                eprintln!("[stado serve host-health] launchd events of {label} were not read: {error}");
+            }
+        }
+        let took = started.elapsed();
+        if cadence.is_some_and(|period| took > period) {
+            eprintln!(
+                "[stado serve host-health] the launchd event pass over {} unit(s) took {}s; beacons kept their period and carried the previous events meanwhile",
+                labels.len(),
+                took.as_secs()
+            );
+        }
+    });
+    true
+}
+
 /// The window a one-off inspection (`service list`, a lifecycle check) reads
 /// launchd's event log over: the hour `log show --last` was always asked
 /// for, which a reader looking at one unit once affords.
@@ -164,7 +228,7 @@ pub async fn inspect_label_state(
 /// (the first, `cadence`): a change since then happened in that window, and
 /// an hour of a busy Mac's log took many minutes per unit, which held the
 /// beacon that many minutes.
-pub async fn inspect_label_carrying(
+async fn inspect_label_carrying(
     target: &ComputeTarget,
     label: &str,
     scope: BootoutScope,
