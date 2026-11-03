@@ -5,10 +5,12 @@
 //! checkout's build directory and `STADO_API_URL` naming a loopback object
 //! API. In the first journey nothing listens on the port: the command exits
 //! non-zero naming the refused connection. In the second a listener this
-//! test owns answers the GET with a declared body and closes the connection
-//! after its first word: the command exits non-zero naming the cut, and the
-//! listener saw exactly one request, so a cut body is not answered by asking
-//! the dependency again.
+//! test owns answers every GET with a declared body and closes the
+//! connection after its first word: the command asks once for the rest from
+//! the byte the cut reached, is answered with the whole object again instead
+//! of that range, and exits non-zero naming the refused range; the listener
+//! saw exactly two requests, so a dependency that cannot serve the rest is
+//! not asked again.
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
@@ -96,10 +98,18 @@ fn first_word() -> &'static str {
     BODY.split(' ').next().expect("the body has a first word")
 }
 
+/// One request the cutting listener was sent: its request line and the
+/// `Range` header it carried, if any.
+#[derive(Debug)]
+struct Asked {
+    line: String,
+    range: Option<String>,
+}
+
 /// A loopback object API that answers every GET with `BODY`'s full length
 /// declared and only its first word sent, then closes the connection. The
-/// request lines it was sent are kept in order.
-fn cutting_listener(port: u16) -> (String, Arc<Mutex<Vec<String>>>) {
+/// requests it was sent are kept in order, each with the range it asked.
+fn cutting_listener(port: u16) -> (String, Arc<Mutex<Vec<Asked>>>) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
         .expect("bind the loopback port this machine handed out");
     let address = listener
@@ -119,11 +129,10 @@ fn cutting_listener(port: u16) -> (String, Arc<Mutex<Vec<String>>>) {
             if let Err(error) = reader.read_line(&mut request_line) {
                 panic!("the cutting listener read no request line: {error}");
             }
-            kept.lock()
-                .expect("the request log is not poisoned")
-                .push(request_line.trim().to_owned());
             // The rest of the request's head ends at its first empty line;
-            // at the end of the stream the line read is empty too.
+            // at the end of the stream the line read is empty too. The Range
+            // header, if any, says which bytes this request asks for.
+            let mut range = None;
             let mut line = String::new();
             loop {
                 line.clear();
@@ -133,7 +142,19 @@ fn cutting_listener(port: u16) -> (String, Arc<Mutex<Vec<String>>>) {
                 if line.trim().is_empty() {
                     break;
                 }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("range") {
+                        range = Some(value.trim().to_owned());
+                    }
+                }
             }
+            let asked = Asked {
+                line: request_line.trim().to_owned(),
+                range,
+            };
+            kept.lock()
+                .expect("the request log is not poisoned")
+                .push(asked);
             let answer = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 BODY.len(),
@@ -166,8 +187,13 @@ fn a_port_nobody_listens_on_ends_the_get_with_the_refusal() {
     );
 }
 
+/// Objects are read in resumable ranges, so a body cut after some of its
+/// bytes made progress and the GET asks once more, for the rest from the
+/// first byte it lacks; a dependency that answers that ask with the whole
+/// object again instead of the range ends the GET naming the range it would
+/// not serve, and nothing is asked a third time.
 #[test]
-fn a_body_cut_short_ends_the_get_after_one_request() {
+fn a_body_cut_short_is_asked_once_for_the_rest_and_a_refused_range_ends_the_get() {
     let run = Run::new("cut");
     let (address, requests) = cutting_listener(run.free_port());
     let output = run.storage_get(&address);
@@ -177,22 +203,35 @@ fn a_body_cut_short_ends_the_get_after_one_request() {
         !output.status.success(),
         "a body cut short is a failed GET: {said}"
     );
+    let cut = first_word().len();
     assert!(
-        said.contains(&format!(
-            "after {} of {} bytes",
-            first_word().len(),
-            BODY.len()
-        )) || said.contains("connection closed before completion"),
-        "the cut is the cause, with the bytes it reached: {said}"
+        said.contains(&format!("asking for the rest from byte {cut}")),
+        "the cut is said with the byte the rest is asked from: {said}"
+    );
+    assert!(
+        said.contains(&format!("refused the byte range beginning at {cut}")),
+        "the dependency's refusal of the range is the cause: {said}"
     );
     let seen = requests.lock().expect("the request log is not poisoned");
     match seen.as_slice() {
-        [only] => assert!(
-            only.starts_with("GET /api/object"),
-            "the one request is the object GET: {only}"
-        ),
+        [first, rest] => {
+            assert!(
+                first.line.starts_with("GET /api/object") && first.range.is_none(),
+                "the first request is the object GET, whole: {first:?}"
+            );
+            assert!(
+                rest.line.starts_with("GET /api/object"),
+                "the second request is the object GET: {rest:?}"
+            );
+            let from_cut = format!("bytes={cut}-");
+            assert!(
+                rest.range.as_deref().is_some_and(|range| range.starts_with(&from_cut)),
+                "the second request asks for the rest from the byte the cut reached: {rest:?}"
+            );
+        }
         asked => panic!(
-            "the dependency is asked once; a cut body is not answered by asking again: {asked:?}"
+            "the dependency is asked for the object and once for the rest, never a third time: \
+             {asked:?}"
         ),
     }
 }
