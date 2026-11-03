@@ -71,7 +71,9 @@ try {
   mkdirSync(join(home, '.stado'), { recursive: true });
   const installed = JSON.parse(success(run(binary,
     ['product', '--workspace', workspace, '--catalog', catalog, 'install', 'stado', '--surface', 'cli', '--source-commit', commit],
-    { ...pinnedGit, HOME: home })));
+    // The isolated home's ~/.local/bin leads PATH, or the finish refuses to
+    // change which `stado` the person's own ~/.local/bin runs.
+    { ...pinnedGit, HOME: home, PATH: `${join(home, '.local/bin')}:${process.env.PATH}` })));
   report.installed = installed;
   const where = installed.extra?.catalog ?? installed.catalog;
   assert.ok(where, 'the install report names the catalog it executed');

@@ -22,8 +22,10 @@ const home = join(output, 'home');
 mkdirSync(home, { recursive: true });
 const ciRecord = process.env.STADO_CI_MAIN_RECORD
   ? process.env.STADO_CI_MAIN_RECORD : join(process.env.HOME, '.stado', 'ci-main.json');
+// The isolated home's ~/.local/bin leads PATH, or each finish refuses to
+// change which `stado` the person's own ~/.local/bin runs.
 const environment = { ...process.env, ...pinnedGit, HOME: home, WISENT_WORKSPACE: dirname(root),
-  STADO_CI_MAIN_RECORD: ciRecord };
+  STADO_CI_MAIN_RECORD: ciRecord, PATH: `${join(home, '.local/bin')}:${process.env.PATH}` };
 const report = { result: 'failed', source_revision: revision, host, ci_record: ciRecord, commands: [] };
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 function run(arguments_, env = environment) {
