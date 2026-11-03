@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { isolatedPath } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real qualification of a host updating its products by itself, through the
@@ -49,7 +50,7 @@ writeFileSync(gitConfig, [
 ].join('\n'));
 const environment = {
   ...process.env, HOME: home, GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: '1',
-  WISENT_WORKSPACE: workspace, PATH: `${join(home, '.local/bin')}:${process.env.PATH}`,
+  WISENT_WORKSPACE: workspace, PATH: isolatedPath(home),
 };
 function run(program, args, cwd = output) {
   const answer = spawnSync(program, args, { cwd, env: environment, encoding: 'utf8' });

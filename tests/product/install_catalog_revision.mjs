@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { pinnedGit } from '../native/home.mjs';
+import { isolatedPath, pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real qualification of where an installation of Stado reads its
@@ -73,7 +73,7 @@ try {
     ['product', '--workspace', workspace, '--catalog', catalog, 'install', 'stado', '--surface', 'cli', '--source-commit', commit],
     // The isolated home's ~/.local/bin leads PATH, or the finish refuses to
     // change which `stado` the person's own ~/.local/bin runs.
-    { ...pinnedGit, HOME: home, PATH: `${join(home, '.local/bin')}:${process.env.PATH}` })));
+    { ...pinnedGit, HOME: home, PATH: isolatedPath(home) })));
   report.installed = installed;
   const where = installed.extra?.catalog ?? installed.catalog;
   assert.ok(where, 'the install report names the catalog it executed');

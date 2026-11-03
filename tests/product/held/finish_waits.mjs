@@ -3,7 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { pinnedGit } from '../../native/home.mjs';
+import { isolatedPath, pinnedGit } from '../../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 
 // Real journey of the handoff an installation of Stado itself makes: its
@@ -39,7 +39,7 @@ mkdirSync(join(home, '.stado'), { recursive: true });
 // there and refuses an install that would change which `stado` PATH runs, so
 // with the person's own ~/.local/bin first every finish was refused and the
 // handoff this journey proves never ran to its end.
-const env = { ...process.env, ...pinnedGit, HOME: home, PATH: `${join(home, '.local/bin')}:${process.env.PATH}` };
+const env = { ...process.env, ...pinnedGit, HOME: home, PATH: isolatedPath(home) };
 const report = { started_at: new Date().toISOString(), source, commit, workspace, commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function run(program, args) {

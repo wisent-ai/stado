@@ -1,5 +1,5 @@
 // What every journey that runs a program with HOME set to an isolated
-// directory spreads first into that program's environment.
+// directory spreads into that program's environment.
 //
 // Git reads its global configuration from $HOME/.gitconfig. Under an
 // isolated HOME it found none, fell back to the system file's
@@ -15,9 +15,21 @@
 // keeps it; GIT_CONFIG_NOSYSTEM then still keeps the system helper away.
 
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 
 export const pinnedGit = Object.freeze({
   GIT_CONFIG_GLOBAL: join(homedir(), '.gitconfig'),
   GIT_CONFIG_NOSYSTEM: '1',
 });
+
+// The PATH a Stado that installs into the isolated `home` runs under: that
+// home's ~/.local/bin and ~/.stado/bin first, and the person's own ones left
+// out. An installation's finish refuses to place a program that would change
+// what a name on PATH runs, so with the person's ~/.local/bin anywhere on
+// PATH (a login shell lists it several times) every finish in an isolated
+// home was refused with "would change the meaning of 'stado' on PATH".
+export function isolatedPath(home, inherited = process.env.PATH ?? '') {
+  const own = [join(homedir(), '.local/bin'), join(homedir(), '.stado/bin')];
+  const rest = inherited.split(delimiter).filter(directory => directory && !own.includes(directory));
+  return [join(home, '.local/bin'), join(home, '.stado/bin'), ...rest].join(delimiter);
+}
