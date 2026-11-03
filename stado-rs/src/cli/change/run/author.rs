@@ -5,8 +5,11 @@
 //! entered in that queue as staged by the session that submitted it (the
 //! operator when none did), and the reviewer's rounds are judged against
 //! that author. Oko keeps one open entry per author, so an author whose
-//! earlier entry still waits for its round is not entered again; the review
-//! runs either way and its record says why the author was not entered.
+//! earlier entry still waits for its round is not entered again: then no
+//! review runs, since Tama would judge the tree as written by the session
+//! running the pass, and the candidate leaves the head of the queue saying
+//! which entry holds its author. A machine without Oko has no queue to enter
+//! the author in; there the review runs and its record says so.
 
 use std::path::Path;
 
@@ -14,9 +17,21 @@ use crate::cli::change::git::git;
 use crate::cli::CmdError;
 use crate::deploy::host_exec::{installed_program, OKO_CLI};
 
+/// Whether the candidate's author was entered before its review.
+pub enum Declared {
+    /// Entered: Tama reads the author from Oko's queue.
+    Entered,
+    /// Oko is not installed or did not run, so no queue holds authors; the
+    /// review runs with the invoking session as author, and this says why.
+    NoQueue(String),
+    /// Oko refused the entry (its author already holds an open one); no
+    /// review may run, and this says why.
+    Refused(String),
+}
+
 /// Enter `tree`, the tree of `commit` in `checkout`, with the message in
 /// `message`, in Oko's harsh-review queue as staged by `author` and
-/// repairing `defect`: `None` when it was entered, else why it was not.
+/// repairing `defect`.
 pub async fn declare(
     checkout: &Path,
     commit: &str,
@@ -24,13 +39,13 @@ pub async fn declare(
     message: &Path,
     defect: &str,
     author: Option<&str>,
-) -> Result<Option<String>, CmdError> {
+) -> Result<Declared, CmdError> {
     let parent = git(checkout, &["rev-parse", &format!("{commit}^")]).await?;
     let author = author.unwrap_or("operator");
     let shown = format!("oko review harsh enqueue --tree {tree} --author {author}");
     let oko = match installed_program(OKO_CLI) {
         Ok(oko) => oko,
-        Err(missing) => return Ok(Some(format!("{shown} cannot run: {missing}"))),
+        Err(missing) => return Ok(Declared::NoQueue(format!("{shown} cannot run: {missing}"))),
     };
     let mut command = tokio::process::Command::new(oko);
     command
@@ -50,10 +65,10 @@ pub async fn declare(
     .await;
     let output = match output {
         Ok(output) => output,
-        Err(error) => return Ok(Some(format!("{shown} did not run: {error}"))),
+        Err(error) => return Ok(Declared::NoQueue(format!("{shown} did not run: {error}"))),
     };
     if output.status.success() {
-        return Ok(None);
+        return Ok(Declared::Entered);
     }
     // Oko's own words, without the wait mechanism's lines.
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -65,7 +80,7 @@ pub async fn declare(
                 .any(|wait| line.starts_with(wait))
         })
         .collect();
-    Ok(Some(format!(
+    Ok(Declared::Refused(format!(
         "{shown} refused ({}): {}",
         output.status,
         said.join(" ").trim()

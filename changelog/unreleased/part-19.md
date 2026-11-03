@@ -421,3 +421,8 @@ The version bump gathers them into the release's own file and removes this one.
   `catalog/products.yml`, so a checkout older than a field the catalog now requires refused every
   Cargo build of every product with `ster names no star_repository`. They now read the catalog an
   installation reads: the checkout's committed head, or `origin/main` when the head is behind it.
+- **No harsh review runs for a candidate whose author Oko refused to enter:** when Oko's
+  harsh-review queue already held an open entry for the submitting session, `stado change run`
+  ran the review anyway and Tama judged the tree as written by the session running the pass. The
+  pass now runs no review then: the candidate leaves the head of the queue with `no-round`, naming
+  the entry that holds its author. A machine without Oko still runs the review and says so.

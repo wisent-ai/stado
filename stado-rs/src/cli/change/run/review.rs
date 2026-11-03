@@ -120,7 +120,8 @@ pub async fn review(
     let author = candidate.session.as_deref();
     let result = match prepared(checkout, &repository, commit).await {
         Ok(index) => {
-            match reviewed(&repository, &index, &message, (defect, author), commit, tree).await {
+            let repositories = (checkout.as_path(), repository.as_path());
+            match reviewed(repositories, &index, &message, (defect, author), commit, tree).await {
                 Ok(reviewed) if reviewed.staged == tree && !reviewed.rewritten => {
                     Ok((reviewed, None))
                 }
@@ -351,29 +352,48 @@ async fn brought(checkout: &Path, repository: &Path, repairs: &str) -> Result<()
 
 /// Run the reviewer in `repository` over `tree` staged in `index`, with
 /// `commit`'s message in `message`, `defect` its scope and `author` the
-/// session it is judged as written by.
+/// session it is judged as written by, entered in Oko's queue against
+/// `checkout`, the repository the candidate lands in. An author Oko refuses
+/// to enter gets no review: Tama would judge the tree as written by the
+/// session running the pass, so the reviewer's round would count for nobody.
 async fn reviewed(
-    repository: &Path,
+    (checkout, repository): (&Path, &Path),
     index: &Path,
     message: &Path,
     (defect, author): (&str, Option<&str>),
     commit: &str,
     tree: &str,
 ) -> Result<Reviewed, CmdError> {
-    let checkout = repository;
     let env = [("GIT_INDEX_FILE", index.display().to_string())];
-    let read = ran_with(checkout, &["read-tree", tree], None, &env).await?;
+    let read = ran_with(repository, &["read-tree", tree], None, &env).await?;
     if !read.success {
         return Err(CmdError::click(format!(
             "git read-tree {tree} failed: {}",
             read.stderr.trim()
         )));
     }
-    let text = git(checkout, &["log", "-1", "--format=%B", commit]).await?;
+    let text = git(repository, &["log", "-1", "--format=%B", commit]).await?;
     std::fs::write(message, &text)
         .map_err(|error| CmdError::click(format!("cannot write {}: {error}", message.display())))?;
     let undeclared =
-        super::author::declare(checkout, commit, tree, message, defect, author).await?;
+        match super::author::declare(checkout, commit, tree, message, defect, author).await? {
+            super::author::Declared::Entered => None,
+            super::author::Declared::NoQueue(why) => Some(why),
+            super::author::Declared::Refused(why) => {
+                return Ok(Reviewed {
+                    admitted: false,
+                    round: false,
+                    answer: format!(
+                        "no review ran: the candidate's author was not entered in Oko's \
+                         harsh-review queue, so Tama would judge the tree as written by the \
+                         session running the pass: {why}"
+                    ),
+                    staged: tree.to_string(),
+                    rewritten: false,
+                    message: text,
+                });
+            }
+        };
     let shown = format!("tama reviews harsh run --defect {defect} over {tree}");
     let tama = installed_program(TAMA_CLI)
         .map_err(|missing| CmdError::click(format!("tama cannot run: {missing}")))?;
@@ -382,8 +402,8 @@ async fn reviewed(
         .args(["reviews", "harsh", "run", "--message"])
         .arg(message)
         .args(["--defect", defect, "--repository"])
-        .arg(checkout)
-        .current_dir(checkout)
+        .arg(repository)
+        .current_dir(repository)
         .env("GIT_INDEX_FILE", index)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(std::process::Stdio::null())
@@ -391,7 +411,7 @@ async fn reviewed(
     let output = crate::wait::until(
         crate::wait::Kind::Process,
         &shown,
-        checkout.display(),
+        repository.display(),
         command.output(),
     )
     .await
@@ -421,7 +441,7 @@ async fn reviewed(
              pass as its author: {why}\n{answer}"
         );
     }
-    let staged = ran_with(checkout, &["write-tree"], None, &env).await?;
+    let staged = ran_with(repository, &["write-tree"], None, &env).await?;
     if !staged.success {
         return Err(CmdError::click(format!(
             "git write-tree of the reviewed index failed: {}",
