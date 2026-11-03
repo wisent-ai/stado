@@ -1,8 +1,12 @@
 //! The skrzynka alert channel, through the real `stado` binary and the real
 //! `skrzynka` on PATH, against one isolated deployment: a local store holding
-//! a registry, Skrzynka's database under the deployment's own home, and
-//! Skrzynka's credentials file (absent, so holding no item) in place of a
-//! Skarbiec.
+//! a registry, and Skrzynka's credentials file (absent, so holding no item)
+//! in place of a Skarbiec. Skrzynka keeps its rows in the fleet database
+//! `skrzynka`, reached through the Stado and bearer of the account running
+//! it, so its commands name that account's home in `SKRZYNKA_FLEET_HOME`, as
+//! Skrzynka states for a caller that gives it another HOME; every row the
+//! journey reads is scoped to an organization it makes up, so no other row is
+//! read or written.
 //!
 //! The operator's choice is the skrzynka channel. With no mailbox declared the
 //! page is refused naming the missing keys. With the keys naming a mailbox the
@@ -61,6 +65,10 @@ impl Deployment {
             .env(
                 "SKRZYNKA_CREDENTIALS_FILE",
                 self.root.join("skrzynka-credentials.json"),
+            )
+            .env(
+                "SKRZYNKA_FLEET_HOME",
+                std::env::home_dir().expect("the account running the journey has a home"),
             )
             .stdin(Stdio::null());
         command
