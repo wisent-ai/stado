@@ -10,7 +10,7 @@ mod labels;
 mod process;
 mod unowned;
 
-pub(crate) use arguments::process_arguments;
+pub(crate) use arguments::{process_arguments, process_home};
 pub use declared::*;
 pub use derived::*;
 pub use images::*;

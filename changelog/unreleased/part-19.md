@@ -515,3 +515,9 @@ The version bump gathers them into the release's own file and removes this one.
   `running/` after four days, and each host pass downloaded all of them to list the live jobs. The
   host pass now deletes every sentinel whose job has settled in a terminal prefix, as the fleet
   reaper does, and says each sweep that retired something.
+- **The health pass ends only its own home's stray roles:** it judged every `stado serve` on the
+  machine against its own role locks and installed binary, so a test journey's isolated
+  deployment, run under a HOME of its own, held no lock here and ran a checkout's build, and the
+  resident killed it with SIGKILL within seconds: the host-routine journey could never see its
+  routine fire. A role process started under another HOME, or whose environment cannot be read,
+  is now left to that home's own pass; the home is read from the kernel's record of the process.

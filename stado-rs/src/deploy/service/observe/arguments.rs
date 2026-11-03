@@ -1,8 +1,32 @@
 //! Kernel arguments for local process lifecycle decisions. Rendered `ps`
 //! command lines cannot distinguish an argument from words inside its value.
+//! The same kernel record carries the process's environment, from which
+//! [`process_home`] reads the home it runs under.
 
 pub(crate) fn process_arguments(pid: u32) -> Result<Vec<String>, String> {
-    read_arguments(pid).map_err(|error| format!("reading argument vector for PID {pid}: {error}"))
+    read_record(pid)
+        .map(|record| record.arguments)
+        .map_err(|error| format!("reading argument vector for PID {pid}: {error}"))
+}
+
+/// The `HOME` process `pid` was started with, `None` when its environment
+/// names none. A process this account cannot read (another user's) is the
+/// error, never read as homeless.
+pub(crate) fn process_home(pid: u32) -> Result<Option<std::path::PathBuf>, String> {
+    let record =
+        read_record(pid).map_err(|error| format!("reading the environment of PID {pid}: {error}"))?;
+    Ok(record
+        .environment
+        .iter()
+        .find_map(|entry| entry.strip_prefix("HOME="))
+        .filter(|home| !home.is_empty())
+        .map(std::path::PathBuf::from))
+}
+
+/// One process's argument vector and environment, as the kernel holds them.
+struct Record {
+    arguments: Vec<String>,
+    environment: Vec<String>,
 }
 
 fn argument(bytes: &[u8]) -> Result<String, String> {
@@ -10,18 +34,38 @@ fn argument(bytes: &[u8]) -> Result<String, String> {
         .map_err(|error| format!("kernel argument is not UTF-8: {}", error.utf8_error()))
 }
 
+/// An environment entry; one that is not UTF-8 is kept lossily, since an
+/// entry this reader does not look for must not refuse the read of the one
+/// it does.
+fn variable(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 #[cfg(target_os = "linux")]
-fn read_arguments(pid: u32) -> Result<Vec<String>, String> {
+fn read_record(pid: u32) -> Result<Record, String> {
     let path = format!("/proc/{pid}/cmdline");
     let bytes = std::fs::read(&path).map_err(|error| format!("{path}: {error}"))?;
     let arguments = bytes.strip_suffix(&[0]).ok_or_else(|| {
         format!("{path} contains no complete argument vector; refusing a lifecycle decision")
     })?;
-    arguments.split(|byte| *byte == 0).map(argument).collect()
+    let arguments = arguments
+        .split(|byte| *byte == 0)
+        .map(argument)
+        .collect::<Result<_, _>>()?;
+    let path = format!("/proc/{pid}/environ");
+    let environment = std::fs::read(&path).map_err(|error| format!("{path}: {error}"))?;
+    Ok(Record {
+        arguments,
+        environment: environment
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(variable)
+            .collect(),
+    })
 }
 
 #[cfg(target_os = "macos")]
-fn read_arguments(pid: u32) -> Result<Vec<String>, String> {
+fn read_record(pid: u32) -> Result<Record, String> {
     use nix::libc;
     use std::mem::size_of;
     use std::ptr;
@@ -94,7 +138,20 @@ fn read_arguments(pid: u32) -> Result<Vec<String>, String> {
     for _ in 0..count {
         arguments.push(argument(take_string(&mut remaining)?)?);
     }
-    Ok(arguments)
+    // The environment follows the arguments, NUL-terminated strings ending at
+    // the first empty one or at the end of what the kernel returned.
+    let mut environment = Vec::new();
+    while let Some(end) = remaining.iter().position(|byte| *byte == 0) {
+        if end == 0 {
+            break;
+        }
+        environment.push(variable(&remaining[..end]));
+        remaining = &remaining[end + 1..];
+    }
+    Ok(Record {
+        arguments,
+        environment,
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -109,6 +166,6 @@ fn take_string<'a>(remaining: &mut &'a [u8]) -> Result<&'a [u8], String> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn read_arguments(_pid: u32) -> Result<Vec<String>, String> {
+fn read_record(_pid: u32) -> Result<Record, String> {
     Err("native process arguments are unsupported on this operating system".to_string())
 }
