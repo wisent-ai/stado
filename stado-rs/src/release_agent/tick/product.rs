@@ -122,11 +122,19 @@ pub(crate) async fn reconcile_product(
         // candidate, and the desired digest would stay refused on every pass
         // until a person cleared it — a release plane dead for days over one
         // three-second probe.
+        let ports: Vec<u16> = serving
+            .stable_bind
+            .parse::<std::net::SocketAddr>()
+            .ok()
+            .map(|bind| bind.port())
+            .into_iter()
+            .chain(serving.candidate_ports)
+            .collect();
         let verdict = retire_host_caused_quarantine(
             &target.state_dir,
-            target_name,
-            product,
+            (target_name, product),
             &artifact.artifact_sha256,
+            &ports,
             &mut state,
         )?;
         if !matches!(verdict, RetireVerdict::Retire(_)) {

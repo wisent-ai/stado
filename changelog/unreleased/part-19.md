@@ -464,3 +464,10 @@ The version bump gathers them into the release's own file and removes this one.
   installation that finds another still running its after-install steps now lets the lock go and
   waits for that process to end (a `czekam:` process wait ended by the kernel's exit report), then
   takes the lock again.
+- **A release quarantined for a taken port is rolled out again once its ports are free:** a digest
+  quarantined for `stable_bind_occupied` stayed refused until a person cleared it, so a vault's
+  release stayed quarantined with its stable bind and both candidate ports free and every vault
+  read refused. The release agent now asks the kernel who listens on those ports on each pass:
+  with none but the release's own active process, it retires the record itself, writes its line in
+  the audit trail and rolls the digest out again; while one is taken, `detail` names the pid and
+  port.

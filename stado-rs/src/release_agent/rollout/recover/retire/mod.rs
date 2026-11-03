@@ -69,6 +69,9 @@ pub enum RetireVerdict {
         best: HostRoom,
         now: HostRoom,
     },
+    /// The record says another process held the release's port, and one
+    /// still does (or who does could not be read): the holder.
+    BindHeld(String),
 }
 
 impl RetireVerdict {
@@ -102,13 +105,21 @@ impl RetireVerdict {
                 best.described(),
                 now.described()
             ),
+            Self::BindHeld(holder) => format!(
+                "desired release digest is quarantined on this host for stable_bind_occupied, \
+                 and the release's ports are still taken ({holder}); the agent retires the \
+                 record by itself once no other process listens on them. Name the holder with \
+                 stado service serving <product> --host <host>"
+            ),
         }
     }
 }
 
 /// The decision itself, with the audit trail's answer already in hand:
 /// `previous` is when this digest was last retired automatically and the
-/// most room any of its retirements had, `now` the host's room this pass.
+/// most room any of its retirements had, `now` the host's room this pass,
+/// and `bind_held` who holds the release's ports now (see
+/// [`PortsNow`]).
 ///
 /// Record interpretation is independent of file I/O, which remains with
 /// the caller.
@@ -116,8 +127,23 @@ pub fn retire_verdict(
     record: &QuarantineRecord,
     previous: Option<(DateTime<Utc>, HostRoom)>,
     now: HostRoom,
+    bind_held: &PortsNow,
 ) -> RetireVerdict {
     let cause = record.classification().cause;
+    // A port another process held is a fact of the host at that moment, not
+    // of the release's bytes: once no other process holds any of the
+    // release's ports, the wall it hit is gone. Held until a person cleared
+    // it, a vault's release stayed quarantined with every one of its ports
+    // free and every vault read refused.
+    if cause == QuarantineCause::StableBindOccupied {
+        return match bind_held {
+            PortsNow::Free => RetireVerdict::Retire(cause),
+            PortsNow::Held(holder) => RetireVerdict::BindHeld(holder.clone()),
+            PortsNow::Unread(why) => RetireVerdict::BindHeld(format!(
+                "who holds its ports could not be read: {why}"
+            )),
+        };
+    }
     if cause.holds_the_candidate() {
         return RetireVerdict::CandidateHeld(cause);
     }
@@ -131,6 +157,39 @@ pub fn retire_verdict(
         }
     }
     RetireVerdict::Retire(cause)
+}
+
+/// Who holds a release's loopback ports (its stable bind and both candidate
+/// ports) now, besides its own active process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PortsNow {
+    /// No other process listens on any of them.
+    Free,
+    /// Another process listens on one: the port and the pid.
+    Held(String),
+    /// The kernel could not be asked; nothing is retired on that.
+    Unread(String),
+}
+
+impl PortsNow {
+    /// Read `ports` with `listener`, leaving out `own`, the pid of the
+    /// release's active process.
+    pub fn read(
+        ports: &[u16],
+        own: Option<i32>,
+        listener: impl Fn(u16) -> Result<Option<i32>, String>,
+    ) -> Self {
+        for port in ports {
+            match listener(*port) {
+                Ok(Some(pid)) if Some(pid) != own => {
+                    return Self::Held(format!("pid {pid} listens on port {port}"))
+                }
+                Ok(_) => {}
+                Err(why) => return Self::Unread(why),
+            }
+        }
+        Self::Free
+    }
 }
 
 /// When this agent last retired that exact digest, and the most room any of
@@ -259,16 +318,18 @@ fn record_retirement(
 }
 
 /// Retire the desired digest's quarantine when its cause was the host's, and
-/// say what was decided either way.
+/// say what was decided either way. `ports` are the release's loopback ports
+/// on this host (its stable bind and candidate ports), read for a record of
+/// a port another process held.
 ///
 /// The state document is left to the caller to save: this runs inside one
 /// product's reconcile pass, which already holds that lock and commits the
 /// document once.
 pub fn retire_host_caused_quarantine(
     state_dir: &str,
-    target_name: &str,
-    product: &str,
+    (target_name, product): (&str, &str),
     digest: &str,
+    ports: &[u16],
     state: &mut HostReleaseState,
 ) -> Result<RetireVerdict, String> {
     let Some(record) = state.quarantined.get(digest).cloned() else {
@@ -277,10 +338,18 @@ pub fn retire_host_caused_quarantine(
         ));
     };
     let room = HostRoom::read(state_dir);
+    let own = state.active.as_ref().map(|active| active.pid);
+    let bind_held = match record.classification().cause {
+        QuarantineCause::StableBindOccupied => PortsNow::read(ports, own, |port| {
+            crate::release_agent::rollout::processes::inventory::listener_pid(Some(port))
+        }),
+        _ => PortsNow::Free,
+    };
     let verdict = retire_verdict(
         &record,
         last_auto_retirement(state_dir, product, digest)?,
         room,
+        &bind_held,
     );
     if let RetireVerdict::Retire(cause) = verdict {
         let audited_at = Utc::now();
