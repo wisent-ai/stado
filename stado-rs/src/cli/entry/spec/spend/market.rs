@@ -85,6 +85,12 @@ pub(crate) enum MarketCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Payouts a source made in a token, kept with the rate each is valued
+    /// at: `record` keeps one as the source's own statement states it,
+    /// `list` prints them with their US-dollar value. A payout with no
+    /// declared rate is kept and printed as unpriced, never at a guess.
+    #[command(subcommand)]
+    Payout(PayoutCommands),
     /// What the marketplace asks for a board model right now: the number of
     /// rentable one-board on-demand offers and what a renter pays per hour
     /// (lowest, median, highest), read from the public offer search, which
@@ -293,6 +299,45 @@ pub(crate) enum PeerCommands {
     /// One declared peer, with this host's offer to it.
     Show {
         name: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum PayoutCommands {
+    /// Keep one payout a source stated.
+    Record {
+        /// The source's id in `stado market sources`.
+        #[arg(long)]
+        source: String,
+        /// The registry host the payout is for.
+        #[arg(long)]
+        host: String,
+        /// When it was paid, RFC 3339.
+        #[arg(long = "paid-at")]
+        paid_at: String,
+        /// The token it was paid in.
+        #[arg(long)]
+        token: String,
+        #[arg(long)]
+        amount: f64,
+        /// The US dollars one unit was worth, with --as-of and --rate-source.
+        #[arg(long = "usd-per-unit")]
+        usd_per_unit: Option<f64>,
+        /// The date of that rate.
+        #[arg(long = "as-of")]
+        as_of: Option<String>,
+        /// The published table the rate was read from.
+        #[arg(long = "rate-source")]
+        rate_source: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print every kept payout, or one host's, with its US-dollar value.
+    List {
+        #[arg(long)]
+        host: Option<String>,
         #[arg(long)]
         json: bool,
     },

@@ -173,3 +173,8 @@ The version bump gathers them into the release's own file and removes this one.
   unit, currency, join page and Stado adapter; `stado market sources [--check] [--json]` prints it
   and `--check` reports each source whose page no longer answers. Desktop's Registry screen runs it
   and `stado market measure`.
+- **`stado market payout` keeps income paid in tokens with the rate it is valued at:** sources that
+  pay in their own token had nowhere to record a payout or its value. `stado market payout record
+  --source S --host H --paid-at T --token K --amount N [--usd-per-unit R --as-of D --rate-source U]`
+  keeps one in the fleet store; `stado market payout list [--host H]` prints each with its US-dollar
+  value and the total. A payout with no declared rate is kept and printed as unpriced, naming why.

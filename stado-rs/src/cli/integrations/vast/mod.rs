@@ -12,6 +12,7 @@
 #[path = "earnings.rs"]
 mod earnings;
 mod measure;
+mod payout;
 mod readiness;
 mod readiness_text;
 mod sources;
@@ -20,7 +21,7 @@ pub(crate) use readiness::read_vault;
 
 use serde_json::json;
 
-use crate::cli::{CmdError, MarketCommands, MarketProvider};
+use crate::cli::{CmdError, MarketCommands, MarketProvider, PayoutCommands};
 use crate::providers::vast::{self, AutoListParams, ListMachineParams, VastClient, VastError};
 use crate::queue::JobStorage;
 
@@ -29,9 +30,39 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
     if let MarketCommands::Peer(peer) = command {
         return super::peer::declare(peer).await;
     }
-    // The source list spans every marketplace, so no provider is named.
+    // The source list and payouts span every marketplace, so no provider is
+    // named.
     if let MarketCommands::Sources { check, json } = command {
         return sources::sources(*check, *json).await;
+    }
+    if let MarketCommands::Payout(payout) = command {
+        return match payout {
+            PayoutCommands::Record {
+                source,
+                host,
+                paid_at,
+                token,
+                amount,
+                usd_per_unit,
+                as_of,
+                rate_source,
+                json,
+            } => {
+                payout::record(
+                    source,
+                    host,
+                    paid_at,
+                    token,
+                    *amount,
+                    *usd_per_unit,
+                    as_of.as_deref(),
+                    rate_source.as_deref(),
+                    *json,
+                )
+                .await
+            }
+            PayoutCommands::List { host, json } => payout::list(host.as_deref(), *json).await,
+        };
     }
     if provider(command) == Some(MarketProvider::Stado) {
         return super::peer::dispatch(command).await;
@@ -113,7 +144,9 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             .await
         }
         MarketCommands::Peer(_) => unreachable!("peer declarations were answered above"),
-        MarketCommands::Sources { .. } => unreachable!("the source list was answered above"),
+        MarketCommands::Sources { .. } | MarketCommands::Payout(_) => {
+            unreachable!("the source list and payouts were answered above")
+        }
     }
 }
 
@@ -131,7 +164,7 @@ pub(crate) fn provider(command: &MarketCommands) -> Option<MarketProvider> {
         | MarketCommands::Monitor { provider, .. }
         | MarketCommands::Follow { provider, .. } => Some(*provider),
         MarketCommands::Peer(_) => Some(MarketProvider::Stado),
-        MarketCommands::Sources { .. } => None,
+        MarketCommands::Sources { .. } | MarketCommands::Payout(_) => None,
     }
 }
 
@@ -147,7 +180,9 @@ fn peer_named(command: &MarketCommands) -> bool {
         | MarketCommands::Readiness { peer, .. }
         | MarketCommands::Monitor { peer, .. }
         | MarketCommands::Follow { peer, .. } => peer.is_some(),
-        MarketCommands::Peer(_) | MarketCommands::Sources { .. } => false,
+        MarketCommands::Peer(_) | MarketCommands::Sources { .. } | MarketCommands::Payout(_) => {
+            false
+        }
     }
 }
 
