@@ -168,6 +168,15 @@ pub async fn deliver_document(
             object.insert("link".to_string(), serde_json::to_value(&link)?);
             object.insert("scans".to_string(), scans);
             object.insert("hours".to_string(), hours);
+            // A publisher on a period asks for the next tailnet read beside
+            // it (none starts while one runs) and says what the client did.
+            if period.is_some() {
+                crate::remote::tailnet::read_beside();
+            }
+            object.insert(
+                "tailscale_client".to_string(),
+                crate::remote::tailnet::client_state(),
+            );
         }
     }
     // The time by which this publisher will publish again, carried in the

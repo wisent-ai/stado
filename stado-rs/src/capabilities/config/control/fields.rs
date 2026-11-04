@@ -142,6 +142,14 @@ pub const HOST_SWAP_CEILING_PCT_CONFIG: ConfigField = ConfigField::scalar(
     "host.swap_ceiling_pct",
 );
 
+/// The paths this host's Tailscale client may be at, first file wins, in place
+/// of the platform paths `remote::tailnet` lists.
+pub const TAILNET_CLIENTS_CONFIG: ConfigField = ConfigField::list(
+    "tailnet-clients",
+    "STADO_TAILSCALE_CLIENTS",
+    "tailnet.clients",
+);
+
 pub const MACHINE_SOURCE_LIMITS_CONFIG: ConfigField = ConfigField::document(
     "machine-source-limits",
     "WC_MACHINE_SOURCE_LIMITS",

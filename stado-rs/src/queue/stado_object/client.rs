@@ -126,14 +126,18 @@ impl StadoObjectBackend {
     /// loop.
     ///
     /// One client per origin is built once per process and cloned, so its
-    /// TLS configuration, certificate trust and tailnet address pin are read
-    /// once; each request still opens its own connection ([`Self::client`]).
-    /// Tokens remain per-request headers and never belong to the client key.
+    /// TLS configuration and certificate trust are read once; each request
+    /// still opens its own connection ([`Self::client`]). The tailnet address
+    /// pin is part of the key: a long-running process reads the tailnet map
+    /// beside its roles, so a client built before the map answered carries no
+    /// pin, and the first one built after it does. Tokens remain per-request
+    /// headers and never belong to the client key.
     fn shared_client(host: &str, port: u16, ca_file: &str) -> Result<Client, StorageError> {
         static CLIENTS: std::sync::LazyLock<
             std::sync::Mutex<std::collections::HashMap<String, Client>>,
         > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-        let key = format!("{}|{host}|{port}", ca_file.trim());
+        let pinned = crate::remote::tailnet::address_of(host);
+        let key = format!("{}|{host}|{port}|{pinned:?}", ca_file.trim());
         let mut clients = match CLIENTS.lock() {
             Ok(clients) => clients,
             // A panic elsewhere left the map as it was; every entry in it is

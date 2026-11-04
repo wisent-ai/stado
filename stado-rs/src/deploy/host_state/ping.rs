@@ -267,7 +267,7 @@ fn build_report(
     if let Some(key) = key {
         ssh_check["tailnet_key"] = json!({
             "expired": key.expired,
-            "key_expiry": key.expiry,
+            "key_expiry": &key.expiry,
             "cause": key.cause(),
         });
     }

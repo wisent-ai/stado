@@ -22,7 +22,76 @@ mod supervisor;
 use start::start_roles;
 pub(crate) use supervisor::Served;
 
-pub(crate) async fn run(mut args: ServeArgs) -> Result<Served, CmdError> {
+pub(crate) async fn run(args: ServeArgs) -> Result<Served, CmdError> {
+    // The tailnet map is read beside everything serve does, never on its
+    // path: a Tailscale client that does not answer holds no step and no role.
+    crate::remote::tailnet::read_beside();
+    // The client that read started is serve's own: when serve is told to end
+    // (SIGTERM from its init system or a successor's takeover, SIGINT,
+    // SIGHUP), it ends that client first and then ends as the signal says.
+    // A serve that ends on its own path ends its client the same way.
+    let ending = until_signalled()?;
+    let served = tokio::select! {
+        served = serve(args) => served,
+        signal = ending => {
+            end_tailnet_reader().await;
+            return Err(ended_by(signal));
+        }
+    };
+    end_tailnet_reader().await;
+    served
+}
+
+/// End the tailnet reader's client, saying on stderr when it cannot be.
+async fn end_tailnet_reader() {
+    if let Err(error) = crate::remote::tailnet::end().await {
+        eprintln!("stado serve: {error}");
+    }
+}
+
+/// The future of the first ending signal this process receives, listening
+/// from the moment this returns. A signal that cannot be listened for is the
+/// error naming it, before serve starts anything.
+fn until_signalled() -> Result<impl std::future::Future<Output = nix::sys::signal::Signal>, CmdError>
+{
+    use nix::sys::signal::Signal;
+    use tokio::signal::unix::{signal, SignalKind};
+    let listen = |kind: SignalKind| {
+        signal(kind).map_err(|error| {
+            CmdError::click(format!(
+                "stado serve could not listen for the signals that end it: {error}"
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })
+    };
+    let mut terminate = listen(SignalKind::terminate())?;
+    let mut interrupt = listen(SignalKind::interrupt())?;
+    let mut hangup = listen(SignalKind::hangup())?;
+    Ok(async move {
+        tokio::select! {
+            _ = terminate.recv() => Signal::SIGTERM,
+            _ = interrupt.recv() => Signal::SIGINT,
+            _ = hangup.recv() => Signal::SIGHUP,
+        }
+    })
+}
+
+/// End this process by `signal` with its default action, as it would have
+/// ended had serve not listened for it: its init system reads the same end.
+/// Answers only when the signal could not be delivered, naming why.
+fn ended_by(signal: nix::sys::signal::Signal) -> CmdError {
+    use nix::sys::signal::{raise, sigaction, SaFlags, SigAction, SigHandler, SigSet};
+    let default = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
+    // SAFETY: the default disposition installs no handler of this program's.
+    let restored = unsafe { sigaction(signal, &default) };
+    let raised = restored.and_then(|_| raise(signal));
+    CmdError::click(match raised {
+        Ok(()) => format!("stado serve received {signal} and did not end by it"),
+        Err(errno) => format!("stado serve received {signal} and could not end by it: {errno}"),
+    })
+}
+
+async fn serve(mut args: ServeArgs) -> Result<Served, CmdError> {
     let serve_api = args.api;
     if !serve_api
         && (args.bind.is_some()

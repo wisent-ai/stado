@@ -38,9 +38,17 @@ pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
             Err(poisoned) => poisoned.into_inner(),
         }
     }
+    // Each origin with the address the tailnet pins it to now: a map read
+    // beside a long-running process answers after its first clients were
+    // built, and the client built after it carries the pin.
     let origins: Vec<String> = configured_origins()
         .into_iter()
-        .map(|(host, port)| format!("{host}:{port}"))
+        .map(|(host, port)| {
+            format!(
+                "{host}:{port}@{:?}",
+                crate::remote::tailnet::address_of(&host)
+            )
+        })
         .collect();
     let key = format!(
         "{}|{}",

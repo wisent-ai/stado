@@ -81,7 +81,9 @@ async fn run(
         }
     }
     let output = match cancellation {
-        Some(cancellation) => stado_wait::output_cancellable(&mut command, cancellation).await,
+        Some(cancellation) => {
+            stado_wait::output_cancellable(&mut command, cancellation, |_started| {}).await
+        }
         None => stado_wait::output_async(&mut command).await,
     }
     .map_err(|error| {

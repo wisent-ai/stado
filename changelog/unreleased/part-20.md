@@ -79,3 +79,21 @@ The version bump gathers them into the release's own file and removes this one.
   fix never reached the path the unit runs. A resident unit that serves none of its declared
   ports is now left as it is until the candidate is placed, then started on it, and must serve.
   `tests/install/resident/resident_unit.mjs` stalls the unit with SIGSTOP before an install.
+- **`stado serve` comes up whatever its Tailscale client does:** its start step `host identity`
+  reached the tailnet map through the store client, and the map ran `tailscale status --json` on
+  the start's path, so a client that never answered kept the API, the resolver and every role
+  after them down for as long as it ran, whatever made it not answer. Serve now reads the map
+  beside everything it does, with the same command line (`TAILSCALE_BE_CLI=true`, no input): the
+  client is started once, its wait is in `stado waits`, and until it answers every reader routes
+  as with no map. The beacon's new `tailscale_client` block says `answered`, `no_answer` (with the
+  client's pid, since when and its open waits), `failed` with the cause, or `absent`; a client
+  that never answers is reported on every beacon and is not ended on a timer, and a health pass
+  starts no second read while one runs. The client is serve's own and ends with it: it leads a
+  process group of its own, and a serve told to end (SIGTERM, SIGINT or SIGHUP) or ending on its
+  own ends that group, reaps the client and closes its wait before it exits, so no client is left
+  running under pid 1. A wait the cancellable child wait (`stado_wait::output_cancellable`) keeps
+  names the child as `pid <pid> in <directory>`. `tailnet.clients` (`STADO_TAILSCALE_CLIENTS`)
+  declares the paths a client is looked for at in place of the platform list. The object store
+  and fleet HTTPS clients a process shares are keyed by the tailnet address they pin, so the
+  first client built after the map answers carries the pin. Journey:
+  `tests/serve/provider_client_hangs.mjs`.

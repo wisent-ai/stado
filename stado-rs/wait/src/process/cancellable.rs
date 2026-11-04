@@ -139,18 +139,26 @@ impl OwnedGroup {
 /// pipes — is sent SIGKILL, the child is reaped, its pipes are read to their
 /// end (which the dead group lets happen), and only then does this return
 /// the `Interrupted` error naming the cancellation. Nothing of it is left to
-/// a drop; the wait line says the end it had (`czekanie odwolane`).
+/// a drop; the wait line says the end it had (`czekanie odwolane`), and its
+/// place names the child (`pid <pid> in <directory>`), so a reader of the
+/// register finds the wait by the child. `started` is told the child's pid
+/// once it runs, before any wait, for a caller that reports the running
+/// child; a child that could not be started tells it nothing and is the
+/// error.
 pub async fn output_cancellable(
     command: &mut tokio::process::Command,
     cancellation: &crate::Cancellation,
+    started: impl FnOnce(u32),
 ) -> std::io::Result<std::process::Output> {
     let standard = command.as_std();
-    let place = directory(standard);
+    let directory = directory(standard);
     let what = command_line(standard);
     command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let (mut child, mut group) = OwnedGroup::spawn(command)?;
+    started(group.leader);
+    let place = format!("pid {} in {directory}", group.leader);
     let waiting = crate::begin(Kind::Process, what, place);
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
