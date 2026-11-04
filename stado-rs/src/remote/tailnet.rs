@@ -271,16 +271,46 @@ pub(crate) fn address_of(host: &str) -> Option<IpAddr> {
 /// Whether `address` is any address this machine's tailnet reports for one of
 /// its nodes, including both IP families and nodes without MagicDNS names.
 /// Membership is independent of the preferred address [`address_of`] pins.
-/// An address range also admits carrier-grade NAT peers that share it. No
-/// readable Tailscale status establishes no member.
+/// An address range also admits carrier-grade NAT peers that share it, so the
+/// range never decides membership: it decides only whether the tailnet is
+/// asked at all, and an address outside it answers false without starting the
+/// Tailscale client. No readable Tailscale status establishes no member.
 pub(crate) fn is_node_address(address: IpAddr) -> bool {
-    MAP.members.contains(&address)
+    tailscale_assignable(address) && MAP.members.contains(&address)
+}
+
+/// Whether Tailscale could have assigned `address` to a node: inside its
+/// IPv4 range 100.64.0.0/10 or its IPv6 prefix fd7a:115c:a1e0::/48.
+fn tailscale_assignable(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(v4) => {
+            let [first, second, ..] = v4.octets();
+            first == 100 && (64..128).contains(&second)
+        }
+        IpAddr::V6(v6) => {
+            let segments = v6.segments();
+            segments[0] == 0xfd7a && segments[1] == 0x115c && segments[2] == 0xa1e0
+        }
+    }
+}
+
+/// Whether `host` (a name or an address as text) can only be reached through
+/// a tailnet: a MagicDNS name, or an address Tailscale assigns. Decided from
+/// the text alone, so asking it never starts the Tailscale client. Tailscale
+/// is an optional route: a host on the fleet's own network, a LAN name or any
+/// other address is never judged by the tailnet.
+fn names_tailnet(host: &str) -> bool {
+    is_magicdns_name(host) || host.parse::<IpAddr>().is_ok_and(tailscale_assignable)
 }
 
 /// The key of the node `host` names (a tailnet address as text, or a MagicDNS
 /// name), as this machine's tailnet states it; `None` for a host the tailnet
-/// does not list or when no Tailscale status could be read.
+/// does not list, for a host that is not the tailnet's (read without asking
+/// the client), or when no Tailscale status could be read.
 pub(crate) fn node_key(host: &str) -> Option<&'static NodeKey> {
+    if !names_tailnet(host) {
+        return None;
+    }
     let named = address_of(host);
     MAP.keys
         .iter()
