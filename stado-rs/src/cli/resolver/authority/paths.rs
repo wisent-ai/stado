@@ -26,12 +26,23 @@ pub(crate) fn resolved_ssh_paths(resolved: &ResolvedService) -> Vec<targets::Ssh
     reachable(paths)
 }
 
-/// `paths` without those the tailnet itself states it cannot carry, each
-/// left out named with the cause on stderr. A path through a node whose
-/// Tailscale key expired only times out; raced beside a working path it
-/// spends the read's whole deadline and hides the cause. When every path is
-/// such a one they are all kept, so the connection fails naming the expiry.
+/// The paths to race. A path that does not go through a tailnet (Stado's own
+/// network, a LAN name, any other address) is raced as declared and never
+/// asks the Tailscale client; while one such path is declared, tailnet paths
+/// stay in the race unjudged, so an outside provider's state never decides
+/// a host its own network reaches. Only when every declared path goes
+/// through a tailnet are they judged: those the tailnet states it cannot
+/// carry are left out, each named with the cause on stderr, because such a
+/// path only times out and, raced beside a working one, spends the read's
+/// whole deadline. When every path is such a one they are all kept, so the
+/// connection fails naming the expiry.
 fn reachable(paths: Vec<targets::SshConnectionPath>) -> Vec<targets::SshConnectionPath> {
+    if paths
+        .iter()
+        .any(|path| !crate::remote::tailnet::destination_names_tailnet(&path.destination))
+    {
+        return paths;
+    }
     let mut live = Vec::with_capacity(paths.len());
     let mut dead = Vec::new();
     for path in paths {

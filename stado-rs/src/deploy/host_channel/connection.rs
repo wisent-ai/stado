@@ -147,13 +147,24 @@ pub(in crate::deploy::host_channel) async fn select_connection_with_key<'a>(
         Ok(()) => None,
         Err(_outside_repair_scope) => held_reading(target)?,
     };
-    // A path through a node whose Tailscale key expired only times out; when
-    // another path remains it is left out, named with the cause, so the
-    // probe does not spend its whole timeout on it before the working one.
+    // A path that does not go through a tailnet (Stado's own network, a LAN
+    // name, any other address) is probed as declared and never asks the
+    // Tailscale client; while one is declared, tailnet paths are probed
+    // unjudged beside it, so an outside provider's state never decides a
+    // host its own network reaches. Only when every path goes through a
+    // tailnet is a path through a node whose key expired left out, named
+    // with the cause, so the probe does not spend its whole timeout on it.
     let all: Vec<SshConnection<'a>> = declared_connections(target).collect();
-    let (dead, live): (Vec<_>, Vec<_>) = all.iter().copied().partition(|connection| {
-        crate::remote::tailnet::destination_unreachable_because(connection.destination).is_some()
+    let own_path = all.iter().any(|connection| {
+        !crate::remote::tailnet::destination_names_tailnet(connection.destination)
     });
+    let (dead, live): (Vec<_>, Vec<_>) = match own_path {
+        true => (Vec::new(), all.clone()),
+        false => all.iter().copied().partition(|connection| {
+            crate::remote::tailnet::destination_unreachable_because(connection.destination)
+                .is_some()
+        }),
+    };
     let declared = match live.is_empty() {
         true => all,
         false => {

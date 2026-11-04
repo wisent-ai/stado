@@ -344,19 +344,30 @@ pub(crate) fn is_magicdns_name(host: &str) -> bool {
         .ends_with(MAGICDNS_SUFFIX)
 }
 
-/// [`unreachable_because`] for an SSH destination: `user@host`,
-/// `user@[host]:port` or a bare host.
-pub(crate) fn destination_unreachable_because(destination: &str) -> Option<String> {
+/// The host an SSH destination names: `user@host`, `user@[host]:port` or a
+/// bare host.
+fn destination_host(destination: &str) -> &str {
     let host = match destination.rsplit_once('@') {
         Some((_, host)) => host,
         None => destination,
     };
-    let host = match host.strip_prefix('[') {
+    match host.strip_prefix('[') {
         Some(bracketed) => match bracketed.split_once(']') {
             Some((inner, _)) => inner,
             None => bracketed,
         },
         None => host,
-    };
-    unreachable_because(host)
+    }
+}
+
+/// [`unreachable_because`] for an SSH destination: `user@host`,
+/// `user@[host]:port` or a bare host.
+pub(crate) fn destination_unreachable_because(destination: &str) -> Option<String> {
+    unreachable_because(destination_host(destination))
+}
+
+/// Whether an SSH destination goes through a tailnet, read from its text
+/// alone, so asking it never starts the Tailscale client.
+pub(crate) fn destination_names_tailnet(destination: &str) -> bool {
+    names_tailnet(destination_host(destination))
 }
