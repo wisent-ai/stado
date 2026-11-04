@@ -129,19 +129,48 @@ pub(crate) async fn earnings(
         .and_then(|beacon| beacon.get("hours"))
         .and_then(Value::as_object);
     let tariff = host.power_tariff();
+    // The same host's payouts from other sources in a token: each is the
+    // income of the UTC day it was paid, valued at the rate kept with it.
+    let payouts = super::payout::kept(&store, Some(&host.name)).await?;
     let rows: Vec<Value> = (since..=today)
         .map(|day| {
             let earned: Option<&EarnedDay> = stated.iter().find(|row| row.day == day);
             let cost = day_cost(hours, &tariff, day);
+            let paid: Vec<&crate::providers::payout::TokenPayout> = payouts
+                .iter()
+                .filter(|payout| {
+                    chrono::DateTime::parse_from_rfc3339(&payout.paid_at)
+                        .is_ok_and(|at| at.timestamp().div_euclid(SECONDS_PER_DAY) == day)
+                })
+                .collect();
+            let tokens_usd: f64 = paid.iter().filter_map(|payout| payout.usd().ok()).sum();
+            let unpriced: Vec<String> = paid
+                .iter()
+                .filter_map(|payout| {
+                    payout.usd().err().map(|cause| {
+                        format!(
+                            "{} {} from {}: {cause}",
+                            payout.amount, payout.token, payout.source
+                        )
+                    })
+                })
+                .collect();
             json!({
                 "date": date_of(day),
                 "day": day,
                 "earned": earned,
                 "gross": earned.map(EarnedDay::gross),
+                "payouts": paid,
+                "payouts_usd": tokens_usd,
+                "payouts_unpriced": unpriced,
                 "cost": cost.as_ref().ok(),
                 "cost_unread": cost.as_ref().err(),
+                // A day with an unpriced payout has no margin: its income is
+                // not known, and leaving the payout out would understate it.
                 "margin": match (earned, &cost) {
-                    (Some(earned), Ok(cost)) => Some(earned.gross() - cost),
+                    (Some(earned), Ok(cost)) if unpriced.is_empty() => {
+                        Some(earned.gross() + tokens_usd - cost)
+                    }
                     _ => None,
                 },
             })
@@ -169,6 +198,22 @@ pub(crate) async fn earnings(
             Some(gross) => format!("earned {gross:.2}"),
             None => "earnings not stated by Vast".to_string(),
         };
+        let tokens = match row["payouts"].as_array().map(Vec::len) {
+            Some(0) | None => String::new(),
+            Some(count) => format!(
+                "; {count} token payout(s) worth {:.2}",
+                row["payouts_usd"].as_f64().unwrap_or(0.0)
+            ),
+        };
+        let unpriced: Vec<&str> = row["payouts_unpriced"]
+            .as_array()
+            .map(|causes| causes.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let unpriced = if unpriced.is_empty() {
+            String::new()
+        } else {
+            format!("; unpriced: {}", unpriced.join("; "))
+        };
         let cost = match (row["cost"].as_f64(), row["cost_unread"].as_str()) {
             (Some(cost), _) => format!("cost {cost:.2}"),
             (None, Some(cause)) => format!("cost unread: {cause}"),
@@ -179,7 +224,7 @@ pub(crate) async fn earnings(
             None => String::new(),
         };
         println!(
-            "{} {gross}; {cost}{margin}",
+            "{} {gross}{tokens}{unpriced}; {cost}{margin}",
             row["date"].as_str().unwrap_or("?")
         );
     }

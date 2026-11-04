@@ -91,8 +91,11 @@ pub(crate) async fn record(
     Ok(())
 }
 
-pub(crate) async fn list(host: Option<&str>, json_output: bool) -> Result<(), CmdError> {
-    let store = crate::queue::JobStorage::new().await?;
+/// Every kept payout, of one host when `host` names it.
+pub(crate) async fn kept(
+    store: &crate::queue::JobStorage,
+    host: Option<&str>,
+) -> Result<Vec<TokenPayout>, CmdError> {
     let paths = store
         .list_paths(&format!("{PREFIX}/"), crate::queue::Listing::Every)
         .await?;
@@ -110,6 +113,12 @@ pub(crate) async fn list(host: Option<&str>, json_output: bool) -> Result<(), Cm
             payouts.push(payout);
         }
     }
+    Ok(payouts)
+}
+
+pub(crate) async fn list(host: Option<&str>, json_output: bool) -> Result<(), CmdError> {
+    let store = crate::queue::JobStorage::new().await?;
+    let payouts = kept(&store, host).await?;
     let total: f64 = payouts.iter().filter_map(|payout| payout.usd().ok()).sum();
     let unpriced = payouts
         .iter()
