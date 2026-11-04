@@ -11,6 +11,7 @@
 
 #[path = "earnings.rs"]
 mod earnings;
+mod measure;
 mod readiness;
 mod readiness_text;
 
@@ -57,6 +58,7 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             json,
             ..
         } => earnings::earnings(target, *since_days, *json).await,
+        MarketCommands::Measure { gpu, json, .. } => measure::measure(gpu, *json).await,
         MarketCommands::Maintenance {
             in_minutes,
             hours,
@@ -117,6 +119,7 @@ pub(crate) fn provider(command: &MarketCommands) -> MarketProvider {
         | MarketCommands::Status { provider, .. }
         | MarketCommands::Earnings { provider, .. }
         | MarketCommands::Maintenance { provider, .. }
+        | MarketCommands::Measure { provider, .. }
         | MarketCommands::Readiness { provider, .. }
         | MarketCommands::Monitor { provider, .. }
         | MarketCommands::Follow { provider, .. } => *provider,
@@ -132,6 +135,7 @@ fn peer_named(command: &MarketCommands) -> bool {
         | MarketCommands::Status { peer, .. }
         | MarketCommands::Earnings { peer, .. }
         | MarketCommands::Maintenance { peer, .. }
+        | MarketCommands::Measure { peer, .. }
         | MarketCommands::Readiness { peer, .. }
         | MarketCommands::Monitor { peer, .. }
         | MarketCommands::Follow { peer, .. } => peer.is_some(),

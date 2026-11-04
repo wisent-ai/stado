@@ -73,6 +73,24 @@ pub(crate) enum MarketCommands {
         #[arg(long)]
         json: bool,
     },
+    /// What the marketplace asks for a board model right now: the number of
+    /// rentable one-board on-demand offers and what a renter pays per hour
+    /// (lowest, median, highest), read from the public offer search, which
+    /// needs no credential. Each reading is kept in the fleet store with its
+    /// time and source, so what to sell is decided against figures.
+    Measure {
+        /// The marketplace to read.
+        #[arg(long, value_enum)]
+        provider: MarketProvider,
+        /// Taken only with --provider stado, which is refused.
+        #[arg(long)]
+        peer: Option<String>,
+        /// The board model as the marketplace spells it (e.g. "RTX PRO 6000 WS").
+        #[arg(long)]
+        gpu: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Announce to the marketplace that this host goes down for maintenance,
     /// so every renter is told to save their work before it does.
     ///

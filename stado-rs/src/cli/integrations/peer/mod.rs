@@ -87,6 +87,10 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
              host stops lending, so take the host out with `stado market unlist --provider stado \
              --peer <peer>` instead",
         )),
+        MarketCommands::Measure { .. } => Err(CmdError::refused(
+            "a Stado peer fleet publishes no market of prices; the price a peer is lent at is the \
+             one `stado market follow --provider stado --price-gpu` offers",
+        )),
         MarketCommands::Readiness {
             peer,
             vault_host,

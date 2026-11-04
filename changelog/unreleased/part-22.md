@@ -163,3 +163,7 @@ The version bump gathers them into the release's own file and removes this one.
   NVIDIA driver failed or its disk filled, so a contract broke on it and cost reliability score. The
   follow loop now reads the driver and the free space every poll; a failure unlists the host and
   sends a one-hour maintenance notice once, and the host lists again only after it clears.
+- **`stado market measure` keeps what the market pays for a board:** what to sell was chosen with no
+  recorded figure. `stado market measure --provider vast --gpu NAME` reads Vast's public offer
+  search (no key needed), prints the number of rentable one-board offers and the lowest, median and
+  highest hourly price, and keeps each reading with its time and source in the fleet store.

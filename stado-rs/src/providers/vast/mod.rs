@@ -32,6 +32,7 @@ mod client;
 mod error;
 pub mod failing;
 pub mod isolation;
+pub mod market_prices;
 
 pub use bridge::{
     auto_list_loop, decide_action, is_stado_busy, read_capacity_snapshot, AutoListAction,
