@@ -4,10 +4,14 @@
 //! worker against the peer fleet's queue while our own queue is idle, and
 //! the peer is declared with `stado market peer`.
 
-use clap::{Subcommand, ValueEnum};
+use clap::Subcommand;
 
-/// The marketplaces a listing can be placed on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+/// A marketplace Stado carries an adapter for. `--provider` takes any seller
+/// the capability catalog's `market` family declares: an implemented one
+/// becomes this value, and a declared seller without an adapter is refused
+/// naming the catalog's own note, so adding a marketplace is a catalog row
+/// and an adapter, and the commands read the family instead of a list here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MarketProvider {
     /// Vast.ai: the machine is listed through its host API with the key in
     /// the Skarbiec item `vast`, field `api_key`.
@@ -18,6 +22,47 @@ pub(crate) enum MarketProvider {
     Stado,
 }
 
+impl std::str::FromStr for MarketProvider {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        use crate::capabilities::{CapabilityKind, CapabilitySupport, ProviderId, CAPABILITIES};
+        let family = CAPABILITIES
+            .iter()
+            .find(|capability| capability.id == CapabilityKind::Market)
+            .ok_or("the capability catalog declares no market family")?;
+        let sellers: Vec<&str> = family
+            .providers
+            .iter()
+            .map(|row| row.provider.as_str())
+            .collect();
+        let provider = crate::capabilities::provider(raw)
+            .filter(|provider| family.providers.iter().any(|row| row.provider == *provider))
+            .ok_or_else(|| {
+                format!(
+                    "{raw:?} is not a seller of the market family; it declares {}",
+                    sellers.join(", ")
+                )
+            })?;
+        let row = family
+            .providers
+            .iter()
+            .find(|row| row.provider == provider)
+            .ok_or("the market family lost its own row")?;
+        match (provider, row.support) {
+            (ProviderId::Vast, CapabilitySupport::Implemented) => Ok(Self::Vast),
+            (ProviderId::Stado, CapabilitySupport::Implemented) => Ok(Self::Stado),
+            (_, support) => Err(format!(
+                "{} is declared {} in the market family ({}); Stado carries no adapter for it yet, \
+                 see `stado capabilities market`",
+                provider.as_str(),
+                support.as_str(),
+                row.note
+            )),
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub(crate) enum MarketCommands {
     /// List this fleet's machine on the marketplace at the given prices.
@@ -25,7 +70,7 @@ pub(crate) enum MarketCommands {
     /// price, for the auto-list loop that holds the peer on this host.
     List {
         /// The marketplace to list on.
-        #[arg(long, value_enum)]
+        #[arg(long)]
         provider: MarketProvider,
         /// The declared peer fleet; required with --provider stado and
         /// refused with any other provider.
@@ -49,7 +94,7 @@ pub(crate) enum MarketCommands {
     /// auto-list loop stops lending at its next poll.
     Unlist {
         /// The marketplace to withdraw from.
-        #[arg(long, value_enum)]
+        #[arg(long)]
         provider: MarketProvider,
         /// The declared peer fleet; required with --provider stado.
         #[arg(long)]
@@ -64,7 +109,7 @@ pub(crate) enum MarketCommands {
     /// queue.
     Status {
         /// The marketplace to ask.
-        #[arg(long, value_enum)]
+        #[arg(long)]
         provider: MarketProvider,
         /// The declared peer fleet (--provider stado).
         #[arg(long)]
@@ -98,7 +143,7 @@ pub(crate) enum MarketCommands {
     /// measure` reading. Names the larger, and every figure it could not read.
     ServeOrRent {
         /// The marketplace whose rental price is compared.
-        #[arg(long, value_enum)]
+        #[arg(long)]
         provider: MarketProvider,
         /// Taken only with --provider stado, which is refused.
         #[arg(long)]
@@ -126,7 +171,7 @@ pub(crate) enum MarketCommands {
     /// time and source, so what to sell is decided against figures.
     Measure {
         /// The marketplace to read.
-        #[arg(long, value_enum)]
+        #[arg(long)]
         provider: MarketProvider,
         /// Taken only with --provider stado, which is refused.
         #[arg(long)]
@@ -146,7 +191,7 @@ pub(crate) enum MarketCommands {
     /// or deployment that stops a listed host.
     Maintenance {
         /// The marketplace to tell.
-        #[arg(long, value_enum)]
+        #[arg(long)]
         provider: MarketProvider,
         /// Taken only with --provider stado, which is refused.
         #[arg(long)]
@@ -174,7 +219,7 @@ pub(crate) enum MarketCommands {
     /// <day>.json`), so the ledger outlives the marketplace's own window.
     Earnings {
         /// The marketplace to read.
-        #[arg(long, value_enum)]
+        #[arg(long)]
         provider: MarketProvider,
         /// Taken only with --provider stado, which is refused.
         #[arg(long)]
@@ -195,7 +240,7 @@ pub(crate) enum MarketCommands {
     /// accepts the credential.
     Readiness {
         /// The marketplace to check.
-        #[arg(long, value_enum)]
+        #[arg(long)]
         provider: MarketProvider,
         /// The declared peer fleet; required with --provider stado.
         #[arg(long)]
@@ -214,7 +259,7 @@ pub(crate) enum MarketCommands {
     /// One snapshot of the marketplace's view beside what the queue holds.
     Monitor {
         /// The marketplace to ask.
-        #[arg(long, value_enum)]
+        #[arg(long)]
         provider: MarketProvider,
         /// The declared peer fleet; required with --provider stado.
         #[arg(long)]
@@ -230,7 +275,7 @@ pub(crate) enum MarketCommands {
     /// idle for the window, withdraw when work appears.
     Follow {
         /// The marketplace to list on.
-        #[arg(long, value_enum)]
+        #[arg(long)]
         provider: MarketProvider,
         /// The declared peer fleet; required with --provider stado.
         #[arg(long)]

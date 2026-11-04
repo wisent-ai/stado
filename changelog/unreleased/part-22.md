@@ -190,3 +190,7 @@ The version bump gathers them into the release's own file and removes this one.
   seller could be declared. The `market` family lists Vast and peer lending as implemented and
   RunPod, SaladCloud, Clore.ai, Akash, io.net, Chutes, Darkbloom and HandToHuman as planned;
   `stado capabilities market` prints it. The Vast rows under inventory and quota moved to it.
+- **`--provider` of every `stado market` command reads the market family:** the provider was a
+  two-name clap list, so a declared seller was answered "invalid value" with no word of why. It is
+  now looked up in the capability catalog's `market` family: an undeclared name is refused listing
+  the sellers, and a planned one with its catalog note and that Stado carries no adapter for it.
