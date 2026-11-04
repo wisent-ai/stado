@@ -108,6 +108,12 @@ impl CleanupReport {
         *self.builds.skipped.entry(reason.to_string()).or_default() += count;
     }
 
+    /// One build cache kept for `reason`: [`skip_builds`](Self::skip_builds)
+    /// counting one more, through the shared tally's step.
+    pub fn skip_build(&mut self, reason: &str) {
+        self.builds.skipped.entry(reason.to_string()).or_default().tally();
+    }
+
     /// `_skip` for the Cargo build-directory cleaner.
     pub fn skip_cargo_builds(&mut self, reason: &str, count: i64) {
         *self

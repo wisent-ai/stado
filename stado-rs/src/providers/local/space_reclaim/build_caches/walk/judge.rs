@@ -68,7 +68,7 @@ impl<'a> Walk<'a> {
             return Ok(());
         }
         if !ownership::may_delete(self.deletable, absolute) {
-            report.skip_builds(ownership::NOT_STADO_OWNED, 1);
+            report.skip_build(ownership::NOT_STADO_OWNED);
             return Ok(());
         }
         // The walk found this cache without excluding running workloads, so
@@ -79,10 +79,7 @@ impl<'a> Walk<'a> {
         let cleanup = match acquire_lock_state(self.lock_dir, self.writer)? {
             LockState::Held(lock) => lock,
             LockState::Busy { .. } => {
-                report.skip_builds(
-                    "cleanup_lock_busy",
-                    std::slice::from_ref(&name).len() as i64,
-                );
+                report.skip_build("cleanup_lock_busy");
                 return Ok(());
             }
         };
