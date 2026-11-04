@@ -54,3 +54,8 @@ The version bump gathers them into the release's own file and removes this one.
   (`direct` or `relay`, with the endpoint the registry declares for it), and Tailscale is read only
   when the host has no node or its node could not tell, with that cause in `unread`. `source` names
   both readings, such as `pmset+stado-network`.
+- **A store read refused at this host's resolver says why:** a command whose fleet store is reached
+  through this host's resolver answered a refused connection with a bare loopback port and
+  `infra_down`. When the resolver published why it does not serve that adapter (it holds no
+  listener, it left the adapter unserved, or it is no longer running), the refusal now carries
+  that reason and points at `stado resolver status`, with the same exit code.

@@ -52,7 +52,28 @@ impl StadoObjectBackend {
         let address = request.url().clone();
         let sent = wait::send_built(Kind::ObjectApi, "object API", client, request);
         match unless_held(Route::Address(&address), sent).await {
-            Ok(answer) => Ok(answer?),
+            Ok(Ok(answer)) => Ok(answer),
+            // A refused connection on one of this host's resolver adapters
+            // is the resolver not serving that port, not the store being
+            // down: the store was never asked. The resolver published why,
+            // and that reason is what the caller needs, not a loopback port
+            // number nobody can place.
+            // Kept as `Held`: the store was not asked, as for a held adapter,
+            // so it stays `infra_down` and the agent tick still reads it as
+            // the store not answering.
+            Ok(Err(error)) if error.is_connect() => {
+                let origin = address.origin().ascii_serialization();
+                match crate::cli::resolver::not_serving_reason(&origin) {
+                    Some(reason) => Err(StorageError::Held(format!(
+                        "{} {origin} refused the connection, because {reason}; `stado resolver \
+                         status` names the resolver's state and every adapter ({})",
+                        address.as_str(),
+                        crate::cli::http_failure(&error)
+                    ))),
+                    None => Err(StorageError::Http(error)),
+                }
+            }
+            Ok(Err(error)) => Err(StorageError::Http(error)),
             Err(held) => Err(StorageError::Held(held)),
         }
     }
