@@ -4,6 +4,15 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::{collections::BTreeSet, fs, path::Path, process::Command};
 
+/// The documentation origin a CLI surface of product `id` is published at:
+/// its declared `docs_origin`, else the product's own site, named for its id.
+pub fn docs_origin(surface: &Value, id: &str) -> String {
+    match surface["docs_origin"].as_str() {
+        Some(origin) => origin.trim_end_matches('/').to_owned(),
+        None => format!("https://{id}.wisent.com"),
+    }
+}
+
 pub fn cli_catalog(document: &Value) -> Result<Value> {
     let mut products = Vec::new();
     for product in document["products"]
@@ -16,10 +25,9 @@ pub fn cli_catalog(document: &Value) -> Result<Value> {
             .iter()
             .find(|s| s["kind"] == "cli")
         {
-            let default_origin = format!("https://{}.wisent.com", super::text(product, "id")?);
             products.push(json!({"id": product["id"], "name": product["name"], "repository": surface["repository"],
                 "installation": product["installations"].as_array().and_then(|recipes| recipes.iter().find(|r| r["surface"] == "cli")),
-                "docs_origin": surface["docs_origin"].as_str().unwrap_or(&default_origin).trim_end_matches('/')}));
+                "docs_origin": docs_origin(surface, super::text(product, "id")?)}));
         }
     }
     Ok(json!({"products": products}))

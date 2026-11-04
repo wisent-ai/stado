@@ -23,6 +23,7 @@ mod desktop_app;
 mod documentation;
 mod install;
 mod native;
+pub(crate) mod name;
 pub mod node_runtime;
 mod paths;
 mod registry;

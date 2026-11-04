@@ -11,8 +11,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Prepare the exact release `version` of `product`'s installation `recipe`,
+/// built from `revision`. A product may publish its releases under another
+/// name than its catalog id (`release_product`: Weles as `weles-worker`, a
+/// renamed product under its former id); the release is fetched, checked and
+/// unpacked under that name, the one its signed coordinate carries.
 pub fn prepare(
     product: &Value,
+    recipe: &Value,
     version: &str,
     revision: &str,
     runtime: &Runtime,
@@ -31,7 +37,7 @@ pub fn prepare(
     {
         bail!("--release-version must be a canonical version coordinate");
     }
-    let id = text(product, "id")?;
+    let id = crate::install::recipes::build::manifest::released_as(recipe, text(product, "id")?);
     let platform = platform()?;
     let output = runtime
         .output

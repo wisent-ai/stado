@@ -1,9 +1,11 @@
 use super::{flag, positional, value};
 use clap::{ArgAction, ArgGroup, Command};
 
+/// The fields `registry add` and `registry set` share. A product's names are
+/// not among them for `set`: changing a name is a naming decision, recorded
+/// with who decided it and why by `stado product name set`.
 fn fields(command: Command, required: bool) -> Command {
     command
-        .arg(value("name", "Product display name").required(required))
         .arg(value("owner-repository", "Canonical GitHub owner/repository").required(required))
         .arg(value("description", "What the product does").required(required))
         .arg(value(
@@ -50,7 +52,8 @@ pub fn command() -> Command {
         .arg_required_else_help(true)
         .subcommand(
             fields(Command::new("add").about("Register one product"), true)
-                .arg(value("id", "New product identifier").required(true)),
+                .arg(value("id", "New product identifier").required(true))
+                .arg(value("name", "Product display name").required(true)),
         )
         .subcommand(
             fields(

@@ -119,9 +119,13 @@ pub(in super::super) fn select(
             bail!("finish the recorded removal or rollback before installing");
         }
         return match request.pin {
-            Some((version, revision)) => {
-                release::prepare(request.product, version, revision, request.runtime)
-            }
+            Some((version, revision)) => release::prepare(
+                request.product,
+                request.selected,
+                version,
+                revision,
+                request.runtime,
+            ),
             None => recipes::prepare(
                 request.runtime,
                 request.product,
@@ -146,9 +150,13 @@ pub(in super::super) fn select(
     // superseded by a fresh preparation of the recipe asked for now.
     if incomplete.recipe != *request.selected {
         let replacement = match request.pin {
-            Some((version, revision)) => {
-                release::prepare(request.product, version, revision, request.runtime)?
-            }
+            Some((version, revision)) => release::prepare(
+                request.product,
+                request.selected,
+                version,
+                revision,
+                request.runtime,
+            )?,
             None => recipes::prepare(
                 request.runtime,
                 request.product,
@@ -190,8 +198,13 @@ pub(in super::super) fn select(
             // placed the requested release over an install that stopped in its
             // after-install step; then the unfinished record is superseded, not
             // lost: it becomes this installation's `previous`.
-            let replacement =
-                release::prepare(request.product, version, revision, request.runtime)?;
+            let replacement = release::prepare(
+                request.product,
+                request.selected,
+                version,
+                revision,
+                request.runtime,
+            )?;
             if !already_placed(&replacement)? {
                 bail!("unfinished installation is bound to another release coordinate; roll it back first");
             }

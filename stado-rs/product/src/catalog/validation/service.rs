@@ -12,8 +12,13 @@ use std::collections::HashSet;
 const PRODUCT_UNIT_PREFIX: &str = "com.wisent.";
 
 /// Hold product `id`'s `service` declaration to its rules; `kinds` are the
-/// surfaces the product declares.
-pub(super) fn validate(id: &str, service: &Value, kinds: &HashSet<&str>) -> Result<()> {
+/// surfaces the product declares, `former` the ids it had before.
+pub(super) fn validate(
+    id: &str,
+    service: &Value,
+    kinds: &HashSet<&str>,
+    former: &[&str],
+) -> Result<()> {
     if !kinds.contains("service") {
         bail!("{id}: service declaration without service surface");
     }
@@ -143,14 +148,19 @@ pub(super) fn validate(id: &str, service: &Value, kinds: &HashSet<&str>) -> Resu
         }
     }
     // One service per repository, named for it: a product runs one
-    // service per host, labelled com.wisent.<product>.
+    // service per host, labelled com.wisent.<product>. A renamed product
+    // keeps the label of a former id, which its hosts still run, until the
+    // service is moved to its new one.
     if let Some(unit) = service.get("unit") {
         let unit = unit.as_str().context("service.unit must be a string")?;
         let expected = format!("{PRODUCT_UNIT_PREFIX}{id}");
-        if unit != expected {
+        let kept = former
+            .iter()
+            .any(|former| unit == format!("{PRODUCT_UNIT_PREFIX}{former}"));
+        if unit != expected && !kept {
             bail!(
-                "{id}.service.unit: {unit} is not {expected}; a product runs one service \
-                         named com.wisent.<product>"
+                "{id}.service.unit: {unit} is not {expected}, nor the label of a former id of \
+                 {id}; a product runs one service named com.wisent.<product>"
             );
         }
     }

@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashSet;
 
+mod naming;
 mod public_status;
 mod roadmap;
 mod service;
@@ -265,7 +266,11 @@ fn declarations(document: &Value) -> Result<()> {
             }
         }
         if let Some(service) = product.get("service") {
-            service::validate(id, service, &kinds)?;
+            let former: Vec<&str> = match product.get("former_names").and_then(Value::as_array) {
+                Some(rows) => rows.iter().filter_map(|row| row["id"].as_str()).collect(),
+                None => Vec::new(),
+            };
+            service::validate(id, service, &kinds, &former)?;
         }
         if let Some(checks) = product.get("public_status") {
             public_status::validate(id, checks)?;
@@ -282,6 +287,7 @@ fn declarations(document: &Value) -> Result<()> {
             bail!("{id}: dependency names unknown product {target}");
         }
     }
+    naming::validate(products)?;
     Ok(())
 }
 

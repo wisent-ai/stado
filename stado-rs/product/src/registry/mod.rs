@@ -1,4 +1,4 @@
-mod document;
+pub(crate) mod document;
 mod fields;
 use crate::{
     catalog,
@@ -114,7 +114,8 @@ fn apply(action: &str, id: &str, args: &Arguments, document: &mut Value) -> Resu
         .clone(),
         _ => bail!("unknown registry command {action}"),
     };
-    set_field(&mut record, args, "--name", "name")?;
+    // A name is not set here: `registry add` gives a new product its first
+    // name, and every later change is `stado product name set`'s decision.
     set_field(&mut record, args, "--status", "status")?;
     set_field(&mut record, args, "--visibility", "visibility")?;
     set_field(&mut record, args, "--family", "family")?;

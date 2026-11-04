@@ -93,6 +93,58 @@ fn spans(text: &str) -> Result<BTreeMap<String, (usize, usize)>> {
     Ok(spans)
 }
 
+/// `rendered`, one or more YAML lines, at the indentation of line `start`
+/// of `lines`.
+fn indent(lines: &[&str], start: usize, rendered: &str) -> String {
+    let prefix = " ".repeat(lines[start].len() - lines[start].trim_start().len());
+    rendered
+        .split_inclusive('\n')
+        .map(|line| format!("{prefix}{line}"))
+        .collect()
+}
+
+/// Write `document` over the catalog at `path`, read as `original`, by
+/// replacing in place each record `records` names: its id in `original`
+/// mapped to its id in `document`. Every other record and every comment is
+/// kept byte for byte. The whole catalog is validated first, the result must
+/// read back as `document`, and a file another writer changed meanwhile is
+/// refused; nothing is written otherwise.
+pub fn replace_records(
+    path: &Path,
+    original: &str,
+    document: &Value,
+    records: &BTreeMap<String, String>,
+) -> Result<()> {
+    catalog::validate(document)?;
+    let positions = spans(original)?;
+    let lines: Vec<_> = original.split_inclusive('\n').collect();
+    let mut placed: Vec<(usize, usize, &str)> = Vec::new();
+    for (before, after) in records {
+        let &(start, end) = positions
+            .get(before)
+            .with_context(|| format!("the catalog holds no record {before}; nothing was changed"))?;
+        placed.push((start, end, after.as_str()));
+    }
+    placed.sort_by_key(|(start, _, _)| *start);
+    let mut candidate = String::with_capacity(original.len());
+    let mut cursor = 0;
+    for (start, end, id) in placed {
+        let rendered = serde_yaml::to_string(&vec![catalog::product(document, id)?])?;
+        candidate.push_str(&lines[cursor..start].concat());
+        candidate.push_str(&indent(&lines, start, &rendered));
+        cursor = end;
+    }
+    candidate.push_str(&lines[cursor..].concat());
+    let decoded: Value = serde_yaml::from_str(&candidate)?;
+    if decoded != *document {
+        bail!("structural registry edit did not reproduce the validated document; nothing was changed");
+    }
+    if fs::read_to_string(path)? != original {
+        bail!("catalog changed during the operation; nothing was overwritten");
+    }
+    atomic_write(path, candidate.as_bytes())
+}
+
 pub fn commit(path: &Path, original: &str, document: &Value, id: &str, remove: bool) -> Result<()> {
     catalog::validate(document)?;
     let positions = spans(original)?;
@@ -102,13 +154,7 @@ pub fn commit(path: &Path, original: &str, document: &Value, id: &str, remove: b
     } else {
         serde_yaml::to_string(&vec![catalog::product(document, id)?])?
     };
-    let indented = |start: usize| {
-        let prefix = " ".repeat(lines[start].len() - lines[start].trim_start().len());
-        rendered
-            .split_inclusive('\n')
-            .map(|line| format!("{prefix}{line}"))
-            .collect::<String>()
-    };
+    let indented = |start: usize| indent(&lines, start, &rendered);
     let candidate = if document["products"].as_array().is_some_and(Vec::is_empty) {
         serde_yaml::to_string(document)?
     } else if let Some(&(start, end)) = positions.get(id) {

@@ -25,7 +25,6 @@ enum NativeProductOperations {
         ]),
         .init(id: "registry-set", title: "Update a catalog product", path: ["product", "registry", "set"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),
-            .init(id: "name", label: "Display name (blank keeps it)", option: "--name"),
             .init(id: "description", label: "Description (blank keeps it)", option: "--description"),
             .init(id: "status", label: "Lifecycle status (blank keeps it)", option: "--status"),
             .init(id: "add-surface", label: "Surfaces to add or replace, one per line", option: "--add-surface", multiple: true),
@@ -49,6 +48,31 @@ enum NativeProductOperations {
         .init(id: "registry-check-claims", title: "Check every rival claim's source again", path: ["product", "registry", "check-claims"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),
         ], fixedArguments: ["--json"], mutates: false),
+        // A product's names are decided here, never in Update a catalog
+        // product: each change records who decided it and why, the names it
+        // had stay findable, and a new id is carried through the catalog.
+        .init(id: "name-list", title: "Read what every product is called: id, display name, who decided it and why, and every former name", path: ["product", "name", "list"], hostPlacement: .none, mutates: false),
+        .init(id: "name-show", title: "Read which product a name belongs to, current or former", path: ["product", "name", "show"], hostPlacement: .none, fields: [
+            .init(id: "name", label: "Id or display name, current or former", required: true),
+        ], mutates: false),
+        .init(id: "name-check", title: "Check whether a name is free for a product", path: ["product", "name", "check"], hostPlacement: .none, fields: [
+            .init(id: "name", label: "Name to check", required: true),
+            .init(id: "as-id", label: "It must also be usable as a product id", option: "--as-id", flag: true),
+            .init(id: "org", label: "Also read this GitHub organization's repositories (blank reads none)", option: "--org"),
+        ], mutates: false),
+        .init(id: "name-set", title: "Rename a product: record the decision and carry the new name through the catalog", path: ["product", "name", "set"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product's current id", required: true),
+            .init(id: "id", label: "New id (blank keeps it)", option: "--id"),
+            .init(id: "name", label: "New display name (blank keeps it)", option: "--name"),
+            .init(id: "decided-by", label: "Who decided the name", option: "--decided-by", required: true),
+            .init(id: "reason", label: "Why the product takes this name", option: "--reason", required: true),
+            .init(id: "org", label: "Also read this GitHub organization for repositories still named for the former id (blank reads none)", option: "--org"),
+        ]),
+        .init(id: "name-forget", title: "Remove a former name recorded in error", path: ["product", "name", "forget"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product's current id", required: true),
+            .init(id: "former", label: "Former id or display name recorded in error", required: true),
+        ]),
+        .init(id: "name-adopt", title: "Move installation receipts kept under a former product id to the current one", path: ["product", "name", "adopt"], hostPlacement: .none),
         .init(id: "remove", title: "Uninstall products: every surface this machine records as installed", path: ["product", "remove"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Products, one per line", required: true, multiple: true),
             .init(id: "host", label: "Service host (blank uses the host its receipt records)", option: "--host"),

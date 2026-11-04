@@ -2,6 +2,7 @@ mod catalog;
 mod compiles;
 pub use compiles::{compiled_product, compiles};
 mod lifecycle;
+mod name;
 mod native;
 pub(crate) mod registry;
 mod swift;
@@ -65,6 +66,7 @@ pub fn augment(command: Command) -> Command {
         )
         .subcommand(crate::advisories::command())
         .subcommand(registry::command())
+        .subcommand(name::command())
         .subcommand(registry::creation())
         .subcommand(lifecycle::installation(
             "install",
@@ -162,6 +164,12 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
                 .remove_subcommand()
                 .context("registry operation is missing")?;
             crate::registry::run(&action, arguments, &runtime)
+        }
+        "name" => {
+            let (action, arguments) = arguments
+                .remove_subcommand()
+                .context("name operation is missing")?;
+            crate::name::run(&action, arguments, &runtime)
         }
         // Each lifecycle verb is the installation module's; one arm per verb
         // so the router names exactly the subcommands registered above.

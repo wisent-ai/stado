@@ -71,6 +71,19 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     // it: an operator's explicit installation is not stopped by a sync.
     runtime.wait_for_writer = true;
     let runtime = &runtime;
+    // A product renamed since this machine installed it keeps its receipts
+    // under its former id; they move to the current id before anything is
+    // compared, so the pass sees the installation instead of none. A dry
+    // run only says what would move.
+    let adopted = crate::name::receipts::adopt(runtime, &document, !args.has("--dry-run"))?;
+    for row in &adopted {
+        eprintln!(
+            "stado product sync: receipts of {} kept under a former id: {} ({})",
+            row["product"],
+            row["from"],
+            row["state"]
+        );
+    }
     // `--clone-missing`: a workspace Stado owns starts empty, and each product's
     // source is cloned into it the first time the product is reconciled, and
     // so is every source its build reads (a Git dependency's canonical
