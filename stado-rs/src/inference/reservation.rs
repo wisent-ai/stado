@@ -18,11 +18,21 @@ pub struct Reservation {
     pub gpu: Option<String>,
 }
 
-/// `~/.stado/inference/reservation.json` under the home every Stado file is
-/// kept under ([`crate::config_file::home`]: HOME, else the user database),
-/// so an agent unit started without HOME still sees the cards an engine
-/// holds.
+/// The variable a process started by this host's Stado (a peer-lending
+/// worker) reads the host's reservation through: its own home is not the
+/// host's, so without it the worker would see no reservation and offer the
+/// board an engine holds.
+pub const PATH_VARIABLE: &str = "STADO_INFERENCE_RESERVATION";
+
+/// The reservation file: the path [`PATH_VARIABLE`] names when this process
+/// was started with it, else `~/.stado/inference/reservation.json` under the
+/// home every Stado file is kept under ([`crate::config_file::home`]: HOME,
+/// else the user database), so an agent unit started without HOME still sees
+/// the cards an engine holds.
 pub fn path() -> Result<PathBuf, String> {
+    if let Some(named) = std::env::var_os(PATH_VARIABLE).filter(|named| !named.is_empty()) {
+        return Ok(PathBuf::from(named));
+    }
     crate::config_file::home()
         .map(|home| {
             home.join(".stado")

@@ -105,3 +105,10 @@ The version bump gathers them into the release's own file and removes this one.
   nothing said so. The audit lists each such route or fallback with the deployment, its host and
   the `route set` that makes the deployment the primary and keeps the outside provider as the
   fallback; it writes nothing and exits non-zero on a finding. Desktop's Inference screen runs it.
+- **Peer lending keeps the boards an inference engine does not hold:** `stado market follow
+  --provider stado` drained the lending worker for any inference reservation, so a host serving a
+  model on one board lent nothing from its others. A reservation that names its board now leaves the
+  worker running: it is started with `STADO_INFERENCE_RESERVATION` naming this host's reservation,
+  and its admission gate withholds that board alone. A reservation naming no board, or one that
+  cannot be read, still drains it. The Vast loop still withdraws the whole machine, because Vast
+  offers no way to keep one GPU of a listed machine from renters.

@@ -6,10 +6,13 @@
 //! and no running job names this host. After `--idle-window-s` idle seconds,
 //! with the offer listed and the peer's queue holding work, a lending worker
 //! starts ([`crate::providers::peer::lending`]). The moment our work
-//! appears, the operator unlists, an inference reservation holds the cards,
-//! or the session has run `--max-duration-s`, the worker is asked to drain:
-//! it claims nothing more and exits once the peer's jobs it runs have
-//! finished. A worker that ends by itself — the peer's queue held nothing
+//! appears, the operator unlists, an inference reservation that names no
+//! board (or cannot be read) holds every card, or the session has run
+//! `--max-duration-s`, the worker is asked to drain: it claims nothing more
+//! and exits once the peer's jobs it runs have finished. A reservation that
+//! names its board does not drain it: the worker reads the host's
+//! reservation, and its own admission gate withholds that board alone. A
+//! worker that ends by itself — the peer's queue held nothing
 //! more it could run — ends the session, and the next idle poll may start
 //! another.
 //!
@@ -128,11 +131,24 @@ pub(super) async fn auto_list(params: Params) -> Result<(), CmdError> {
             }
         }
         let state = is_stado_busy(&store, &host).await.map_err(CmdError::from)?;
+        // A reservation naming its board leaves the others to the worker,
+        // whose admission gate reads the same record and withholds that
+        // board; one naming none, or one that cannot be read, holds them all.
         let held = match crate::inference::reservation::active() {
-            Ok(Some(reservation)) => Some(format!(
-                "inference reservation '{}' holds the cards",
-                reservation.deployment
-            )),
+            Ok(Some(reservation)) => match &reservation.gpu {
+                None => Some(format!(
+                    "inference reservation '{}' names no board, so it holds every card",
+                    reservation.deployment
+                )),
+                Some(board) => {
+                    say(&format!(
+                        "inference reservation '{}' holds board {board}; the worker is offered \
+                         the others",
+                        reservation.deployment
+                    ));
+                    None
+                }
+            },
             Ok(None) => None,
             Err(error) => Some(format!(
                 "an inference reservation that cannot be read ({error}) may hold the cards"

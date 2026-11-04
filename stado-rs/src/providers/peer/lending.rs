@@ -77,6 +77,10 @@ fn launch(
     let program = std::env::current_exe().map_err(|error| {
         PeerError::Local(format!("this program's path cannot be read: {error}"))
     })?;
+    // The worker's home is its own, so it is told where this host's inference
+    // reservation lives: its admission gate then withholds the board an
+    // engine holds and offers the peer only the others.
+    let reservation = crate::inference::reservation::path().map_err(PeerError::Local)?;
     let mut command = tokio::process::Command::new(&program);
     command
         .args([
@@ -92,6 +96,7 @@ fn launch(
         .env_clear()
         .env("HOME", home)
         .env("STADO_CONFIG", &config)
+        .env(crate::inference::reservation::PATH_VARIABLE, &reservation)
         .envs(std::env::var_os("PATH").map(|path| ("PATH", path)))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(output))
