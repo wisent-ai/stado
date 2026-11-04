@@ -20,8 +20,11 @@ fn date_of(day: i64) -> String {
         .unwrap_or_else(|| format!("day {day}"))
 }
 
-/// What the host's day cost, from the hours its beacon measured: every hour
-/// of that day must be measured and priced in USD, else the reason it is not.
+/// What the host's day cost, from the hours its beacon measured: the energy
+/// its boards drew above their idle draw in each of the day's 24 hours, at
+/// the tariff in US dollars, as `stado cost host` and the scheduler charge
+/// it. Every hour must be measured and every board's idle draw known, else
+/// the reason it is not.
 fn day_cost(
     hours: Option<&serde_json::Map<String, Value>>,
     tariff: &Option<crate::targets::PowerTariff>,
@@ -31,6 +34,7 @@ fn day_cost(
     // Vast states US dollars; the tariff is converted at its declared rate.
     let usd_per_kwh = tariff.usd_per_kwh()?;
     let hours = hours.ok_or("the host's beacon carries no measured hours")?;
+    let idle = crate::deploy::host_hours::idle_watts(hours);
     let mut kwh = 0.0;
     for hour in 0..24 {
         let start = chrono::DateTime::from_timestamp(day * SECONDS_PER_DAY + hour * 3600, 0)
@@ -41,11 +45,12 @@ fn day_cost(
             .and_then(|bucket| bucket["boards"].as_object())
             .filter(|boards| !boards.is_empty())
             .ok_or_else(|| format!("hour {start} was not measured (the beacon keeps one day)"))?;
-        kwh += measured
-            .values()
-            .filter_map(|board| board["watt_seconds"].as_f64())
-            .sum::<f64>()
-            / 3_600_000.0;
+        for (uuid, board) in measured {
+            kwh +=
+                crate::deploy::host_hours::kwh_above_idle(uuid, board, &idle).ok_or_else(|| {
+                    format!("board {uuid} has no measured idle draw, so hour {start} is unpriced")
+                })?;
+        }
     }
     Ok(kwh * usd_per_kwh)
 }

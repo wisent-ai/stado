@@ -7,32 +7,12 @@ use serde_json::{json, Value};
 use crate::cli::CmdError;
 use crate::primitives::failure::FailureCode;
 
-/// Joules in one kilowatt-hour: 1000 W for 3600 s (SI).
-const JOULES_PER_KWH: f64 = 3_600_000.0;
-
-/// Each board's idle draw in watts over every hour of `hours`: the energy of
-/// its zero-utilization samples over the seconds they cover. A board with no
-/// idle sample in the window has no measured idle draw and is left out.
-fn idle_watts(hours: &serde_json::Map<String, Value>) -> std::collections::BTreeMap<String, f64> {
-    let mut sums: std::collections::BTreeMap<String, (f64, f64)> = Default::default();
-    for hour in hours.values() {
-        if let Some(boards) = hour["boards"].as_object() {
-            for (uuid, board) in boards {
-                let sum = sums.entry(uuid.clone()).or_default();
-                sum.0 += board["idle_watt_seconds"].as_f64().unwrap_or(0.0);
-                sum.1 += board["idle_seconds"].as_f64().unwrap_or(0.0);
-            }
-        }
-    }
-    sums.into_iter()
-        .filter(|(_, (_, seconds))| *seconds > 0.0)
-        .map(|(uuid, (energy, seconds))| (uuid, energy / seconds))
-        .collect()
-}
+use crate::deploy::host_hours::JOULES_PER_KWH;
 
 /// One hour as the report prints it. `idle` is each board's idle draw over
-/// the window: the energy above it is what work on the board added, and a
-/// board whose idle draw was never measured has that part unread.
+/// the window ([`crate::deploy::host_hours::idle_watts`]): the energy above
+/// it is what work on the board added, and a board whose idle draw was never
+/// measured has that part unread.
 fn priced(
     start: &str,
     hour: &Value,
@@ -47,15 +27,9 @@ fn priced(
             let samples = board["samples"].as_u64().unwrap_or(0);
             let busy = board["busy_samples"].as_u64().unwrap_or(0);
             let energy = board["watt_seconds"].as_f64().unwrap_or(0.0);
-            let seconds = board["seconds"].as_f64();
             watt_seconds += energy;
-            // A beacon from before covered seconds were kept, or a board
-            // whose idle draw was never measured, leaves the energy above
-            // idle unread rather than charging the whole draw as work.
-            let above = match (idle.get(uuid), seconds) {
-                (Some(watts), Some(seconds)) => Some((energy - watts * seconds).max(0.0)),
-                _ => None,
-            };
+            let above = crate::deploy::host_hours::kwh_above_idle(uuid, board, idle)
+                .map(|kwh| kwh * JOULES_PER_KWH);
             above_idle = above_idle.zip(above).map(|(sum, above)| sum + above);
             boards.insert(
                 uuid.clone(),
@@ -137,7 +111,7 @@ pub(crate) async fn host(
         })?;
     let since = (chrono::Utc::now() - chrono::Duration::hours(i64::from(since_hours)))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let idle = idle_watts(hours);
+    let idle = crate::deploy::host_hours::idle_watts(hours);
     let rows: Vec<Value> = hours
         .iter()
         .filter(|(start, _)| start.as_str() >= since.as_str())

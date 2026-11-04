@@ -17,9 +17,6 @@ use serde_json::Value;
 use crate::models::Job;
 use crate::queue::JobStorage;
 
-/// Joules in one kilowatt-hour: 1000 W for 3600 s (SI).
-const JOULES_PER_KWH: f64 = 3_600_000.0;
-
 /// Per host: its USD price per kWh (or why it has none) and, per board and
 /// hour start, the energy the board drew in that hour; and every identity
 /// the host is known by (its registry name, its hostnames, the slugs its
@@ -71,18 +68,12 @@ impl Energy {
                 .find_map(|slug| beacons.get(slug))
                 .and_then(|beacon| beacon.get("hours"))
                 .and_then(Value::as_object);
-            // Each board's idle draw over the whole beacon window: the energy
-            // of its zero-utilization samples over the seconds they cover. A
-            // job is charged only what its board drew above it, because the
-            // board draws its idle power whether or not anything runs.
-            let mut idle: BTreeMap<String, (f64, f64)> = BTreeMap::new();
-            for hour in hours.into_iter().flat_map(|hours| hours.values()) {
-                for (uuid, board) in hour["boards"].as_object().into_iter().flatten() {
-                    let sum = idle.entry(uuid.clone()).or_default();
-                    sum.0 += board["idle_watt_seconds"].as_f64().unwrap_or(0.0);
-                    sum.1 += board["idle_seconds"].as_f64().unwrap_or(0.0);
-                }
-            }
+            // A job is charged only what its board drew above its idle draw
+            // over the beacon window, because the board draws that whether
+            // or not anything runs.
+            let idle = hours
+                .map(crate::deploy::host_hours::idle_watts)
+                .unwrap_or_default();
             let mut boards: BTreeMap<String, BTreeMap<DateTime<Utc>, Result<f64, String>>> =
                 BTreeMap::new();
             for (start, hour) in hours.into_iter().flatten() {
@@ -90,21 +81,15 @@ impl Energy {
                     continue;
                 };
                 for (uuid, board) in hour["boards"].as_object().into_iter().flatten() {
-                    let energy = board["watt_seconds"].as_f64().unwrap_or(0.0);
-                    let above = match (idle.get(uuid), board["seconds"].as_f64()) {
-                        (Some((idle_energy, idle_seconds)), Some(seconds))
-                            if *idle_seconds > 0.0 =>
-                        {
-                            let watts = idle_energy / idle_seconds;
-                            Ok((energy - watts * seconds).max(0.0) / JOULES_PER_KWH)
-                        }
-                        _ => Err(format!(
-                            "{}'s board {uuid} has no measured idle draw in its beacon, so the \
-                             energy work added on it in the hour {start} cannot be told from the \
-                             power it draws anyway",
-                            target.name
-                        )),
-                    };
+                    let above = crate::deploy::host_hours::kwh_above_idle(uuid, board, &idle)
+                        .ok_or_else(|| {
+                            format!(
+                                "{}'s board {uuid} has no measured idle draw in its beacon, so \
+                                 the energy work added on it in the hour {start} cannot be told \
+                                 from the power it draws anyway",
+                                target.name
+                            )
+                        });
                     boards
                         .entry(uuid.clone())
                         .or_default()

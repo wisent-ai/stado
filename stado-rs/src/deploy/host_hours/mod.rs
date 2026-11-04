@@ -200,3 +200,37 @@ pub fn published() -> Result<Value, String> {
     serde_json::to_value(&register.hours)
         .map_err(|error| format!("the host hours cannot be serialized: {error}"))
 }
+
+/// Joules in one kilowatt-hour: 1000 W for 3600 s (SI).
+pub const JOULES_PER_KWH: f64 = 3_600_000.0;
+
+/// Each board's idle draw in watts over every hour of a beacon's `hours`
+/// block: the energy of its zero-utilization samples over the seconds they
+/// cover. A board with no idle sample in the window has no measured idle
+/// draw and is left out. Every reader of owned cost (`stado cost host`, the
+/// scheduler's job pricing, `stado market earnings`) charges work only what
+/// a board drew above this, because a board draws it with nothing running.
+pub fn idle_watts(hours: &serde_json::Map<String, Value>) -> BTreeMap<String, f64> {
+    let mut sums: BTreeMap<String, (f64, f64)> = BTreeMap::new();
+    for hour in hours.values() {
+        for (uuid, board) in hour["boards"].as_object().into_iter().flatten() {
+            let sum = sums.entry(uuid.clone()).or_default();
+            sum.0 += board["idle_watt_seconds"].as_f64().unwrap_or(0.0);
+            sum.1 += board["idle_seconds"].as_f64().unwrap_or(0.0);
+        }
+    }
+    sums.into_iter()
+        .filter(|(_, (_, seconds))| *seconds > 0.0)
+        .map(|(uuid, (energy, seconds))| (uuid, energy / seconds))
+        .collect()
+}
+
+/// The kWh board `uuid` drew above its idle draw in one hour's `board`
+/// entry, or `None` when its idle draw is unmeasured or the entry predates
+/// covered seconds: the whole draw is never charged in its place.
+pub fn kwh_above_idle(uuid: &str, board: &Value, idle: &BTreeMap<String, f64>) -> Option<f64> {
+    let watts = idle.get(uuid)?;
+    let seconds = board["seconds"].as_f64()?;
+    let energy = board["watt_seconds"].as_f64().unwrap_or(0.0);
+    Some((energy - watts * seconds).max(0.0) / JOULES_PER_KWH)
+}
