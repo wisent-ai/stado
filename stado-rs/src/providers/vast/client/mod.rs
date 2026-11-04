@@ -10,6 +10,7 @@ mod credentials;
 mod earnings;
 pub(super) mod json;
 mod machine;
+mod maintenance;
 mod offers;
 
 use std::sync::Arc;

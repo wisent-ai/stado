@@ -48,7 +48,10 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
         HostStateCommands::Console(HostConsoleCommands::Unset { target, json }) => {
             host::console::unset(&target, json).await
         }
-        HostStateCommands::Reboot { target } => host::reboot(&target).await,
+        HostStateCommands::Reboot {
+            target,
+            maintenance_hours,
+        } => host::reboot(&target, maintenance_hours).await,
         HostStateCommands::User(HostUserCommands::Create {
             username,
             target,

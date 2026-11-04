@@ -81,6 +81,12 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
              peer fleet states none; what this host lent a peer is read with `stado market \
              status --provider stado --peer <peer>`",
         )),
+        // A peer fleet's worker drains; there is no renter to tell.
+        MarketCommands::Maintenance { .. } => Err(CmdError::refused(
+            "a Stado peer fleet holds no renter to notify: the lending worker drains when the \
+             host stops lending, so take the host out with `stado market unlist --provider stado \
+             --peer <peer>` instead",
+        )),
         MarketCommands::Readiness {
             peer,
             vault_host,

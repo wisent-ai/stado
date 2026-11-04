@@ -61,8 +61,17 @@ pub(crate) enum HostStateCommands {
     /// `stado host upgrade` plans no dialog there.
     #[command(subcommand)]
     Console(HostConsoleCommands),
-    /// Request a graceful reboot of TARGET through its approved channel.
-    Reboot { target: String },
+    /// Request a graceful reboot of TARGET through its approved channel. A
+    /// host listed on Vast first has the reboot announced to its renters as
+    /// a maintenance window of --maintenance-hours; a notice Vast refuses
+    /// stops the reboot.
+    Reboot {
+        target: String,
+        /// The hours the announced maintenance window lasts on a host
+        /// listed on Vast.
+        #[arg(long = "maintenance-hours", default_value_t = 0.5)]
+        maintenance_hours: f64,
+    },
     /// Manage local macOS and Linux user accounts.
     #[command(subcommand)]
     User(HostUserCommands),

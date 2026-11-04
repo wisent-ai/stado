@@ -153,3 +153,9 @@ The version bump gathers them into the release's own file and removes this one.
   reads the host's listeners and Docker's `DOCKER-USER` chain and answers `not_isolated` naming what
   a container reaches, with the bind or `iptables` rule that closes each; the follow loop reads it
   before every listing and does not list; the Earning screen shows it.
+- **`stado market maintenance` tells Vast renters before a host goes down, and `stado host reboot`
+  does it first:** nothing announced a listed host going down, so a reboot or release under an
+  active contract cost the host reliability score. `stado market maintenance --provider vast --hours
+  H --category C [--in-minutes M]` sends Vast's maintenance notice and prints how many renters were
+  told; `stado host reboot` sends it first for a host Vast lists and refuses to reboot when Vast
+  refuses the notice. Desktop's Registry screen runs both.

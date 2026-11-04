@@ -144,6 +144,18 @@ enum NativeRegistryOperations {
                   .init(id: "target", label: "Registry target", option: "--target", required: true),
                   .init(id: "since-days", label: "Days back", option: "--since-days", initial: "7"),
               ], fixedArguments: ["--provider", "vast"], mutates: false, jsonOutput: false),
+        .init(id: "market-maintenance", title: "Tell Vast renters this host goes down for maintenance",
+              path: ["market", "maintenance"], hostPlacement: .none, fields: [
+                  .init(id: "in-minutes", label: "Minutes until the host goes down", option: "--in-minutes", initial: "0"),
+                  .init(id: "hours", label: "Hours it stays down", option: "--hours", required: true),
+                  .init(id: "category", label: "Why", option: "--category", required: true,
+                        choices: ["power", "internet", "disk", "gpu", "software", "other"]),
+              ], fixedArguments: ["--provider", "vast"]),
+        .init(id: "host-reboot", title: "Reboot a host, telling its Vast renters first",
+              path: ["host", "reboot"], hostPlacement: .none, fields: [
+                  .init(id: "target", label: "Registry target", required: true),
+                  .init(id: "maintenance-hours", label: "Hours the announced window lasts", option: "--maintenance-hours", initial: "0.5"),
+              ], jsonOutput: false),
         .init(id: "registry-document-validate", title: "Validate a supplied registry document",
               path: ["registry", "validate"], hostPlacement: .none,
               payload: .file(option: nil, label: "Registry JSON document", initial: ""),

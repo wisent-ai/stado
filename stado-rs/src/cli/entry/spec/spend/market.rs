@@ -73,6 +73,32 @@ pub(crate) enum MarketCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Announce to the marketplace that this host goes down for maintenance,
+    /// so every renter is told to save their work before it does.
+    ///
+    /// Vast notifies each renter with an active contract; a machine taken
+    /// down under a contract without this lowers its reliability score.
+    /// Prints how many renters were told. Run it before any release, restart
+    /// or deployment that stops a listed host.
+    Maintenance {
+        /// The marketplace to tell.
+        #[arg(long, value_enum)]
+        provider: MarketProvider,
+        /// Taken only with --provider stado, which is refused.
+        #[arg(long)]
+        peer: Option<String>,
+        /// Minutes from now until the host goes down.
+        #[arg(long = "in-minutes", default_value_t = 0)]
+        in_minutes: u32,
+        /// How long the host stays down, in hours.
+        #[arg(long)]
+        hours: f64,
+        /// Why: power, internet, disk, gpu, software or other.
+        #[arg(long)]
+        category: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// What a registry host earned on the marketplace, day by day, as the
     /// marketplace itself states it, beside what the same days of the host
     /// cost (`stado cost host`) and the margin.

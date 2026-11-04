@@ -57,6 +57,13 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             json,
             ..
         } => earnings::earnings(target, *since_days, *json).await,
+        MarketCommands::Maintenance {
+            in_minutes,
+            hours,
+            category,
+            json,
+            ..
+        } => maintenance(*in_minutes, *hours, category, *json).await,
         MarketCommands::Status { json, .. } => status(*json).await,
         MarketCommands::Readiness {
             vault_host,
@@ -109,6 +116,7 @@ pub(crate) fn provider(command: &MarketCommands) -> MarketProvider {
         | MarketCommands::Unlist { provider, .. }
         | MarketCommands::Status { provider, .. }
         | MarketCommands::Earnings { provider, .. }
+        | MarketCommands::Maintenance { provider, .. }
         | MarketCommands::Readiness { provider, .. }
         | MarketCommands::Monitor { provider, .. }
         | MarketCommands::Follow { provider, .. } => *provider,
@@ -123,6 +131,7 @@ fn peer_named(command: &MarketCommands) -> bool {
         | MarketCommands::Unlist { peer, .. }
         | MarketCommands::Status { peer, .. }
         | MarketCommands::Earnings { peer, .. }
+        | MarketCommands::Maintenance { peer, .. }
         | MarketCommands::Readiness { peer, .. }
         | MarketCommands::Monitor { peer, .. }
         | MarketCommands::Follow { peer, .. } => peer.is_some(),
@@ -173,6 +182,24 @@ async fn unlist(json_output: bool) -> Result<(), CmdError> {
 async fn status(json_output: bool) -> Result<(), CmdError> {
     let client = VastClient::from_env().await.map_err(cmd_err)?;
     let result = client.machine_status().await.map_err(cmd_err)?;
+    crate::cli::print_answer(&result, json_output)?;
+    Ok(())
+}
+
+/// Tell Vast this host goes down `in_minutes` from now for `hours`, so every
+/// renter is notified, and print Vast's answer (how many it told).
+async fn maintenance(
+    in_minutes: u32,
+    hours: f64,
+    category: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let client = VastClient::from_env().await.map_err(cmd_err)?;
+    let start = chrono::Utc::now().timestamp() + i64::from(in_minutes) * 60;
+    let result = client
+        .schedule_maintenance(start, hours, category)
+        .await
+        .map_err(cmd_err)?;
     crate::cli::print_answer(&result, json_output)?;
     Ok(())
 }
