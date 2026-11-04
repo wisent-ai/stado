@@ -15,6 +15,7 @@ mod measure;
 mod payout;
 mod readiness;
 mod readiness_text;
+mod serve_or_rent;
 mod sources;
 
 pub(crate) use readiness::read_vault;
@@ -95,6 +96,14 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             ..
         } => earnings::earnings(target, *since_days, *json).await,
         MarketCommands::Measure { gpu, json, .. } => measure::measure(gpu, *json).await,
+        MarketCommands::ServeOrRent {
+            target,
+            outside_model,
+            gpu,
+            since_hours,
+            json,
+            ..
+        } => serve_or_rent::serve_or_rent(target, outside_model, gpu, *since_hours, *json).await,
         MarketCommands::Maintenance {
             in_minutes,
             hours,
@@ -160,6 +169,7 @@ pub(crate) fn provider(command: &MarketCommands) -> Option<MarketProvider> {
         | MarketCommands::Earnings { provider, .. }
         | MarketCommands::Maintenance { provider, .. }
         | MarketCommands::Measure { provider, .. }
+        | MarketCommands::ServeOrRent { provider, .. }
         | MarketCommands::Readiness { provider, .. }
         | MarketCommands::Monitor { provider, .. }
         | MarketCommands::Follow { provider, .. } => Some(*provider),
@@ -177,6 +187,7 @@ fn peer_named(command: &MarketCommands) -> bool {
         | MarketCommands::Earnings { peer, .. }
         | MarketCommands::Maintenance { peer, .. }
         | MarketCommands::Measure { peer, .. }
+        | MarketCommands::ServeOrRent { peer, .. }
         | MarketCommands::Readiness { peer, .. }
         | MarketCommands::Monitor { peer, .. }
         | MarketCommands::Follow { peer, .. } => peer.is_some(),

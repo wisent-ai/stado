@@ -52,9 +52,30 @@ pub struct Hour {
     pub cpu_samples: u64,
     /// The sum of the processor busy fractions the samples read.
     pub cpu_busy_sum: f64,
+    /// What this host's inference deployment served in the hour, from its
+    /// engine's own counters; absent when no deployment runs here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub served: Option<Served>,
     /// Each reading this hour could not take, with its cause, once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unread: Vec<String>,
+}
+
+/// Tokens and requests one deployment served within an hour.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Served {
+    pub deployment: String,
+    pub prompt_tokens: f64,
+    pub generation_tokens: f64,
+    pub requests: f64,
+}
+
+/// The engine's cumulative counters at one reading.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Counters {
+    prompt_tokens: f64,
+    generation_tokens: f64,
+    requests: f64,
 }
 
 #[derive(Default)]
@@ -63,6 +84,62 @@ struct Register {
     hours: BTreeMap<String, Hour>,
     /// Per board, when its last power sample was taken.
     last_sample: BTreeMap<String, DateTime<Utc>>,
+    /// The engine's counters at the previous reading, per deployment.
+    last_served: BTreeMap<String, Counters>,
+}
+
+/// The sum of every sample of `name` in a Prometheus text exposition (all
+/// label sets), or `None` when the exposition carries no such metric.
+fn metric_sum(exposition: &str, name: &str) -> Option<f64> {
+    let mut found = None;
+    for line in exposition.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix(name) else {
+            continue;
+        };
+        // The name ends at a label set or the value; a longer metric that
+        // shares the prefix is another metric.
+        if !(rest.starts_with('{') || rest.starts_with(' ')) {
+            continue;
+        }
+        if let Some(value) = rest.rsplit(' ').next().and_then(|v| v.parse::<f64>().ok()) {
+            *found.get_or_insert(0.0) += value;
+        }
+    }
+    found
+}
+
+/// The served counters of this host's inference deployment, read from its
+/// engine's `/metrics` (vLLM's `vllm:prompt_tokens_total`,
+/// `vllm:generation_tokens_total` and `vllm:request_success_total`); `None`
+/// when no deployment is reserved here.
+async fn served_counters() -> Result<Option<(String, Counters)>, String> {
+    let Some(active) = crate::inference::reservation::active()? else {
+        return Ok(None);
+    };
+    let url = format!("http://{}:{}/metrics", active.endpoint_host, active.port);
+    let response = crate::wait::request(reqwest::Client::new().get(&url))
+        .await
+        .map_err(|error| format!("{url} did not answer: {error}"))?;
+    let status = response.status();
+    let body = response.text().await.map_err(|error| {
+        format!("{url} answered {status} and its body could not be read: {error}")
+    })?;
+    if !status.is_success() {
+        return Err(format!("{url} answered {status}"));
+    }
+    let read =
+        |name: &str| metric_sum(&body, name).ok_or_else(|| format!("{url} carries no {name}"));
+    Ok(Some((
+        active.deployment,
+        Counters {
+            prompt_tokens: read("vllm:prompt_tokens_total")?,
+            generation_tokens: read("vllm:generation_tokens_total")?,
+            requests: read("vllm:request_success_total")?,
+        },
+    )))
 }
 
 static REGISTER: std::sync::LazyLock<std::sync::Mutex<Register>> =
@@ -139,6 +216,7 @@ pub async fn sample() {
     let at = Utc::now();
     let boards = board_samples().await;
     let cpu = crate::providers::local::helpers::host::cpu::busy_fraction();
+    let served = served_counters().await;
     let mut register = crate::primitives::lock::held(&REGISTER);
     let hour = match hour_of(at) {
         Ok(hour) => hour,
@@ -147,7 +225,11 @@ pub async fn sample() {
             return;
         }
     };
-    let Register { hours, last_sample } = &mut *register;
+    let Register {
+        hours,
+        last_sample,
+        last_served,
+    } = &mut *register;
     let bucket = hours.entry(hour).or_default();
     let mut note = |bucket: &mut Hour, cause: String| {
         if !bucket.unread.contains(&cause) {
@@ -187,6 +269,24 @@ pub async fn sample() {
         }
         Ok(None) => {}
         Err(cause) => note(bucket, format!("processor: {cause}")),
+    }
+    match served {
+        Ok(Some((deployment, now))) => {
+            // The engine's counters only grow; one that fell was restarted,
+            // and what it served since is its new total.
+            if let Some(before) = last_served.insert(deployment.clone(), now) {
+                let delta = |now: f64, before: f64| if now >= before { now - before } else { now };
+                let entry = bucket.served.get_or_insert_with(|| Served {
+                    deployment: deployment.clone(),
+                    ..Served::default()
+                });
+                entry.prompt_tokens += delta(now.prompt_tokens, before.prompt_tokens);
+                entry.generation_tokens += delta(now.generation_tokens, before.generation_tokens);
+                entry.requests += delta(now.requests, before.requests);
+            }
+        }
+        Ok(None) => {}
+        Err(cause) => note(bucket, format!("served: {cause}")),
     }
     let oldest = at - Duration::hours(HOURS_KEPT);
     if let Ok(oldest) = hour_of(oldest) {

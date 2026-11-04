@@ -152,6 +152,13 @@ enum NativeRegistryOperations {
               path: ["market", "measure"], hostPlacement: .none, fields: [
                   .init(id: "gpu", label: "Board model as Vast spells it", option: "--gpu", required: true),
               ], fixedArguments: ["--provider", "vast"], jsonOutput: false),
+        .init(id: "market-serve-or-rent", title: "Is a host's model worth more than renting its board?",
+              path: ["market", "serve-or-rent"], hostPlacement: .none, fields: [
+                  .init(id: "target", label: "Registry target", option: "--target", required: true),
+                  .init(id: "outside-model", label: "Outside model as OpenRouter lists it", option: "--outside-model", required: true),
+                  .init(id: "gpu", label: "Board model as Vast spells it", option: "--gpu", required: true),
+                  .init(id: "since-hours", label: "Hours back", option: "--since-hours", initial: "24"),
+              ], fixedArguments: ["--provider", "vast"], mutates: false, jsonOutput: false),
         .init(id: "market-maintenance", title: "Tell Vast renters this host goes down for maintenance",
               path: ["market", "maintenance"], hostPlacement: .none, fields: [
                   .init(id: "in-minutes", label: "Minutes until the host goes down", option: "--in-minutes", initial: "0"),

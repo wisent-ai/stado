@@ -91,6 +91,10 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             "a Stado peer fleet publishes no market of prices; the price a peer is lent at is the \
              one `stado market follow --provider stado --price-gpu` offers",
         )),
+        MarketCommands::ServeOrRent { .. } => Err(CmdError::refused(
+            "serve-or-rent compares with a marketplace's rental price, and a Stado peer fleet \
+             publishes none; run it with --provider vast",
+        )),
         MarketCommands::Readiness {
             peer,
             vault_host,

@@ -91,6 +91,34 @@ pub(crate) enum MarketCommands {
     /// declared rate is kept and printed as unpriced, never at a guess.
     #[command(subcommand)]
     Payout(PayoutCommands),
+    /// Whether a host's inference deployment is worth more than renting its
+    /// board: the tokens it served per measured hour, priced at an outside
+    /// model's per-token prices, beside the median hourly price renters pay
+    /// for the board model on the marketplace, from the newest `stado market
+    /// measure` reading. Names the larger, and every figure it could not read.
+    ServeOrRent {
+        /// The marketplace whose rental price is compared.
+        #[arg(long, value_enum)]
+        provider: MarketProvider,
+        /// Taken only with --provider stado, which is refused.
+        #[arg(long)]
+        peer: Option<String>,
+        /// The registry host serving the deployment.
+        #[arg(long)]
+        target: String,
+        /// The outside model the traffic would otherwise buy, exactly as
+        /// OpenRouter lists it (e.g. thedrummer/cydonia-24b-v4.1).
+        #[arg(long = "outside-model")]
+        outside_model: String,
+        /// The board model as the marketplace spells it.
+        #[arg(long)]
+        gpu: String,
+        /// Hours back from now to measure.
+        #[arg(long = "since-hours", default_value_t = 24)]
+        since_hours: u32,
+        #[arg(long)]
+        json: bool,
+    },
     /// What the marketplace asks for a board model right now: the number of
     /// rentable one-board on-demand offers and what a renter pays per hour
     /// (lowest, median, highest), read from the public offer search, which

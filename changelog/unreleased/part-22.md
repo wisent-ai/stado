@@ -178,3 +178,10 @@ The version bump gathers them into the release's own file and removes this one.
   --source S --host H --paid-at T --token K --amount N [--usd-per-unit R --as-of D --rate-source U]`
   keeps one in the fleet store; `stado market payout list [--host H]` prints each with its US-dollar
   value and the total. A payout with no declared rate is kept and printed as unpriced, naming why.
+- **`stado market serve-or-rent` says whether a model is worth more than renting its board:** a
+  deployment held a board with nothing comparing what it saved with what the board would rent for.
+  Every beacon now counts the tokens and requests the host's inference engine served per hour from
+  its `/metrics` counters; `stado market serve-or-rent --provider vast --target H --outside-model ID
+  --gpu BOARD` prices those tokens at the outside model's OpenRouter prices, sets them beside the
+  board's median Vast price from `stado market measure`, and names the larger. Desktop's Registry
+  screen runs it.
