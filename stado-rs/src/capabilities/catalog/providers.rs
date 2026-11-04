@@ -107,6 +107,12 @@ define_providers! {
     Linux => ("linux", []),
     MultiCloud => ("multi-cloud", []),
     ProviderNeutral => ("provider-neutral", []),
+    Clore => ("clore", ["clore-ai"]),
+    Akash => ("akash", []),
+    IoNet => ("io-net", ["ionet"]),
+    Chutes => ("chutes", []),
+    Darkbloom => ("darkbloom", []),
+    HandToHuman => ("handtohuman", []),
 }
 
 impl ProviderId {

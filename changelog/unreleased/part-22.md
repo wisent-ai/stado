@@ -185,3 +185,8 @@ The version bump gathers them into the release's own file and removes this one.
   --gpu BOARD` prices those tokens at the outside model's OpenRouter prices, sets them beside the
   board's median Vast price from `stado market measure`, and names the larger. Desktop's Registry
   screen runs it.
+- **The capability catalog has a `market` family of sellers:** selling capacity had no family, so
+  Vast's host publishing sat as partial rows of the inventory and quota families and no other
+  seller could be declared. The `market` family lists Vast and peer lending as implemented and
+  RunPod, SaladCloud, Clore.ai, Akash, io.net, Chutes, Darkbloom and HandToHuman as planned;
+  `stado capabilities market` prints it. The Vast rows under inventory and quota moved to it.

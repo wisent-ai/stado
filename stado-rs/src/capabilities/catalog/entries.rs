@@ -288,7 +288,6 @@ define_capabilities! {
             ProviderId::Aws => (Partial, "cli::resources::inventory", "Stado-owned EC2 agent VMs"),
             ProviderId::Local => (Implemented, "targets + monitor::host_health", "Registered hosts, services, and capacity beacons"),
             ProviderId::Boat => (Partial, "providers::box", "Boat sandbox lifecycle and account limits"),
-            ProviderId::Vast => (Partial, "providers::vast", "Published host and marketplace state"),
         ]
     },
     QuotaCapacity => {
@@ -301,7 +300,6 @@ define_capabilities! {
             ProviderId::Aws => (Planned, "", "No live AWS quota adapter"),
             ProviderId::Local => (Implemented, "queue::capacity + providers::local", "Live CPU, RAM, disk, and accelerator measurements"),
             ProviderId::Boat => (Implemented, "providers::box", "Account limits and active sandboxes"),
-            ProviderId::Vast => (Partial, "providers::vast", "Published host capacity"),
         ]
     },
     BillingCost => {
@@ -325,6 +323,22 @@ define_capabilities! {
             ProviderId::Azure => (Partial, "self_update + queue::azure_blob", "Azure-hosted release reads and object storage"),
             ProviderId::Aws => (Planned, "", "No dedicated S3 release publisher adapter"),
             ProviderId::Local => (Partial, "artifacts + filesystem", "Local artifact manifests and files"),
+        ]
+    },
+    Market => {
+        id: "market",
+        summary: "Sell the fleet's idle capacity: list it where a buyer pays for it, withdraw it when fleet work returns, and read what was earned.",
+        providers: provider_rows![
+            ProviderId::Vast => (Implemented, "providers::vast + cli::integrations::vast", "Rents whole hosts on Vast.ai: readiness, renter isolation, listing, withdrawal, maintenance notices, earnings and market prices"),
+            ProviderId::Stado => (Implemented, "providers::peer + cli::integrations::peer", "Lends idle boards to another Stado fleet's queue and reads the seconds lent"),
+            ProviderId::Runpod => (Planned, "", "RunPod Community Cloud host program; no Stado adapter"),
+            ProviderId::Salad => (Planned, "", "SaladCloud host program; no Stado adapter"),
+            ProviderId::Clore => (Planned, "", "Clore.ai host listing; no Stado adapter"),
+            ProviderId::Akash => (Planned, "", "Akash Network provider; no Stado adapter"),
+            ProviderId::IoNet => (Planned, "", "io.net worker; no Stado adapter"),
+            ProviderId::Chutes => (Planned, "", "Chutes miner on Bittensor subnet 64; no Stado adapter"),
+            ProviderId::Darkbloom => (Planned, "", "Darkbloom provider agent on an Apple silicon Mac; no Stado adapter"),
+            ProviderId::HandToHuman => (Planned, "", "Fleet compute and egress as HandToHuman offers; no Stado adapter"),
         ]
     },
     BackupRecovery => {
