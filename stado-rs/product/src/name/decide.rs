@@ -141,6 +141,9 @@ pub(super) fn set(runtime: &Runtime, args: &Arguments, json: bool) -> Result<i32
     } else {
         outside::read(runtime, renamed, product, target_id, args.optional("--org")?)?
     };
+    // The decision is in the working tree; readers read the committed
+    // catalog, so the answer says what commits it.
+    let uncommitted = crate::catalog::committed::edit_visibility(&runtime.catalog)?;
     let answer = json!({
         "action": "set",
         "product": target_id,
@@ -148,6 +151,7 @@ pub(super) fn set(runtime: &Runtime, args: &Arguments, json: bool) -> Result<i32
         "name": target_name,
         "naming": renamed["naming"],
         "written": [runtime.catalog],
+        "uncommitted": uncommitted,
         "references": references,
         "kept": kept,
         "receipts": moved,
@@ -252,41 +256,32 @@ fn print(answer: &Value) {
         Some(text) => text.to_owned(),
         None => value.to_string(),
     };
+    let rows = |name: &str| answer[name].as_array().into_iter().flatten();
+    let (former, naming) = (&answer["former"], &answer["naming"]);
     println!(
         "{} ({}) is now {} ({}); decided by {} at {}: {}",
-        field(&answer["former"]["id"]),
-        field(&answer["former"]["name"]),
-        field(&answer["product"]),
-        field(&answer["name"]),
-        field(&answer["naming"]["decided_by"]),
-        field(&answer["naming"]["decided_at"]),
-        field(&answer["naming"]["reason"]),
+        field(&former["id"]), field(&former["name"]), field(&answer["product"]),
+        field(&answer["name"]), field(&naming["decided_by"]), field(&naming["decided_at"]),
+        field(&naming["reason"]),
     );
-    for row in answer["references"].as_array().into_iter().flatten() {
-        println!(
-            "  {}.{} now names {}",
-            field(&row["product"]),
-            field(&row["field"]),
-            field(&answer["product"])
-        );
+    for row in rows("references") {
+        let (owner, kind) = (field(&row["product"]), field(&row["field"]));
+        println!("  {owner}.{kind} now names {}", field(&answer["product"]));
     }
-    for row in answer["kept"].as_array().into_iter().flatten() {
-        println!(
-            "  kept {} = {}: {}",
-            field(&row["field"]),
-            field(&row["value"]),
-            field(&row["because"])
-        );
+    for row in rows("kept") {
+        let (name, value) = (field(&row["field"]), field(&row["value"]));
+        println!("  kept {name} = {value}: {}", field(&row["because"]));
     }
-    for row in answer["receipts"].as_array().into_iter().flatten() {
+    for row in rows("receipts") {
         println!("  moved receipt {} -> {}", field(&row["from"]), field(&row["to"]));
     }
-    for row in answer["outside"].as_array().into_iter().flatten() {
-        println!(
-            "  still {}: {} ({})",
-            field(&row["state"]),
-            field(&row["what"]),
-            field(&row["next"])
-        );
+    for row in rows("outside") {
+        let (state, what) = (field(&row["state"]), field(&row["what"]));
+        println!("  still {state}: {what} ({})", field(&row["next"]));
+    }
+    let uncommitted = &answer["uncommitted"];
+    if uncommitted.is_object() {
+        let readers = field(&uncommitted["readers"]);
+        println!("  readers {readers}: {}", field(&uncommitted["commit"]));
     }
 }

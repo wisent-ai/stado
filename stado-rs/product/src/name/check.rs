@@ -141,8 +141,9 @@ pub(super) fn forget(runtime: &Runtime, args: &Arguments, json: bool) -> Result<
     let names = BTreeMap::from([(product.clone(), product.clone())]);
     crate::registry::document::replace_records(&runtime.catalog, &original, &document, &names)?;
     if json {
+        let uncommitted = crate::catalog::committed::edit_visibility(&runtime.catalog)?;
         emit(&json!({"action": "forget", "product": product, "removed": removed,
-            "written": [runtime.catalog]}))?;
+            "written": [runtime.catalog], "uncommitted": uncommitted}))?;
     } else {
         println!(
             "{product}: forgot {} former name record(s) of {former}",

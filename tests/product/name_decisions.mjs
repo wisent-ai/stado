@@ -166,6 +166,7 @@ try {
 	let answer = name("set", "alpha", "--id", "gamma", "--name", "Gamma", "--decided-by", "operator", "--reason", reason, "--json");
 	assert.equal(answer.status, SUCCESS, answer.stderr);
 	const decision = JSON.parse(answer.stdout);
+	assert.equal(decision.uncommitted, null, "an untracked catalog was said to wait for a commit");
 	let products = catalog();
 	assert.equal(products.alpha, undefined, "the former id still names a record");
 	assert.equal(products.gamma.name, "Gamma");
