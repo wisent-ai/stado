@@ -20,10 +20,12 @@ pub fn resolved_host<'a>(
     target: &str,
 ) -> Result<&'a ComputeTarget, CmdError> {
     host_channel::resolve_target(registry, target).map_err(|error| {
-        let code = if registry.lookup(target).is_none() {
-            FailureCode::NotFound
-        } else {
-            FailureCode::Refused
+        // The registry is asked the question the channel refused on, by the
+        // same name-or-identity rule it resolved with.
+        let code = match registry.lookup_identity(target) {
+            Ok(None) => FailureCode::NotFound,
+            Ok(Some(_)) => FailureCode::Refused,
+            Err(_) => FailureCode::Config,
         };
         CmdError::click(error.to_string()).stating(code)
     })

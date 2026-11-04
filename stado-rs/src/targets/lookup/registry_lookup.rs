@@ -6,6 +6,20 @@ impl Registry {
         self.targets.iter().find(|t| t.name == name)
     }
 
+    /// The target `name` addresses: the one named so, or else the one
+    /// declaring it as an identity (a hostname alias or the host of an SSH
+    /// path, without the mDNS suffix), the rule [`Registry::lookup_self`]
+    /// finds a machine's own entry by. A machine's system name
+    /// (`hostname -s`) therefore reaches its registry entry, while two
+    /// targets declaring the same identity refuse rather than let target
+    /// order choose.
+    pub fn lookup_identity(&self, name: &str) -> Result<Option<&ComputeTarget>, RegistryError> {
+        match self.lookup(name) {
+            Some(target) => Ok(Some(target)),
+            None => self.lookup_self(name),
+        }
+    }
+
     /// Subset of targets with kind='local'. Used by wc bootstrap.
     pub fn local_targets(&self) -> Vec<&ComputeTarget> {
         self.targets

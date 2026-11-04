@@ -117,6 +117,11 @@ pub fn target_is_this_host(target: &ComputeTarget) -> bool {
 /// [`crate::deploy::host_state::reboot`] makes, word for word: not in the
 /// registry, not a local host, no registry-managed ssh destination.
 ///
+/// The target is found by name or by an identity it declares
+/// ([`Registry::lookup_identity`]), so a machine's own system name, as
+/// `hostname -s` prints it, reaches its registry entry; two targets declaring
+/// that identity are refused naming both.
+///
 /// One deliberate exception to the last refusal: a target that IS this
 /// machine needs no ssh destination, because reaching it does not involve
 /// the network. A local compute host with no `ssh` field is a normal registry
@@ -126,9 +131,12 @@ pub fn resolve_target<'a>(
     registry: &'a Registry,
     target_name: &str,
 ) -> Result<&'a ComputeTarget, DeployError> {
-    let Some(target) = registry.lookup(target_name) else {
+    let found = registry.lookup_identity(target_name).map_err(|error| {
+        DeployError(error.to_string()).stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    let Some(target) = found else {
         return Err(DeployError(format!(
-            "target {} is not in the canonical registry",
+            "target {} is not in the canonical registry: no target is named so or declares it as a hostname or an SSH host",
             py_str_repr(target_name)
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound));
