@@ -14,6 +14,11 @@ rustc --edition 2021 -O src/main.rs -o .build/kompilator
 kompilator build --manifest-path ../oko/rust/Cargo.toml --release --bin oko
 ```
 
+A build prints the path of every binary it linked on standard output, one per
+line, after checking each is there; its progress goes to standard error. A
+caller takes the binary's path from that answer, or from `kompilator where`,
+never by spelling the output directory itself.
+
 | Flag | Meaning |
 |---|---|
 | `--manifest-path DIR/Cargo.toml` | the package to build; its `Cargo.lock` must stand beside it |
@@ -35,6 +40,21 @@ path through `rustc --print sysroot`, so the same compiler builds every unit
 and runs in every build script whatever directory `kompilator` is started
 from. The compiler's version is part of every unit's identity: a different
 toolchain compiles every unit again.
+
+## Find a built binary
+
+```sh
+kompilator where --manifest-path ../stado/stado-rs/Cargo.toml --release --bin stado
+```
+
+`where` takes the flags that decide where binaries are written
+(`--manifest-path`, `--release`, `--bin`, `--out`) and prints, one per line,
+the path each selected binary has in that build's output, without building.
+A binary that is not there is refused with the build command that writes it:
+``<name> has not been built: <path> does not exist; `kompilator build
+--manifest-path <dir>/Cargo.toml --release --bin <name>` builds it there``.
+Any other flag is refused (exit `2`), because it changes what is compiled,
+not where.
 
 ## What it does
 
@@ -79,7 +99,12 @@ error, `1` for a build that could not be made.
 
 | Cause | What to do |
 |---|---|
-| `kompilator build needs --manifest-path` | name the package's `Cargo.toml` |
+| `kompilator build needs --manifest-path` / `kompilator where needs --manifest-path` | name the package's `Cargo.toml` |
+| `kompilator takes build or where; got <word>` | the first word is the verb |
+| `kompilator where does not take <flag>: it reads only --manifest-path, --release, --bin and --out, which decide where the binaries are` | drop the flag; it changes what is compiled, not where |
+| `--bin <name>: <package> <version> declares no such binary; it declares <names>` | name one of the binaries the package declares |
+| `<package> <version> declares no binary to build` | the package has no `[[bin]]` and no `src/main.rs`; it is a library |
+| ``<name> has not been built: <path> does not exist; `<build command>` builds it there`` | run the command it names, then ask again |
 | `the manifest <path> cannot be found: <error>` | name a manifest that exists |
 | `<dir>/Cargo.lock cannot be read: <error>` | create the lock once with the registry's client |
 | `<package> <version> comes from the registry <source>, and only crates.io is downloaded by this build; …` | unpack it once with that registry's own client |

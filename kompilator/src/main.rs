@@ -9,6 +9,7 @@
 //! It depends on nothing but Rust's standard library, so it is built with
 //! `rustc` alone: `rustc --edition 2021 -O src/main.rs -o kompilator`.
 
+mod binaries;
 mod cfg;
 mod compile;
 mod lock;
@@ -27,6 +28,7 @@ use std::time::Instant;
 
 const USAGE: &str = "kompilator build --manifest-path <dir>/Cargo.toml [--revision REV] [--release] [--bin NAME]... [--features A,B] [--no-default-features] [--all-features] [--out DIR] [--cache DIR] [--jobs N] [--incremental]
   Build the package whose manifest is named, from the Cargo.lock beside it, with rustc and no Cargo.
+  Prints the path of each binary it linked on standard output, one per line.
   --revision REV          build this commit of the manifest's repository, exported once, instead of the working tree
   --release               the release profile; the dev profile without it. [profile.*] of the manifest applies
   --bin NAME              link only this binary of the package; every binary when none is named
@@ -37,9 +39,20 @@ const USAGE: &str = "kompilator build --manifest-path <dir>/Cargo.toml [--revisi
   --cache DIR             where compiled units are kept; KOMPILATOR_CACHE, else the --out directory.
                           Products built with one cache share every unit they have in common
   --jobs N                how many units compile at once; the machine's cores by default
-  --incremental           compile the package's own sources incrementally whatever the profile says";
+  --incremental           compile the package's own sources incrementally whatever the profile says
+kompilator where --manifest-path <dir>/Cargo.toml [--release] [--bin NAME]... [--out DIR]
+  Print the path of each binary a build with the same flags writes, one per line, without building;
+  a binary that is not there is refused with the build command that writes it.";
+
+/// What the invocation asks for.
+#[derive(PartialEq)]
+enum Verb {
+    Build,
+    Where,
+}
 
 struct Request {
+    verb: Verb,
     manifest: PathBuf,
     release: bool,
     bins: Vec<String>,
@@ -53,16 +66,22 @@ struct Request {
 
 fn request(arguments: &[String]) -> Result<Request, String> {
     let mut words = arguments.iter();
-    match words.next().map(String::as_str) {
-        Some("build") => {}
+    let verb = match words.next().map(String::as_str) {
+        Some("build") => Verb::Build,
+        Some("where") => Verb::Where,
         Some("--help") | Some("-h") => {
             println!("{USAGE}");
             std::process::exit(0);
         }
         None => return Err(USAGE.to_string()),
-        Some(other) => return Err(format!("kompilator takes build; got {other}\n{USAGE}")),
-    }
+        Some(other) => return Err(format!("kompilator takes build or where; got {other}\n{USAGE}")),
+    };
+    let name = match verb {
+        Verb::Build => "build",
+        Verb::Where => "where",
+    };
     let mut request = Request {
+        verb,
         manifest: PathBuf::new(),
         release: false,
         bins: Vec::new(),
@@ -77,6 +96,15 @@ fn request(arguments: &[String]) -> Result<Request, String> {
     while let Some(word) = words.next() {
         let mut value = |flag: &str| words.next().cloned().ok_or_else(|| format!("{flag} needs a value"));
         match word.as_str() {
+            // `where` reads only what decides the output paths; a flag that
+            // changes what is compiled, not where, is refused for it.
+            flag if request.verb == Verb::Where
+                && !matches!(flag, "--manifest-path" | "--release" | "--bin" | "--out") =>
+            {
+                return Err(format!(
+                    "kompilator where does not take {flag}: it reads only --manifest-path, --release, --bin and --out, which decide where the binaries are\n{USAGE}"
+                ))
+            }
             "--manifest-path" => manifest = Some(PathBuf::from(value("--manifest-path")?)),
             "--revision" => request.revision = Some(value("--revision")?),
             "--release" => request.release = true,
@@ -100,10 +128,10 @@ fn request(arguments: &[String]) -> Result<Request, String> {
                 }
                 request.jobs = Some(jobs);
             }
-            other => return Err(format!("kompilator build does not take {other}\n{USAGE}")),
+            other => return Err(format!("kompilator {name} does not take {other}\n{USAGE}")),
         }
     }
-    request.manifest = manifest.ok_or_else(|| format!("kompilator build needs --manifest-path\n{USAGE}"))?;
+    request.manifest = manifest.ok_or_else(|| format!("kompilator {name} needs --manifest-path\n{USAGE}"))?;
     Ok(request)
 }
 
@@ -155,18 +183,51 @@ fn compiler(root_dir: &Path) -> Result<String, String> {
     Ok(rustc.display().to_string())
 }
 
-fn build(request: &Request) -> Result<(), String> {
-    let started = Instant::now();
+/// The manifest's directory, refusing a manifest that cannot be found.
+fn checkout_of(request: &Request) -> Result<PathBuf, String> {
     let manifest_path = request
         .manifest
         .canonicalize()
         .map_err(|error| format!("the manifest {} cannot be found: {error}", request.manifest.display()))?;
-    let checkout_dir = manifest_path.parent().ok_or("the manifest has no directory")?.to_path_buf();
-    let profile_dir = if request.release { "release" } else { "debug" };
-    let out = match &request.out {
-        Some(out) => out.clone(),
-        None => checkout_dir.join(".build/kompilator").join(profile_dir),
-    };
+    Ok(manifest_path.parent().ok_or("the manifest has no directory")?.to_path_buf())
+}
+
+/// The `kompilator build` command that writes what `request` locates.
+fn build_command(request: &Request, checkout_dir: &Path) -> String {
+    let mut words = vec![
+        String::from("kompilator build --manifest-path"),
+        checkout_dir.join("Cargo.toml").display().to_string(),
+    ];
+    if request.release {
+        words.push(String::from("--release"));
+    }
+    for bin in &request.bins {
+        words.push(format!("--bin {bin}"));
+    }
+    if let Some(out) = &request.out {
+        words.push(format!("--out {}", out.display()));
+    }
+    words.join(" ")
+}
+
+/// `kompilator where`: each selected binary's path in the build's output,
+/// one per line, without building.
+fn locate(request: &Request) -> Result<(), String> {
+    let checkout_dir = checkout_of(request)?;
+    let manifest = manifest::Manifest::read(&checkout_dir)?;
+    let bins = binaries::wanted(&manifest, &request.bins)?;
+    let out = binaries::out_dir(&checkout_dir, request.release, request.out.as_deref());
+    for path in binaries::located(&bins, &out, &build_command(request, &checkout_dir))? {
+        println!("{}", path.display());
+    }
+    Ok(())
+}
+
+fn build(request: &Request) -> Result<(), String> {
+    let started = Instant::now();
+    let checkout_dir = checkout_of(request)?;
+    let out = binaries::out_dir(&checkout_dir, request.release, request.out.as_deref());
+    let command = build_command(request, &checkout_dir);
     let _out_lock = hold(&out)?;
     let root_dir = match &request.revision {
         None => checkout_dir,
@@ -182,6 +243,7 @@ fn build(request: &Request) -> Result<(), String> {
         }
     };
     let root = manifest::Manifest::read(&root_dir)?;
+    let bins = binaries::wanted(&root, &request.bins)?;
     let lock_path = root_dir.join("Cargo.lock");
     let lock = lock::Lock::read(&lock_path)?;
     let profile = profile::Profile::read(&root_dir, request.release)?;
@@ -227,6 +289,11 @@ fn build(request: &Request) -> Result<(), String> {
         started.elapsed().as_secs_f64(),
         out.display()
     );
+    // Every binary the build was asked for must now be there; its path is
+    // the answer a caller reads, never one it spells itself.
+    for path in binaries::located(&bins, &out, &command)? {
+        println!("{}", path.display());
+    }
     Ok(())
 }
 
@@ -239,7 +306,11 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match build(&request) {
+    let done = match request.verb {
+        Verb::Build => build(&request),
+        Verb::Where => locate(&request),
+    };
+    match done {
         Ok(()) => ExitCode::SUCCESS,
         Err(why) => {
             eprintln!("kompilator: {why}");
