@@ -16,3 +16,11 @@ The version bump gathers them into the release's own file and removes this one.
   now removes the line and its wrapper and says `removed the @reboot cron fallback of <unit>;
   launchd alone starts it`. A crontab it cannot rewrite is refused naming the unit and the wrapper
   the line still names.
+- **The network node launchd starts takes its port back from the copy cron started:** a node
+  unit loaded before installs removed the cron fallback kept the line, so at every boot cron's
+  copy took the node's port and launchd's node failed to bind and restarted every ten seconds
+  (3130 times on one Mac). The node its unit started now reads who holds its port; a listener
+  whose parent ran this unit's cron wrapper is ended (SIGTERM, then SIGKILL after five seconds),
+  the cron line and wrapper are removed, and the bind is tried again, saying `port <p> was held
+  by pid <pid>, a copy of this node cron started from <wrapper>`. Any other holder is left alone
+  and the bind refusal stands. `tests/network/cron_copy.mjs` runs it on a dedicated account.

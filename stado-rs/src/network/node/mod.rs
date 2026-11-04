@@ -19,6 +19,7 @@ use super::{peers, Answer, Request};
 
 mod attach;
 pub mod declaration;
+mod cron_copy;
 mod hub;
 mod reach;
 pub mod serving;
@@ -125,14 +126,21 @@ async fn listen() -> Result<(TcpListener, Arc<Context>, u16), String> {
             keypair.public_base64()
         ));
     }
-    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, state.port))
-        .await
-        .map_err(|error| {
-            format!(
-                "the node cannot listen on port {} that `stado network up` recorded: {error}; `stado network down` then `stado network up` takes a port the system hands out and declares it",
-                state.port
-            )
-        })?;
+    let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, state.port)).await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            match cron_copy::take_back(state.port).await? {
+                Some(taken) => {
+                    eprintln!("stado network: {taken}");
+                    TcpListener::bind((Ipv4Addr::UNSPECIFIED, state.port))
+                        .await
+                        .map_err(|error| refused_port(state.port, &error))?
+                }
+                None => return Err(refused_port(state.port, &error)),
+            }
+        }
+        Err(error) => return Err(refused_port(state.port, &error)),
+    };
     let context = Arc::new(Context {
         keypair,
         host: state.host.clone(),
@@ -145,6 +153,12 @@ async fn listen() -> Result<(TcpListener, Arc<Context>, u16), String> {
         }
     }
     Ok((listener, context, state.port))
+}
+
+fn refused_port(port: u16, error: &std::io::Error) -> String {
+    format!(
+        "the node cannot listen on port {port} that `stado network up` recorded: {error}; `stado network down` then `stado network up` takes a port the system hands out and declares it"
+    )
 }
 
 async fn accept_forever(listener: TcpListener, context: Arc<Context>) -> Result<(), String> {

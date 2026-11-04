@@ -20,10 +20,7 @@ pub(super) async fn install_cron_job(
     runner: &Runner,
     echo: &mut dyn FnMut(&str),
 ) -> Result<(), DeployError> {
-    let wrapper = home
-        .join(".stado")
-        .join("bin")
-        .join(format!("run-{}.sh", plan.label));
+    let wrapper = cron_wrapper(home, &plan.label);
     let log = prepare_owner_log(home, &plan.label)?;
     let mut content = String::from("#!/bin/sh\n");
     for (key, value) in &plan.env {
@@ -102,10 +99,19 @@ pub(super) async fn retire_cron_fallback(
     runner: &Runner,
     echo: &mut dyn FnMut(&str),
 ) -> Result<(), DeployError> {
-    let wrapper = home
-        .join(".stado")
-        .join("bin")
-        .join(format!("run-{}.sh", plan.label));
+    retire_cron_fallback_of(&plan.label, home, runner, echo).await
+}
+
+/// [`retire_cron_fallback`] for the unit `label`, for a process its unit
+/// started that finds the cron copy holding what it needs: a unit loaded
+/// before the install that retires the line existed never had it removed.
+pub async fn retire_cron_fallback_of(
+    label: &str,
+    home: &Path,
+    runner: &Runner,
+    echo: &mut dyn FnMut(&str),
+) -> Result<(), DeployError> {
+    let wrapper = cron_wrapper(home, label);
     let wrapper_arg = shlex_quote(&wrapper.to_string_lossy());
     // The table is filtered only when it holds the line, so an account with
     // no crontab is not given an empty one.
@@ -130,7 +136,7 @@ pub(super) async fn retire_cron_fallback(
         return Err(DeployError::unreachable(format!(
             "launchd now runs {} but its cron fallback line naming {} could not be removed: {}; \
              every boot still starts a second copy until `crontab -l` no longer lists it",
-            plan.label,
+            label,
             wrapper.display(),
             retired.detail()
         )));
@@ -138,7 +144,7 @@ pub(super) async fn retire_cron_fallback(
     if retired.stdout.trim() == "retired" {
         echo(&format!(
             "[ok]   removed the @reboot cron fallback of {}; launchd alone starts it",
-            plan.label
+            label
         ));
     }
     match std::fs::remove_file(&wrapper) {
@@ -148,11 +154,16 @@ pub(super) async fn retire_cron_fallback(
             return Err(DeployError(format!(
                 "launchd now runs {} but its cron fallback wrapper {} could not be removed: \
                  {error}",
-                plan.label,
+                label,
                 wrapper.display()
             ))
             .stating(crate::cli::entry::error::io_failure_code(error.kind())))
         }
     }
     Ok(())
+}
+
+/// The wrapper the cron fallback of unit `label` starts.
+pub fn cron_wrapper(home: &Path, label: &str) -> std::path::PathBuf {
+    home.join(".stado").join("bin").join(format!("run-{label}.sh"))
 }
