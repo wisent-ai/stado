@@ -682,7 +682,51 @@ products:
     source: https://stado.wisent.com/docs/vast
   - title: Offer boards on any GPU marketplace through one provider family
     status: planned
-    outcome: Make marketplaces a capability family with one adapter per marketplace, each answering readiness, listing, withdrawal and earnings, so a board is offered wherever its margin is highest.
+    outcome: Make marketplaces a capability family with one adapter per marketplace, each answering readiness (the marketplace's own admission rules for the host), listing, withdrawal, earnings and the referral credit it states, so a board is offered wherever its margin is highest.
+    source: https://stado.wisent.com/docs/earning
+  - title: Run paid-workload networks as a second kind of market source
+    status: planned
+    outcome: Add to the marketplace family the networks where the fleet runs the network's own node instead of a renter's container (inference, training, rendering, proving, mining, storage and bandwidth networks), each adapter answering readiness against the network's published hardware and network requirements, starting and draining its node on idle boards the way peer lending does, and reading earnings from the network's own statement.
+    source: https://stado.wisent.com/docs/earning
+  - title: Offer boards on every GPU rental marketplace that admits the host
+    status: planned
+    outcome: Adapters for each rental marketplace that admits independent hosts (Vast.ai, RunPod Community Cloud, Clore.ai, Voltage Park's TensorDock marketplace, SaladCloud, Akash Network, io.net, Spheron, Lium on Bittensor subnet 51, Aleph Cloud, Fluence, Nosana, Golem, Aethir, Theta EdgeCloud, CUDOS, Hyperbolic), each readiness naming the rule that refuses the host (bare metal, Kubernetes, static address, KYC, staking, minimum hardware) so the operator sees which ones the host can join.
+    source: https://stado.wisent.com/docs/earning
+  - title: Serve inference on decentralized inference networks
+    status: planned
+    outcome: Adapters that run a network's inference node on idle boards and Macs (Chutes on Bittensor subnet 64, Targon, Gonka, Morpheus, Allora, iExec and io.net's inference network for NVIDIA boards; Darkbloom and Lithi Connect for Apple silicon Macs), each readiness checking the network's own requirements (static address, memory per board, Kubernetes, unified memory size, staking) and earnings read from the network.
+    source: https://stado.wisent.com/docs/earning
+  - title: Contribute to decentralized training networks
+    status: planned
+    outcome: Adapters that run a decentralized training network's worker on idle boards (Prime Intellect's protocol, Nous Psyche, Gensyn and the Bittensor training subnets), with readiness against each network's requirements and earnings read from its own statement.
+    source: https://stado.wisent.com/docs/earning
+  - title: Render and transcode for media networks
+    status: planned
+    outcome: Adapters that run a Render Network node, a Livepeer orchestrator (video transcoding and AI video pipelines) and a cloud-gaming node (Aethir Atmosphere) on idle boards, with readiness against each network's GPU, encoder and latency requirements and earnings read from the network.
+    source: https://stado.wisent.com/docs/earning
+  - title: Prove and mine for proof networks when they pay more than renting
+    status: planned
+    outcome: Adapters that run zero-knowledge provers (Succinct Prover Network, Boundless, Aleo) and GPU proof-of-work mining through a pool on idle boards, choosing the coin or network by measured profit at the host's own tariff, and running only while that profit beats the best rental or inference source.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell storage and bandwidth from fleet hosts
+    status: planned
+    outcome: Adapters that offer a host's spare disk to storage networks (Storj, Filecoin, Sia) and its spare connection to bandwidth networks (Mysterium and bandwidth-sharing networks), each refusing a host whose internet contract does not allow it and reading earnings per TB stored and GB served.
+    source: https://stado.wisent.com/docs/earning
+  - title: Serve blockchain RPC and indexing nodes
+    status: planned
+    outcome: Run paid RPC and indexing nodes for networks that pay node operators per request served (Pocket Network, The Graph indexers) on hosts with spare disk and connection, with readiness against each network's staking and hardware requirements.
+    source: https://stado.wisent.com/docs/earning
+  - title: Price and convert earnings paid in tokens
+    status: planned
+    outcome: Record every payout made in a token with the amount, the declared exchange-rate source, the rate and its time, convert it to the comparison currency for the margin, and keep each conversion or sale with its fee, so no token income stands unpriced or is counted at a guessed rate.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell flexible load to the grid
+    status: planned
+    outcome: Enrol a host's interruptible load in a demand-response program the operator chooses, cut its boards to the program's level when the grid operator calls, and record the payment per event beside the income the cut cost.
+    source: https://stado.wisent.com/docs/earning
+  - title: Keep the list of earning sources current
+    status: planned
+    outcome: stado market sources lists every source the family knows with its kind, unit, payout currency, admission rules and last read price, re-reads them on a schedule, and reports a source that appeared in the markets it reads or changed its rules, so a new way to earn becomes a recorded item instead of being missed.
     source: https://stado.wisent.com/docs/earning
   - title: Keep every source's earnings per host and day
     status: planned
@@ -2624,7 +2668,11 @@ products:
   description: 'Film renders a Wisent video: one service that owns which renderer
     does it, what that renderer is asked for, who owns the identifier that comes back,
     and what still rendering means.'
-  roadmap: []
+  roadmap:
+  - title: Sell generated videos
+    status: planned
+    outcome: Sell Wisent videos per second of output, priced from the measured render cost on fleet boards or the renderer's own price, and render on fleet boards only while that margin beats renting them.
+    source: film/README.md
   integrations:
   - product: brama
     description: Vendor-hosted video models are Brama's (video-model); Film holds the
@@ -2682,7 +2730,11 @@ products:
     a pose and a description into a prompt, the adapter that makes the image that
     creator''s, the ComfyUI render, the picture that comes back, and photo-editor
     edits as one plan of steps.'
-  roadmap: []
+  roadmap:
+  - title: Sell generated images
+    status: planned
+    outcome: Sell Wisent images per image, priced from the measured ComfyUI render cost on fleet boards, and render on fleet boards only while that margin beats renting them.
+    source: obraz/README.md
   integrations:
   - product: brama
     description: Vendor-hosted image models are Brama's (image-model); Obraz renders
