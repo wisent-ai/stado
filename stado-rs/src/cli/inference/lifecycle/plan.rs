@@ -139,18 +139,15 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
     .uuid
     .clone();
     // What the repository and its base models declare as their license, at
-    // the revision the engine loads. A hub that cannot answer refuses the
-    // plan: whether the model may be sold is recorded with it, never left
-    // unknown.
-    let license = crate::inference::license::read(&options.model, &options.revision)
-        .await
-        .map_err(|cause| {
-            CmdError::click(format!(
-                "the license of {} cannot be read: {cause}",
-                options.model
-            ))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
+    // the revision the engine loads. The license decides whether the model
+    // may be sold, not whether it may run, so a hub that cannot answer
+    // leaves it unread with the cause, and the plan proceeds: a sale-facing
+    // path refuses a deployment whose license is unread or undeclared.
+    let (license, license_unread) =
+        match crate::inference::license::read(&options.model, &options.revision).await {
+            Ok(license) => (Some(license), None),
+            Err(cause) => (None, Some(cause)),
+        };
     let deployment = schema::Deployment {
         name: options.name,
         target: options.host,
@@ -162,7 +159,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         model: schema::Model {
             repository: options.model,
             revision: options.revision,
-            license: Some(license.clone()),
+            license: license.clone(),
         },
         resources: schema::Resources {
             gpu_mode: options.gpu_mode,
@@ -193,18 +190,29 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
                 "plan": plan,
                 "plan_file": path,
                 "inventory": inventory,
+                "license_unread": license_unread,
             }))?
         );
     } else {
         println!("plan_id={} file={}", plan.id, path.display());
-        println!("license={}", license.summary());
-        let undeclared = license.undeclared();
-        if !undeclared.is_empty() {
-            println!(
-                "license_warning=no license is declared for {}; serving this model to outside \
-                 callers is not permitted until one is",
-                undeclared.join(", ")
-            );
+        match (&license, &license_unread) {
+            (Some(license), _) => {
+                println!("license={}", license.summary());
+                let undeclared = license.undeclared();
+                if !undeclared.is_empty() {
+                    println!(
+                        "license_warning=no license is declared for {}; serving this model to \
+                         outside callers is not permitted until one is",
+                        undeclared.join(", ")
+                    );
+                }
+            }
+            (None, Some(cause)) => println!(
+                "license_warning=the license of {} was not read ({cause}); the deployment runs, \
+                 and serving it to outside callers is not permitted until a plan reads it",
+                plan.deployment.model.repository
+            ),
+            (None, None) => {}
         }
         if let Some(stdout) = inventory.get("stdout").and_then(Value::as_str) {
             print!("{stdout}");
