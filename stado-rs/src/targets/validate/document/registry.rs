@@ -129,11 +129,89 @@ pub(crate) fn validate_registry_body(
                     ));
                 }
             }
-            if let Some(unknown) = object
-                .keys()
-                .find(|key| !["price_per_kwh", "currency", "source"].contains(&key.as_str()))
-            {
+            if let Some(rate) = object.get("usd_rate") {
+                let rate_at = format!("{at}.usd_rate");
+                let rate = rate
+                    .as_object()
+                    .ok_or_else(|| verr(&rate_at, "must be {usd_per_unit, as_of, source}"))?;
+                if !rate
+                    .get("usd_per_unit")
+                    .and_then(Value::as_f64)
+                    .is_some_and(|value| value.is_finite() && value > 0.0)
+                {
+                    return Err(verr(
+                        &format!("{rate_at}.usd_per_unit"),
+                        "must be a number above zero: the US dollars one unit of the tariff's \
+                         currency was worth",
+                    ));
+                }
+                for field in ["as_of", "source"] {
+                    if !rate
+                        .get(field)
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty())
+                    {
+                        return Err(verr(
+                            &format!("{rate_at}.{field}"),
+                            "must name the date of the rate and the published table it was \
+                             read from, so no hour is converted at a rate nobody stated",
+                        ));
+                    }
+                }
+                if let Some(unknown) = rate
+                    .keys()
+                    .find(|key| !["usd_per_unit", "as_of", "source"].contains(&key.as_str()))
+                {
+                    return Err(verr(&format!("{rate_at}.{unknown}"), "is not a rate field"));
+                }
+            }
+            if let Some(unknown) = object.keys().find(|key| {
+                !["price_per_kwh", "currency", "source", "usd_rate"].contains(&key.as_str())
+            }) {
                 return Err(verr(&format!("{at}.{unknown}"), "is not a tariff field"));
+            }
+        }
+        if let Some(hardware) = target.get("hardware") {
+            let at = format!("{location}.hardware");
+            let object = hardware.as_object().ok_or_else(|| {
+                verr(
+                    &at,
+                    "must be {purchase_price, currency, service_years, source}",
+                )
+            })?;
+            for field in ["purchase_price", "service_years"] {
+                if !object
+                    .get(field)
+                    .and_then(Value::as_f64)
+                    .is_some_and(|value| value.is_finite() && value > 0.0)
+                {
+                    return Err(verr(
+                        &format!("{at}.{field}"),
+                        "must be a number above zero",
+                    ));
+                }
+            }
+            for field in ["currency", "source"] {
+                if !object
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.trim().is_empty())
+                {
+                    return Err(verr(
+                        &format!("{at}.{field}"),
+                        if field == "source" {
+                            "must name where the price was read (the invoice), so no hour \
+                             carries wear nobody stated"
+                        } else {
+                            "must be a non-empty currency code"
+                        },
+                    ));
+                }
+            }
+            if let Some(unknown) = object.keys().find(|key| {
+                !["purchase_price", "currency", "service_years", "source"].contains(&key.as_str())
+            }) {
+                return Err(verr(&format!("{at}.{unknown}"), "is not a hardware field"));
             }
         }
         let platform_location = format!("{location}.release_platform");

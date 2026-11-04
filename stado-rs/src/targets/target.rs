@@ -216,13 +216,38 @@ impl ComputeTarget {
     /// registry declares it; validation guarantees its fields.
     pub fn power_tariff(&self) -> Option<PowerTariff> {
         let tariff = self.extra.get("power_tariff")?;
+        let usd_rate = match tariff.get("usd_rate") {
+            Some(rate) => Some(DeclaredRate {
+                usd_per_unit: rate.get("usd_per_unit")?.as_f64()?,
+                as_of: rate.get("as_of")?.as_str()?.to_string(),
+                source: rate.get("source")?.as_str()?.to_string(),
+            }),
+            None => None,
+        };
         Some(PowerTariff {
             price_per_kwh: tariff.get("price_per_kwh")?.as_f64()?,
             currency: tariff.get("currency")?.as_str()?.to_string(),
             source: tariff.get("source")?.as_str()?.to_string(),
+            usd_rate,
+        })
+    }
+
+    /// What this host's hardware cost and how long it is declared to serve,
+    /// `targets[].hardware`; validation guarantees its fields.
+    pub fn hardware_cost(&self) -> Option<HardwareCost> {
+        let hardware = self.extra.get("hardware")?;
+        Some(HardwareCost {
+            purchase_price: hardware.get("purchase_price")?.as_f64()?,
+            currency: hardware.get("currency")?.as_str()?.to_string(),
+            service_years: hardware.get("service_years")?.as_f64()?,
+            source: hardware.get("source")?.as_str()?.to_string(),
         })
     }
 }
+
+/// Hours in a declared service year (365 days); a leap day is not counted,
+/// so wear is spread over the same hours each year.
+pub const HOURS_PER_SERVICE_YEAR: f64 = 365.0 * 24.0;
 
 /// A host's declared electricity price, `targets[].power_tariff`. Kept in
 /// `extra` like the power cap, so an older Stado preserves it.
@@ -232,4 +257,55 @@ pub struct PowerTariff {
     pub currency: String,
     /// Where the price was read.
     pub source: String,
+    /// The declared rate that turns this currency into US dollars, which
+    /// every marketplace and the cost report state; absent for a USD tariff
+    /// and for one whose rate nobody declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usd_rate: Option<DeclaredRate>,
+}
+
+/// One currency's value in US dollars, as of a date, from a named source.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct DeclaredRate {
+    pub usd_per_unit: f64,
+    pub as_of: String,
+    pub source: String,
+}
+
+impl PowerTariff {
+    /// The price of one kWh in US dollars: the tariff itself in USD, else
+    /// converted at its declared rate; refused naming the currency when no
+    /// rate is declared, so no hour is priced at a rate nobody stated.
+    pub fn usd_per_kwh(&self) -> Result<f64, String> {
+        if self.currency == "USD" {
+            return Ok(self.price_per_kwh);
+        }
+        match &self.usd_rate {
+            Some(rate) => Ok(self.price_per_kwh * rate.usd_per_unit),
+            None => Err(format!(
+                "the tariff is in {} and declares no usd_rate (usd_per_unit, as_of, source), so \
+                 its kWh has no US-dollar price",
+                self.currency
+            )),
+        }
+    }
+}
+
+/// A host's declared hardware cost, `targets[].hardware`: what it was bought
+/// for and over how many years it is written off.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct HardwareCost {
+    pub purchase_price: f64,
+    pub currency: String,
+    pub service_years: f64,
+    /// Where the price was read (the invoice).
+    pub source: String,
+}
+
+impl HardwareCost {
+    /// The share of the purchase price one hour of service carries, in the
+    /// purchase currency.
+    pub fn per_hour(&self) -> f64 {
+        self.purchase_price / (self.service_years * HOURS_PER_SERVICE_YEAR)
+    }
 }

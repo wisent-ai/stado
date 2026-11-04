@@ -17,8 +17,6 @@ use crate::queue::JobStorage;
 
 /// Joules in one kilowatt-hour: 1000 W for 3600 s (SI).
 const JOULES_PER_KWH: f64 = 3_600_000.0;
-/// The one currency the cost report is written in.
-const REPORT_CURRENCY: &str = "USD";
 
 /// Per host: its USD price per kWh (or why it has none) and, per board and
 /// hour start, the energy the board drew in that hour; and every identity
@@ -55,13 +53,13 @@ impl Energy {
         let mut hosts = BTreeMap::new();
         let mut names = BTreeMap::new();
         for target in &registry.targets {
+            // The report is in US dollars: a tariff in another currency is
+            // converted at the rate the registry declares for it, and one
+            // with no declared rate is said, never priced at a guess.
             let price_per_kwh = match target.power_tariff() {
-                Some(tariff) if tariff.currency == REPORT_CURRENCY => Ok(tariff.price_per_kwh),
-                Some(tariff) => Err(format!(
-                    "{}'s tariff is in {}, the cost report is in {REPORT_CURRENCY}, and no \
-                     exchange rate is declared",
-                    target.name, tariff.currency
-                )),
+                Some(tariff) => tariff
+                    .usd_per_kwh()
+                    .map_err(|cause| format!("{}: {cause}", target.name)),
                 None => Err(format!("{} declares no power_tariff", target.name)),
             };
             let slugs = crate::monitor::host_health::beacon_slugs(target, &target.name);

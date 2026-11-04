@@ -28,12 +28,8 @@ fn day_cost(
     day: i64,
 ) -> Result<f64, String> {
     let tariff = tariff.as_ref().ok_or("the host declares no power_tariff")?;
-    if tariff.currency != "USD" {
-        return Err(format!(
-            "the host's tariff is in {}, Vast states USD, and no exchange rate is declared",
-            tariff.currency
-        ));
-    }
+    // Vast states US dollars; the tariff is converted at its declared rate.
+    let usd_per_kwh = tariff.usd_per_kwh()?;
     let hours = hours.ok_or("the host's beacon carries no measured hours")?;
     let mut kwh = 0.0;
     for hour in 0..24 {
@@ -51,7 +47,7 @@ fn day_cost(
             .sum::<f64>()
             / 3_600_000.0;
     }
-    Ok(kwh * tariff.price_per_kwh)
+    Ok(kwh * usd_per_kwh)
 }
 
 pub(crate) async fn earnings(

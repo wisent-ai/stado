@@ -141,3 +141,9 @@ The version bump gathers them into the release's own file and removes this one.
   charged what the board spends anyway. The beacon now keeps each board's zero-utilization energy
   and seconds and the seconds its energy covers; `cost host` prints each board's idle draw in watts
   over the window and the kWh and cost above it, and says when the idle draw was never measured.
+- **A tariff in any currency is priced, and an owned hour carries hardware wear:** a non-USD
+  `power_tariff` left every US-dollar figure unpriced, and no hour carried what the hardware cost.
+  A tariff may declare `usd_rate` (`usd_per_unit`, `as_of`, `source`), and the cost report, `stado
+  market earnings` and `cost host` convert at it; `targets[].hardware` (`purchase_price`,
+  `currency`, `service_years`, `source`) gives each hour its share of the purchase, which `cost
+  host` prints.

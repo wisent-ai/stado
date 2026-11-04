@@ -88,6 +88,7 @@ fn priced(
         "kwh_above_idle": above_kwh,
         "cost_above_idle": above_kwh.map(|above| above * tariff.price_per_kwh),
         "currency": tariff.currency,
+        "cost_usd": tariff.usd_per_kwh().ok().filter(|_| measured).map(|usd| kwh * usd),
         "unread": hour["unread"],
     })
 }
@@ -147,6 +148,20 @@ pub(crate) async fn host(
         .iter()
         .filter_map(|row| row["cost_above_idle"].as_f64())
         .sum();
+    // The tariff in US dollars, which marketplaces and the cost report state;
+    // a currency with no declared rate says so instead of a converted total.
+    let usd = tariff.usd_per_kwh();
+    let total_usd = usd.as_ref().ok().map(|_| {
+        rows.iter()
+            .filter_map(|row| row["cost_usd"].as_f64())
+            .sum::<f64>()
+    });
+    // Wear: the declared purchase price spread over the declared service
+    // life, carried by every hour of the window whether busy or idle.
+    let hardware = host.hardware_cost();
+    let wear = hardware
+        .as_ref()
+        .map(|hardware| hardware.per_hour() * rows.len() as f64);
     let unpriced: Vec<&str> = rows
         .iter()
         .filter(|row| row["cost"].is_null())
@@ -163,6 +178,10 @@ pub(crate) async fn host(
                 "hours": rows,
                 "total_cost": total,
                 "total_cost_above_idle": total_above_idle,
+                "total_cost_usd": total_usd,
+                "usd_unread": usd.as_ref().err(),
+                "hardware": hardware,
+                "wear": wear,
                 "unpriced_hours": unpriced,
             }))?
         );
@@ -172,6 +191,30 @@ pub(crate) async fn host(
         "{} at {} {}/kWh ({}), since {since}",
         host.name, tariff.price_per_kwh, tariff.currency, tariff.source
     );
+    match (&usd, &tariff.usd_rate) {
+        (Ok(usd), Some(rate)) => println!(
+            "  in USD: {usd:.4}/kWh at {} USD per {} as of {} ({})",
+            rate.usd_per_unit, tariff.currency, rate.as_of, rate.source
+        ),
+        (Ok(_), None) => {}
+        (Err(cause), _) => println!("  in USD: unpriced: {cause}"),
+    }
+    match &hardware {
+        Some(hardware) => println!(
+            "  wear: {:.4} {}/hour ({} {} over {} years, {})",
+            hardware.per_hour(),
+            hardware.currency,
+            hardware.purchase_price,
+            hardware.currency,
+            hardware.service_years,
+            hardware.source
+        ),
+        None => println!(
+            "  wear: not counted: {} declares no hardware (purchase_price, currency, \
+             service_years, source)",
+            host.name
+        ),
+    }
     for row in &rows {
         let boards = row["boards"]
             .as_object()
@@ -228,6 +271,16 @@ pub(crate) async fn host(
         },
         currency = tariff.currency,
     );
+    if let Some(total_usd) = total_usd {
+        println!("total in USD {total_usd:.4}");
+    }
+    if let (Some(wear), Some(hardware)) = (wear, &hardware) {
+        println!(
+            "wear over {} hour(s) {wear:.4} {}",
+            rows.len(),
+            hardware.currency
+        );
+    }
     Ok(())
 }
 
