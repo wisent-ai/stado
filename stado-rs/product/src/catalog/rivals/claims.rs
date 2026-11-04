@@ -102,18 +102,11 @@ fn checked(rival: &str, claim: &Claim) -> Value {
     }
 }
 
-/// Every claim of every rival of `product`, each source fetched again.
+/// Every claim of every rival of `product`, each source fetched again, from
+/// the catalog every reader reads ([`crate::catalog::current`]).
 pub fn check(runtime: &Runtime, product: &str) -> Result<(Value, bool)> {
-    let text = std::fs::read_to_string(&runtime.catalog)
-        .with_context(|| format!("the catalog {} cannot be read", runtime.catalog.display()))?;
-    let document: Value = serde_yaml::from_str(&text)
-        .with_context(|| format!("the catalog {} is not YAML", runtime.catalog.display()))?;
-    let record = document["products"]
-        .as_array()
-        .context("products must be a list")?
-        .iter()
-        .find(|entry| entry["id"] == product)
-        .with_context(|| format!("no product {product} in {}", runtime.catalog.display()))?;
+    let document = crate::catalog::current(runtime)?;
+    let record = crate::catalog::product(&document, product)?;
     let mut rows = Vec::new();
     if let Some(rivals) = record.get("rivals") {
         for rival in rivals

@@ -108,9 +108,12 @@ if [ "$runner_registered" -eq 0 ] || [ "$reconfigure" = 1 ]; then
       root chown root:wheel "$runner_root"
       root chmod go-w "$runner_root"
     fi
+    # The runner's own diagnosis of the failed registration, whole: a window
+    # of its last lines could leave out the line that says why.
     for log in "$runner_root"/_diag/Runner_*.log; do
       [ -f "$log" ] || continue
-      root tail -n 80 "$log" >&2 || true
+      printf '%s:\n' "$log" >&2
+      root cat "$log" >&2 || printf 'the runner diagnosis %s could not be read\n' "$log" >&2
     done
     exit 1
   fi
