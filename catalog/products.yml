@@ -698,7 +698,11 @@ products:
     source: https://stado.wisent.com/docs/earning
   - title: Serve inference on decentralized inference networks
     status: planned
-    outcome: Adapters that run a network's inference node on idle boards and Macs (Chutes on Bittensor subnet 64, Targon, Gonka, Morpheus, Allora, iExec and io.net's inference network for NVIDIA boards; Darkbloom and Lithi Connect for Apple silicon Macs), each readiness checking the network's own requirements (static address, memory per board, Kubernetes, unified memory size, staking) and earnings read from the network.
+    outcome: Adapters that run a network's inference node on idle boards and Macs (Chutes on Bittensor subnet 64, Targon, Gonka, Morpheus, Allora, iExec and io.net's inference network for NVIDIA boards; Darkbloom and Lithi Connect for Apple silicon Macs; Inpherio, which takes NVIDIA boards, Macs and CPU-only hosts and pays per token, per audio hour or per rented hour), each readiness checking the network's own requirements (static address, memory per board, Kubernetes, unified memory size, staking, payout country) and earnings read from the network.
+    source: https://stado.wisent.com/docs/earning
+  - title: Resell idle capacity through GPU cloud aggregators
+    status: planned
+    outcome: Enrol a host's idle boards in a GPU cloud aggregator that resells provider capacity as preemptible instances with advance notice before reclaim (Shadeform Spot), handing the board back on the aggregator's notice when fleet work appears.
     source: https://stado.wisent.com/docs/earning
   - title: Contribute to decentralized training networks
     status: planned
@@ -756,6 +760,22 @@ products:
     status: planned
     outcome: Publish aggregated, anonymised measurements the fleet already keeps (board prices and occupancy across marketplaces, energy per job, failure rates per board model) as a paid dataset or feed, with nothing that identifies a host, an operator or a customer.
     source: https://stado.wisent.com/docs/earning
+  - title: Run CPU and memory work on hosts with spare cores
+    status: planned
+    outcome: Offer the spare CPU cores and memory of every fleet host, Macs included, to networks and marketplaces that pay for CPU-only work (CPU inference of small models and embeddings, CPU rental, CPU proof-of-work), so hosts without a free board still earn.
+    source: https://stado.wisent.com/docs/earning
+  - title: Earn from the operator's unused paid subscriptions
+    status: planned
+    outcome: Record each paid subscription the fleet holds (model providers, clouds, tools) with its included quota and what was used of it each period, and report the unused share and its cost, so a quota paid for and not used is visible as money lost rather than hidden.
+    source: https://stado.wisent.com/docs/costs
+  - title: Claim provider credits and programs the fleet qualifies for
+    status: planned
+    outcome: Keep a list of cloud and model-provider credit programs, referral rewards and startup programs with their eligibility rules, mark which the organisation qualifies for, and count received credits as income in the ledger.
+    source: https://stado.wisent.com/docs/costs
+  - title: Reduce the fleet's cost before adding income
+    status: planned
+    outcome: Report every recurring cost of the fleet (outside routes, cloud instances, storage, idle reservations, subscriptions) beside its measured use, and name each cost whose use is below a declared threshold, so money saved is counted beside money earned.
+    source: https://stado.wisent.com/docs/costs
   - title: Keep every source's earnings per host and day
     status: planned
     outcome: Record the income every source states (marketplaces, peer fleets, token sales, paid runs) per host and day beside that day's measured cost, so every source's margin reads from one ledger.
@@ -2657,6 +2677,22 @@ products:
     status: planned
     outcome: Sell fixed blocks of fleet capacity (board-hours per month) at a price agreed in advance, so steady customers buy the base load and the marketplaces fill the rest.
     source: compute.wisent.com/docs/operations.md
+  - title: Sell dedicated model endpoints
+    status: planned
+    outcome: Sell a model served on a dedicated fleet board to one customer per hour, with their own fine-tuned weights or adapters, priced from the board's measured cost and the market rate for dedicated endpoints.
+    source: compute.wisent.com/docs/architecture.md
+  - title: Sell fine-tuning as a service
+    status: planned
+    outcome: Fine-tune an open model on a customer's data on fleet boards in idle hours and deliver the weights or adapter, priced per training token, with the data kept apart from every other customer's.
+    source: compute.wisent.com/docs/architecture.md
+  - title: Sell synthetic data generation
+    status: planned
+    outcome: Generate synthetic datasets (instruction pairs, evaluations, images, transcribed speech) with fleet models in idle hours for customers, priced per item, with the model and license of each item recorded.
+    source: compute.wisent.com/docs/architecture.md
+  - title: Sell hosting of AI agents that run continuously
+    status: planned
+    outcome: Host customers' long-running AI agents in isolated fleet sandboxes with their model calls served from fleet boards, priced per agent-month plus metered model use.
+    source: compute.wisent.com/docs/architecture.md
   integrations:
   - product: stado
     description: Every instance is one Stado machine job whose command runs the
