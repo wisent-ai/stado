@@ -17,3 +17,14 @@ The version bump gathers them into the release's own file and removes this one.
   declared and the client is never started for it. A storage URL whose address is outside those
   ranges is likewise refused as plain HTTP without asking the client whether the address is a
   tailnet node.
+- **A host its own network reaches never waits for Tailscale:** a host declaring its own-network
+  primary, a LAN name and a Tailscale address as a last alternate still asked the client to judge
+  that alternate. While a host declares any path that does not go through a tailnet, all its
+  paths are now tried as declared and the client is not asked; only a host reached through the
+  tailnet alone has its expired-key paths left out.
+- **A public edge on a host the registry does not hold is refused up front:** `stado web route`,
+  `stado web edge hostnames` and `stado web origin declare --publication web-edge` failed only
+  while delivering, naming a missing target and not the edge declaration that named it. They now
+  refuse before planning: `the public edge is declared on <target>, which the canonical registry
+  does not hold, so no hostname can be published through it`, followed by the `stado web edge
+  provision` and `stado web edge declare` commands that fix it.

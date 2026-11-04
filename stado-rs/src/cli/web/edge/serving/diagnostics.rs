@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use super::super::{declared, HOST_UNIT};
+use super::super::{declared, registered, HOST_UNIT};
 use super::{deliver, stado_routes, CmdError};
 use crate::config::WebApiEdge;
 use crate::deploy::{production_runner, service_serving};
@@ -178,7 +178,7 @@ pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), C
 /// hostname cannot be used as a gate, and being usable as a gate is the point
 /// of reporting both sets rather than just fixing them.
 pub(in crate::cli::web::edge) async fn hostnames(json_output: bool) -> Result<(), CmdError> {
-    let edge = declared()?;
+    let edge = registered().await?;
     let routes = stado_routes().await?;
     let report = deliver(edge, &routes, false).await?;
     let reconciled = report["change"].as_str() == Some("unchanged");

@@ -36,7 +36,7 @@ pub(super) async fn publish(
     check: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let edge = super::super::edge::declared()?;
+    let edge = super::super::edge::registered().await?;
     // A hostname whose record this command writes needs the registrar item
     // before anything changes, so the edge is never left terminating a name
     // whose record could not then be written.

@@ -25,6 +25,33 @@ pub(in crate::cli::web) fn declared() -> Result<&'static WebApiEdge, CmdError> {
     })
 }
 
+/// The declared edge, refused when the canonical registry does not hold its
+/// host: every hostname `stado web route` publishes is delivered to that
+/// host's Stado, so an edge declared on a name the fleet does not hold fails
+/// only after the plan was made, naming the host and nothing about the
+/// declaration that caused it.
+///
+/// A registry nobody can read is that failure, not this one; a name the
+/// registry does not hold is refused with the two commands that fix it.
+pub(in crate::cli::web) async fn registered() -> Result<&'static WebApiEdge, CmdError> {
+    let edge = declared()?;
+    crate::cli::canonical_host(edge.target())
+        .await
+        .map_err(|error| match error.failure {
+            Some(crate::primitives::failure::FailureCode::NotFound) => CmdError::click(format!(
+                "the public edge is declared on {}, which the canonical registry does not hold, \
+                 so no hostname can be published through it; create the edge with `stado web \
+                 edge provision <name> --contact <mail>`, or register the host and record it \
+                 with `stado web edge declare --target <registered host> --address <ipv4> \
+                 --contact <mail>`",
+                edge.target()
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config),
+            _ => error,
+        })?;
+    Ok(edge)
+}
+
 /// Record the edge in the configuration.
 ///
 /// `map.clear()` first: the plane's parser refuses an unsupported key, so a

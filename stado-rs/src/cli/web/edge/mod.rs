@@ -66,7 +66,7 @@ pub(crate) mod role;
 mod serving;
 
 pub(crate) use commands::EdgeCommands;
-pub(in crate::cli::web) use declaring::declared;
+pub(in crate::cli::web) use declaring::{declared, registered};
 pub(in crate::cli::web) use serving::{deliver, mount, stado_routes};
 
 use declaring::declare;
