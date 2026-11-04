@@ -40,6 +40,11 @@ fn declared() -> Result<Vec<Source>, CmdError> {
     Ok(document.sources)
 }
 
+/// Every source id the list declares, for a command that names a source.
+pub(crate) fn source_ids() -> Result<Vec<String>, CmdError> {
+    Ok(declared()?.into_iter().map(|source| source.id).collect())
+}
+
 /// Whether `url` answers with a status below 400, or why not.
 async fn answers(client: &reqwest::Client, url: &str) -> Result<(), String> {
     let response = crate::wait::request(client.get(url))

@@ -202,3 +202,10 @@ The version bump gathers them into the release's own file and removes this one.
   sellers' support with no word of whether one is usable here. It now asks each: Vast's readiness
   verdict, each declared peer fleet's readiness, and a planned seller's note; one not ready is named
   and the others are still read.
+- **`stado market node` runs a network's own node on an idle host:** the market family ran only
+  renter containers and peer workers, so a network that pays the host for running its node could not
+  be joined. A node is a service the operator declared from the network's official release; `stado
+  market node add` names that service, its host, its source and what it holds, `edit --listed`
+  offers or withdraws it, and `follow` starts it once the host is idle, holding its capacity
+  reservation, and stops it and releases the reservation when fleet work appears. Desktop's Registry
+  screen manages nodes.

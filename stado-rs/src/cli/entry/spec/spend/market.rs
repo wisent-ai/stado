@@ -312,6 +312,97 @@ pub(crate) enum MarketCommands {
     /// retire a peer.
     #[command(subcommand)]
     Peer(PeerCommands),
+    /// A network's own node run on a fleet host while the fleet leaves the
+    /// host idle: declare which declared service earns from which source and
+    /// what it holds, offer or withdraw it, and run the loop that starts it
+    /// on an idle host and stops it when fleet work appears.
+    #[command(subcommand)]
+    Node(NodeCommands),
+}
+
+/// One network node as `stado market node` declares and runs it.
+#[derive(Subcommand)]
+pub(crate) enum NodeCommands {
+    /// Declare a node, withdrawn until `edit --listed true` offers it.
+    /// Refused when the name is taken, the source is not one `stado market
+    /// sources` declares, or the host declares no such service.
+    Add {
+        /// The node's name in this fleet: lowercase letters, digits and `-`.
+        name: String,
+        /// The source it earns from, by its id in `stado market sources`.
+        #[arg(long)]
+        source: String,
+        /// The registry host its service is declared on.
+        #[arg(long)]
+        target: String,
+        /// The service, as `stado service declare` named it, installed from
+        /// the network's official release.
+        #[arg(long)]
+        service: String,
+        /// Cores the node holds while it runs.
+        #[arg(long = "cpu-cores")]
+        cpu_cores: i64,
+        /// GiB of memory it holds.
+        #[arg(long = "ram-gb")]
+        ram_gb: f64,
+        /// GiB of board memory it holds.
+        #[arg(long = "vram-gb")]
+        vram_gb: i64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Change a declared node; only the named fields change. `--listed
+    /// true` offers it, `--listed false` withdraws it, and a running follow
+    /// loop stops it on its next poll.
+    Edit {
+        name: String,
+        #[arg(long)]
+        listed: Option<bool>,
+        #[arg(long = "cpu-cores")]
+        cpu_cores: Option<i64>,
+        #[arg(long = "ram-gb")]
+        ram_gb: Option<f64>,
+        #[arg(long = "vram-gb")]
+        vram_gb: Option<i64>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Retire a node. Refused while its follow loop has it running.
+    Remove {
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Every declared node with the loop's last transition.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// One declared node with the loop's last transition.
+    Show {
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the node while its host is idle: after --idle-window-s idle
+    /// seconds, with the node offered, take its capacity reservation and
+    /// start its service; stop it and release the reservation the moment
+    /// fleet work appears for the host or it is withdrawn.
+    Follow {
+        name: String,
+        /// Idle seconds before the node starts.
+        #[arg(long)]
+        idle_window_s: i64,
+        /// Seconds between queue polls; required unless --once.
+        #[arg(long)]
+        poll_interval_s: Option<u64>,
+        /// Print the decisions without starting or stopping anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// One poll and exit; needs --dry-run.
+        #[arg(long)]
+        once: bool,
+    },
 }
 
 /// One peer fleet as `stado market peer` declares it.

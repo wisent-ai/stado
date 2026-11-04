@@ -19,6 +19,7 @@ mod serve_or_rent;
 mod sources;
 
 pub(crate) use readiness::{read_vault, verdict as readiness_verdict};
+pub(crate) use sources::source_ids;
 
 use serde_json::json;
 
@@ -30,6 +31,9 @@ use crate::queue::JobStorage;
 pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
     if let MarketCommands::Peer(peer) = command {
         return super::peer::declare(peer).await;
+    }
+    if let MarketCommands::Node(node) = command {
+        return super::node::dispatch(node).await;
     }
     // The source list and payouts span every marketplace, so no provider is
     // named.
@@ -153,6 +157,7 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             .await
         }
         MarketCommands::Peer(_) => unreachable!("peer declarations were answered above"),
+        MarketCommands::Node(_) => unreachable!("network nodes were answered above"),
         MarketCommands::Sources { .. } | MarketCommands::Payout(_) => {
             unreachable!("the source list and payouts were answered above")
         }
@@ -174,7 +179,9 @@ pub(crate) fn provider(command: &MarketCommands) -> Option<MarketProvider> {
         | MarketCommands::Monitor { provider, .. }
         | MarketCommands::Follow { provider, .. } => Some(*provider),
         MarketCommands::Peer(_) => Some(MarketProvider::Stado),
-        MarketCommands::Sources { .. } | MarketCommands::Payout(_) => None,
+        MarketCommands::Sources { .. } | MarketCommands::Payout(_) | MarketCommands::Node(_) => {
+            None
+        }
     }
 }
 
@@ -191,9 +198,10 @@ fn peer_named(command: &MarketCommands) -> bool {
         | MarketCommands::Readiness { peer, .. }
         | MarketCommands::Monitor { peer, .. }
         | MarketCommands::Follow { peer, .. } => peer.is_some(),
-        MarketCommands::Peer(_) | MarketCommands::Sources { .. } | MarketCommands::Payout(_) => {
-            false
-        }
+        MarketCommands::Peer(_)
+        | MarketCommands::Sources { .. }
+        | MarketCommands::Payout(_)
+        | MarketCommands::Node(_) => false,
     }
 }
 

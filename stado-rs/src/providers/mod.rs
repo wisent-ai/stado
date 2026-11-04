@@ -17,6 +17,7 @@ pub mod gcp;
 pub mod gpu_cloud;
 pub mod host_credential;
 pub mod local;
+pub mod node;
 pub mod payout;
 pub mod peer;
 pub mod vast;

@@ -101,7 +101,7 @@ pub(crate) use entry::spec::schedules::ScheduleCommands;
 pub(crate) use entry::spec::spend::billing::BillingCommands;
 pub(crate) use entry::spec::spend::cost::CostCommands;
 pub(crate) use entry::spec::spend::market::{
-    MarketCommands, MarketProvider, PayoutCommands, PeerCommands,
+    MarketCommands, MarketProvider, NodeCommands, PayoutCommands, PeerCommands,
 };
 pub(crate) use entry::spec::spend::quota::QuotaCommands;
 
