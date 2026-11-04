@@ -16,6 +16,11 @@ pub struct Engine {
 pub struct Model {
     pub repository: String,
     pub revision: String,
+    /// What the repository and its base models declare as their license on
+    /// the model hub, read by `stado inference plan` at this revision; absent
+    /// on a deployment planned before the plan read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<crate::inference::license::License>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

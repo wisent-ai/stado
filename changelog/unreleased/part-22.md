@@ -131,3 +131,8 @@ The version bump gathers them into the release's own file and removes this one.
   reads on stdin. All of them now print the line `skarbiec::roles::put_command` builds: the item
   document (kind equal to `--type`, the field and the secret's place) piped into `stado credentials
   item put --host H --role R --type T`.
+- **`stado inference plan` records the model's license:** nothing read whether a model may be
+  sold, so a deployment of a repository that declares no license could be served to outside callers.
+  `plan` now reads the license the repository declares on the model hub at the planned revision,
+  and each base model's, records them as `model.license`, prints them, and warns when any
+  declares none; `stado inference list` prints them in a `LICENSE` column.

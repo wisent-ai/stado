@@ -26,10 +26,16 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
         println!("no inference deployments");
         return Ok(());
     }
-    println!("NAME\tHOST\tMODEL\tSTATE\tPORT");
+    println!("NAME\tHOST\tMODEL\tSTATE\tPORT\tLICENSE");
     for deployment in registry.deployments {
+        // A deployment planned before the plan read licenses says so, apart
+        // from one whose model declares none.
+        let license = match &deployment.model.license {
+            Some(license) => license.summary(),
+            None => "not read; plan the deployment again".to_string(),
+        };
         println!(
-            "{}\t{}\t{}@{}\t{}\t{}",
+            "{}\t{}\t{}@{}\t{}\t{}\t{license}",
             deployment.name,
             deployment.target,
             deployment.model.repository,

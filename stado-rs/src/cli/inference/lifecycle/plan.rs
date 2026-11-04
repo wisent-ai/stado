@@ -138,6 +138,19 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
     }
     .uuid
     .clone();
+    // What the repository and its base models declare as their license, at
+    // the revision the engine loads. A hub that cannot answer refuses the
+    // plan: whether the model may be sold is recorded with it, never left
+    // unknown.
+    let license = crate::inference::license::read(&options.model, &options.revision)
+        .await
+        .map_err(|cause| {
+            CmdError::click(format!(
+                "the license of {} cannot be read: {cause}",
+                options.model
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let deployment = schema::Deployment {
         name: options.name,
         target: options.host,
@@ -149,6 +162,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         model: schema::Model {
             repository: options.model,
             revision: options.revision,
+            license: Some(license.clone()),
         },
         resources: schema::Resources {
             gpu_mode: options.gpu_mode,
@@ -183,6 +197,15 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         );
     } else {
         println!("plan_id={} file={}", plan.id, path.display());
+        println!("license={}", license.summary());
+        let undeclared = license.undeclared();
+        if !undeclared.is_empty() {
+            println!(
+                "license_warning=no license is declared for {}; serving this model to outside \
+                 callers is not permitted until one is",
+                undeclared.join(", ")
+            );
+        }
         if let Some(stdout) = inventory.get("stdout").and_then(Value::as_str) {
             print!("{stdout}");
         }
