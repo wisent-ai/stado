@@ -2755,3 +2755,23 @@ products:
     for_surface: cli
     alternative: stado-wait is a library linked into kasa for its process, lock and network waits, so Kasa needs no Stado installed or running; the line in Cargo.toml is the only use
     alternative_source: kasa/Cargo.toml
+- id: names
+  name: Names
+  status: preview
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/names-cli
+  description: 'Decides what products are called: checks candidate names against every name in use, records each decision with who made it and why, and keeps every former name findable.'
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/names-cli@5b7435e
+  - operator session 01a1a49f-4470-7374-a873-9f1e996c31f1 message 2
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/names-cli
+  installations: []
+  star_repository: wisent-ai/wisent
+  approved_by: operator
+  approved_at: 2026-11-04T06:22:44Z
+  approval_note: 'operator: okej to stworz cos w stylu names-cli dla decydowania jak sie nazywaja produkty'
