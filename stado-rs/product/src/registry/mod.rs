@@ -67,13 +67,20 @@ pub fn mutate(action: &str, args: Arguments, runtime: &Runtime) -> Result<Value>
         let position = products.iter().position(|product| product["id"] == id);
         products.remove(position.with_context(|| format!("no product {id}; nothing was removed"))?);
         document::commit(&runtime.catalog, &original, &document, id, true)?;
+        let uncommitted = catalog::committed::edit_visibility(&runtime.catalog)?;
         return Ok(
-            json!({"action": "rm", "id": id, "written": [runtime.catalog], "removed": true}),
+            json!({"action": "rm", "id": id, "written": [runtime.catalog],
+            "removed": true, "uncommitted": uncommitted}),
         );
     }
     let record = apply(action, id, &args, &mut document)?;
     document::commit(&runtime.catalog, &original, &document, id, false)?;
-    Ok(json!({"action": action, "id": id, "written": [runtime.catalog], "record": record}))
+    // The edit is in the working tree; readers read the committed catalog.
+    let uncommitted = catalog::committed::edit_visibility(&runtime.catalog)?;
+    Ok(
+        json!({"action": action, "id": id, "written": [runtime.catalog], "record": record,
+        "uncommitted": uncommitted}),
+    )
 }
 
 /// The record `registry add` or `registry set` would write, validated with

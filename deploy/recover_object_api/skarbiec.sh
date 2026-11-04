@@ -23,10 +23,21 @@ reconcile_skarbiec_bootstrap() {
     return 1
   fi
 
+  # Every wait below ends by the strategy's declared readiness wait
+  # (release_control.products.skarbiec.strategy.readiness_timeout_seconds),
+  # the only clock: each request may take what is left of it. remaining
+  # prints nothing once it is spent, which curl refuses as a missing
+  # --max-time, so a spent wait is a failed request, never curl's own
+  # unlimited 0.
+  deadline=$((SECONDS + readiness_timeout))
+  remaining() {
+    left=$((deadline - SECONDS))
+    if [ "$left" -gt 0 ]; then printf '%s' "$left"; fi
+  }
   ownership=$("$program" host local api skarbiec ownership --state "$release_state" \
     --target "$target_name")
   if [ "$ownership" = owned ]; then
-    if /usr/bin/curl --silent --show-error --fail --max-time 3 \
+    if /usr/bin/curl --silent --show-error --fail --max-time "$(remaining)" \
       "http://$stable_bind$readiness_path" >/dev/null 2>&1; then
       printf 'skarbiec_bootstrap active_release_owner stable=%s\n' "$stable_bind"
       return 0
@@ -37,7 +48,7 @@ reconcile_skarbiec_bootstrap() {
 
   upstream=$("$program" host local api skarbiec upstream --state "$proxy_state" \
     --ports "$candidate_ports")
-  if /usr/bin/curl --silent --show-error --fail --max-time 3 \
+  if /usr/bin/curl --silent --show-error --fail --max-time "$(remaining)" \
     "http://$upstream$readiness_path" >/dev/null 2>&1; then
     printf 'skarbiec_bootstrap active_handoff upstream=%s\n' "$upstream"
     return 0
@@ -101,14 +112,13 @@ reconcile_skarbiec_bootstrap() {
   fi
 
   /bin/kill -TERM "$proxy_pid"
-  attempt=0
   while /bin/kill -0 "$proxy_pid" >/dev/null 2>&1; do
-    if [ "$attempt" -ge 50 ]; then
-      printf 'skarbiec_bootstrap refused proxy_pid_did_not_exit pid=%s\n' "$proxy_pid" >&2
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      printf 'skarbiec_bootstrap refused proxy_pid_did_not_exit pid=%s within readiness_timeout_seconds=%s\n' \
+        "$proxy_pid" "$readiness_timeout" >&2
       return 1
     fi
-    attempt=$((attempt + 1))
-    /bin/sleep 0.1
+    /bin/sleep 1
   done
 
   # Every restoration prerequisite was proved before the exact orphan was
@@ -127,16 +137,14 @@ reconcile_skarbiec_bootstrap() {
     return 1
   fi
   /usr/bin/sudo -n /bin/launchctl enable "system/$legacy_label" >/dev/null 2>&1 || true
-  attempt=0
-  while [ "$attempt" -lt "$readiness_timeout" ]; do
+  while [ "$SECONDS" -lt "$deadline" ]; do
     if /usr/bin/sudo -n /bin/launchctl print "system/$legacy_label" >/dev/null 2>&1 &&
-      /usr/bin/curl --silent --show-error --fail --max-time 3 \
+      /usr/bin/curl --silent --show-error --fail --max-time "$(remaining)" \
         "http://$stable_bind$readiness_path" >/dev/null 2>&1; then
       printf 'skarbiec_bootstrap restored target=%s bind=%s pid=%s\n' \
         "$target_name" "$stable_bind" "$proxy_pid"
       return 0
     fi
-    attempt=$((attempt + 1))
     /bin/sleep 1
   done
   printf 'skarbiec_bootstrap refused legacy_not_ready bind=%s\n' "$stable_bind" >&2

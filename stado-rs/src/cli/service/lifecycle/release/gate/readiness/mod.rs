@@ -39,6 +39,13 @@ fn validate_readiness_url(url: &str) -> Result<(), CmdError> {
 ///
 /// `expected` empty means no version is required, and then the first answer
 /// is readiness, so a timeout in that mode can only be the first case.
+///
+/// The only clock is the caller's `--readiness-timeout-seconds`: each request
+/// may take what is left of it, so a service that accepts the connection and
+/// answers slowly is read rather than cut off by a per-request limit nobody
+/// stated, and a request still waiting at the deadline ends with it. The
+/// loop asks again only while time is left, because curl reads a
+/// `--max-time` of none as no limit at all.
 fn readiness_probe_script(
     url: &str,
     expected_release_version: Option<&str>,
@@ -49,8 +56,8 @@ fn readiness_probe_script(
          deadline=$((SECONDS + {timeout}))\n\
          answered=no\n\
          reported=\n\
-         while [ \"$SECONDS\" -lt \"$deadline\" ]; do\n\
-           if body=$(/usr/bin/curl -fsS --max-time 2 \"$url\"); then\n\
+         while left=$((deadline - SECONDS)); [ \"$left\" -gt 0 ]; do\n\
+           if body=$(/usr/bin/curl -fsS --max-time \"$left\" \"$url\"); then\n\
              answered=yes\n\
              reported=\n\
              if [ -n \"$expected\" ]; then\n\

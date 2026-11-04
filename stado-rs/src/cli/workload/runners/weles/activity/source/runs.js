@@ -14,8 +14,6 @@ const classify = (name) => {
   return 'other';
 };
 
-const RUNNING_WINDOW_MS = 180_000;
-
 const describeRun = (release, platform, runDirectory) => {
   const stat = fs.statSync(runDirectory);
   const counts = { screenshots: 0, pages: 0, videos: 0, logs: 0, records: 0, other: 0 };
@@ -41,7 +39,7 @@ const describeRun = (release, platform, runDirectory) => {
       if (entry.isDirectory()) {
         // The one directory directly under a run is the action that produced it.
         if (depth === 0 && !action) action = entry.name;
-        if (depth < 4) walk(full, depth + 1);
+        walk(full, depth + 1);
         continue;
       }
       if (!entry.isFile()) continue;
@@ -80,12 +78,14 @@ const describeRun = (release, platform, runDirectory) => {
     }
   }
   const costs = readJson(path.join(path.dirname(runDirectory), '_costs', `${path.basename(runDirectory)}.json`));
-  const isFresh = Date.now() - stat.mtimeMs < RUNNING_WINDOW_MS;
-
+  // A run's own records decide its status. One with neither a result nor a
+  // completion is unfinished: whether its process still works is not in its
+  // directory, so it is not called running because its files changed lately;
+  // updated_at says when they last did.
   let status = 'recorded';
   if (resultHealthy === true || resultOk === true) status = 'succeeded';
   else if (resultHealthy === false || resultOk === false || resultSignal) status = 'failed';
-  else if (isFresh) status = 'running';
+  else if (completedAt === null) status = 'unfinished';
 
   return {
     id: path.basename(runDirectory),

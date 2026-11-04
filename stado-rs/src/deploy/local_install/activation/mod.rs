@@ -15,7 +15,7 @@ use crate::deploy::local_install::LocalOs;
 use crate::deploy::{write_if_changed, CommandSpec, DeployError, Runner};
 
 use self::commands::{darwin_commands, linux_commands};
-use self::cron::install_cron_job;
+use self::cron::{install_cron_job, retire_cron_fallback};
 use self::daemon::install_darwin_daemon;
 use self::owner_log::prepare_owner_log;
 
@@ -33,7 +33,8 @@ pub async fn execute_plan(
     // there, and the last one installs a crontab entry instead of a unit.
     if plan.daemon.is_some() {
         prepare_owner_log(home, &plan.label)?;
-        return install_darwin_daemon(plan, home, runner, echo).await;
+        install_darwin_daemon(plan, home, runner, echo).await?;
+        return retire_cron_fallback(plan, home, runner, echo).await;
     }
     let path = plan.unit_path(home);
     if let Some(dir) = path.parent() {
@@ -146,6 +147,7 @@ pub async fn execute_plan(
                 plan.label,
                 log.display()
             ));
+            retire_cron_fallback(plan, home, runner, echo).await?;
         }
         LocalOs::Linux => {
             echo(&format!("[unit] {verb} {}", path.display()));
