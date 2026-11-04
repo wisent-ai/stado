@@ -147,3 +147,9 @@ The version bump gathers them into the release's own file and removes this one.
   market earnings` and `cost host` convert at it; `targets[].hardware` (`purchase_price`,
   `currency`, `service_years`, `source`) gives each hour its share of the purchase, which `cost
   host` prints.
+- **A host is not listed on Vast while a renter's container would reach the host:** readiness said
+  `ready` once Vast accepted the key, although a renter's container on the Docker bridge reaches
+  every host service listening on all addresses and the host's private networks. Readiness now
+  reads the host's listeners and Docker's `DOCKER-USER` chain and answers `not_isolated` naming what
+  a container reaches, with the bind or `iptables` rule that closes each; the follow loop reads it
+  before every listing and does not list; the Earning screen shows it.

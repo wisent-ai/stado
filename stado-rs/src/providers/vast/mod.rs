@@ -30,6 +30,7 @@
 mod bridge;
 mod client;
 mod error;
+pub mod isolation;
 
 pub use bridge::{
     auto_list_loop, decide_action, is_stado_busy, read_capacity_snapshot, AutoListAction,

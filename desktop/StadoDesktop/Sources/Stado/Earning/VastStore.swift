@@ -54,10 +54,27 @@ struct VastReadiness: Decodable, Equatable, Sendable {
     let machineId: String?
     let listedGpuCost: Double?
     let vastError: String?
+    let isolation: Isolation?
     let remedy: [String]
 
+    /// What a renter's container could reach on the host, as the command
+    /// read it once Vast accepted the key.
+    struct Isolation: Decodable, Equatable, Sendable {
+        let bridgeAddress: String?
+        let reachableListeners: [String]
+        let reachableNetworks: [String]
+        let unread: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case unread
+            case bridgeAddress = "bridge_address"
+            case reachableListeners = "reachable_listeners"
+            case reachableNetworks = "reachable_networks"
+        }
+    }
+
     enum CodingKeys: String, CodingKey {
-        case document, verdict, item, field, channel, remedy
+        case document, verdict, item, field, channel, remedy, isolation
         case skarbiecError = "skarbiec_error"
         case vaultHost = "vault_host"
         case vaultItemState = "vault_item_state"
@@ -88,6 +105,20 @@ struct VastReadiness: Decodable, Equatable, Sendable {
             return "Not authorized: \(vault) holds \(item) and this consumer may not read \(field)."
         case "no_channel":
             return "No Skarbiec channel on this host: it cannot ask for any credential."
+        case "not_isolated":
+            var reached: [String] = []
+            if let isolation {
+                if !isolation.reachableListeners.isEmpty {
+                    reached.append("host services \(isolation.reachableListeners.joined(separator: ", "))")
+                }
+                if !isolation.reachableNetworks.isEmpty {
+                    reached.append("private networks \(isolation.reachableNetworks.joined(separator: ", "))")
+                }
+                reached.append(contentsOf: isolation.unread.map { "not verified: \($0)" })
+            }
+            return "Not isolated: Vast.ai accepts \(item)/\(field), and a renter's container would reach "
+                + (reached.isEmpty ? "something the reply does not name" : reached.joined(separator: "; "))
+                + "."
         default:
             return "Unknown: \(item)/\(field) did not resolve and the vault could not be read."
         }

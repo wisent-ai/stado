@@ -203,6 +203,13 @@ pub async fn auto_list_loop(
                         // appear, which is the opposite of a preview.
                         listed = true;
                         log(&format!("DRY-RUN would list (idle {idle_dur_s}s)"));
+                    } else if let Some(refusal) =
+                        crate::providers::vast::isolation::measure().refusal()
+                    {
+                        // Read before each listing: a service started or a
+                        // rule removed since the last one would hand the next
+                        // renter a route to the host.
+                        log(&format!("not listed: {refusal}"));
                     } else if let Some(client) = client {
                         match client
                             .list_machine(&ListMachineParams {

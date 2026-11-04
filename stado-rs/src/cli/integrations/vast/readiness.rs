@@ -41,6 +41,9 @@ pub(super) enum Verdict {
     NoChannel,
     /// The key did not resolve and the vault could not be asked why.
     Unknown,
+    /// Vast.ai accepted the key, and a renter's container would reach the
+    /// host's own services or local networks, or that could not be read.
+    NotIsolated,
 }
 
 impl Verdict {
@@ -75,6 +78,14 @@ impl Verdict {
                 "unknown: {ITEM}/{FIELD} did not resolve and the vault could not be read ({})",
                 report.vault_error.as_deref().unwrap_or("not asked")
             ),
+            Self::NotIsolated => format!(
+                "not isolated: Vast.ai accepts {ITEM}/{FIELD}, and {}",
+                report
+                    .isolation
+                    .as_ref()
+                    .and_then(|isolation| isolation.refusal())
+                    .unwrap_or_else(|| "the isolation reading is missing".to_string())
+            ),
         }
     }
 }
@@ -94,6 +105,9 @@ pub(super) struct Readiness {
     pub machine_id: Option<String>,
     pub listed_gpu_cost: Option<f64>,
     pub vast_error: Option<String>,
+    /// What a renter's container could reach on this host; read once the
+    /// key is accepted, since only then would the host be listed.
+    pub isolation: Option<crate::providers::vast::isolation::Isolation>,
     pub remedy: Vec<String>,
 }
 
@@ -124,10 +138,20 @@ pub(super) async fn assess(vault_host: Option<String>, ask_vault: bool) -> Readi
         machine_id: None,
         listed_gpu_cost: None,
         vast_error: None,
+        isolation: None,
         remedy: Vec::new(),
     };
     if let Some(key) = reading.key.clone() {
         probe_vast(&mut report, key).await;
+        // A host Vast would rent is listed only when a renter's container
+        // reaches nothing of the host's: an accepted key is not enough.
+        if report.verdict == Verdict::Ready {
+            let isolation = crate::providers::vast::isolation::measure();
+            if !isolation.isolated() {
+                report.verdict = Verdict::NotIsolated;
+            }
+            report.isolation = Some(isolation);
+        }
         report.remedy = remedy(&report, &reading);
         return report;
     }
@@ -265,6 +289,25 @@ fn remedy(report: &Readiness, reading: &HostCredentialReading) -> Vec<String> {
             format!("stado credentials item show --host {vault} <the item tagged stado:role:{ITEM}>"),
             "stado market readiness --provider vast --vault-host <host>".to_string(),
         ],
+        Verdict::NotIsolated => {
+            let mut steps = Vec::new();
+            if let Some(isolation) = &report.isolation {
+                for listener in &isolation.reachable_listeners {
+                    steps.push(format!(
+                        "bind the service on {listener} to 127.0.0.1, or drop the bridge's \
+                         traffic to it in the DOCKER-USER chain"
+                    ));
+                }
+                for range in &isolation.reachable_networks {
+                    steps.push(format!("sudo iptables -I DOCKER-USER -i docker0 -d {range} -j DROP"));
+                }
+                for cause in &isolation.unread {
+                    steps.push(format!("make this readable: {cause}"));
+                }
+            }
+            steps.push("stado market readiness --provider vast".to_string());
+            steps
+        }
     }
 }
 
