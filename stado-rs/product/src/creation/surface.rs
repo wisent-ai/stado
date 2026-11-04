@@ -95,7 +95,7 @@ pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     if let Some(journal) = journal {
         started(journal, &id, asked, &authority)?;
     }
-    let document = catalog::load(&runtime.catalog)?;
+    let document = catalog::working_tree_for_edit(runtime)?;
     let record = catalog::product(&document, product).map_err(|_| {
         anyhow::anyhow!(
             "PRODUCT: no catalogued product {product} in {}; `stado product create` \
@@ -190,7 +190,7 @@ pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     let (observed, checkout) =
         provision(journal, &id, repository, description, &runtime.workspace)?;
     let registration = registry::mutate("set", registration(product, kind, repository)?, runtime)?;
-    let observed_catalog = catalog::load(&runtime.catalog)?;
+    let observed_catalog = catalog::working_tree_for_edit(runtime)?;
     let record = catalog::product(&observed_catalog, product)?;
     if !record["surfaces"].as_array().is_some_and(|surfaces| {
         surfaces.iter().any(|surface| {

@@ -86,7 +86,7 @@ pub fn mutate(action: &str, args: Arguments, runtime: &Runtime) -> Result<Value>
 /// The record `registry add` or `registry set` would write, validated with
 /// the whole catalog as it would stand; nothing is locked or written.
 pub fn preview(action: &str, args: Arguments, runtime: &Runtime) -> Result<Value> {
-    let mut document = catalog::load(&runtime.catalog)?;
+    let mut document = catalog::working_tree_for_edit(runtime)?;
     let id = match action {
         "add" => args.required("--id")?.to_owned(),
         _ => match args.positional.as_slice() {

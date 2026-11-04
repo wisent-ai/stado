@@ -248,7 +248,7 @@ fn progress(
     runtime: &Runtime,
 ) -> Result<()> {
     let id = &request.request_id;
-    let document = catalog::load(&runtime.catalog)?;
+    let document = catalog::working_tree_for_edit(runtime)?;
     let existing = existing(&document, request)?.is_some();
     // A new product is new only if what it would create does not exist yet:
     // checked before the first repository is provisioned.
@@ -284,7 +284,7 @@ fn progress(
     if !existing {
         response["registration"] = registry::mutate("add", registration(request)?, runtime)?;
     }
-    let observed = catalog::load(&runtime.catalog)?;
+    let observed = catalog::working_tree_for_edit(runtime)?;
     let product = catalog::product(&observed, &request.product.id)?;
     if !product["evidence"]
         .as_array()

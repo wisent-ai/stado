@@ -19,13 +19,25 @@ pub use validation::{validate, InvalidCatalog};
 /// The authority at the root of the Stado repository, compiled into the binary.
 pub const EMBEDDED: &str = include_str!("../../../../catalog/products.yml");
 
-pub fn load(path: &Path) -> Result<Value> {
+/// The catalog file as it stands on disk, validated. Private, so a reader
+/// cannot take a shared checkout's working tree by reaching for it: readers
+/// call [`read`] or [`current`], and a command that edits the catalog reads
+/// the file it is about to change with [`working_tree_for_edit`].
+fn load(path: &Path) -> Result<Value> {
     let bytes = fs::read(path)
         .with_context(|| format!("reading authoritative catalog {}", path.display()))?;
     let value: Value =
         serde_yaml::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
     validate(&value)?;
     Ok(value)
+}
+
+/// The working tree's catalog file, for a command that edits it: the
+/// registry and product creation read what they are about to change, and
+/// read back what they just wrote before it is committed. Nothing that only
+/// reads the catalog calls this.
+pub fn working_tree_for_edit(runtime: &crate::common::Runtime) -> Result<Value> {
+    load(&runtime.catalog)
 }
 
 /// The catalog a reader acts on; [`read`] without saying where it came from.

@@ -254,7 +254,7 @@ pub fn create(request: &Request, runtime: &Runtime, json_output: bool) -> Result
             .finish(json_output);
         }
     }
-    let document = catalog::load(&runtime.catalog)?;
+    let document = catalog::working_tree_for_edit(runtime)?;
     let registered = existing(&document, request)?;
     let rows = proposed(request);
     let answers = match registered {
