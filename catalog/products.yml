@@ -576,7 +576,7 @@ products:
     source: https://stado.wisent.com/docs/integrations
   - title: Earn from the idle GPU on a compute marketplace
     status: in_progress
-    outcome: List every idle board on a compute marketplace with stado market follow, offering only boards nothing else holds, on short renewed contracts, after renter isolation is proven, and withdraw the offer when fleet work returns; the loop ships and awaits its credential, per-board listing, contract length and isolation.
+    outcome: List an idle host on a compute marketplace with stado market follow, on short renewed contracts, after renter isolation is proven, and withdraw the offer when fleet work returns; a marketplace that cannot keep one board of a listed machine from renters (Vast) is offered the whole machine or nothing, so a host serving an inference deployment is not listed there until the deployment runs inside the marketplace's own self-rental; the loop ships and awaits its credential, contract length and isolation.
     source: https://stado.wisent.com/docs/vast
   - title: Lend idle workers to another Stado fleet
     status: in_progress
@@ -646,7 +646,11 @@ products:
     source: https://stado.wisent.com/docs/vast
   - title: List only the boards nothing else holds
     status: planned
-    outcome: Marketplace and peer loops read which board an inference reservation or a rental holds and offer every other board of the host, instead of withdrawing the whole host for one held board.
+    outcome: Marketplace and peer loops read which board an inference reservation or a rental holds and offer every other board of the host, instead of withdrawing the whole host for one held board, where the marketplace can keep a board from renters; peer lending does so, and on Vast the held board is taken as a self-rental of the machine's one-board offer before the rest is listed.
+    source: https://stado.wisent.com/docs/earning
+  - title: Choose between serving a model and renting the host
+    status: planned
+    outcome: Measure a deployment's traffic and what it saves or earns per hour beside what the host would earn rented whole, and say which is worth more, so a deployment is not kept on a host only because it was deployed first.
     source: https://stado.wisent.com/docs/earning
   - title: Price owned energy in any tariff currency
     status: planned
