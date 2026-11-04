@@ -8,6 +8,7 @@ mod autonomy_policy;
 #[path = "../contributions/shared_compute.rs"]
 mod contributions;
 mod deployment;
+mod fenced_store;
 #[path = "../host_activity/journey.rs"]
 mod host_activity;
 #[path = "../host_gates/publication_attempt.rs"]

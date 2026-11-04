@@ -14,8 +14,10 @@ pub(in crate::providers::local::agent::tick) fn phase_name(
 }
 
 /// Whether `error` is the fleet store not answering: a server error from the
-/// object API, a held store, or a request that could not be made or connect.
-/// Such a tick did not run; it is not an error in the agent.
+/// object API, a held store, a local store whose writes a `stado storage
+/// fence` holds off while a placement move copies it, or a request that could
+/// not be made or connect. Such a tick did not run; it is not an error in the
+/// agent.
 pub(in crate::providers::local::agent::tick) fn store_unavailable(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         if let Some(storage) = cause.downcast_ref::<crate::queue::StorageError>() {
@@ -25,6 +27,9 @@ pub(in crate::providers::local::agent::tick) fn store_unavailable(error: &anyhow
                     reqwest::StatusCode::from_u16(*status).is_ok_and(|code| code.is_server_error())
                 }
                 crate::queue::StorageError::Held(_) => true,
+                // The fence's own refusal, as the object API's listener
+                // tells it apart to answer 503 rather than 500.
+                crate::queue::StorageError::Io(io) => io.kind() == std::io::ErrorKind::WouldBlock,
                 crate::queue::StorageError::Http(http) => http.is_connect() || http.is_request(),
                 _ => false,
             };

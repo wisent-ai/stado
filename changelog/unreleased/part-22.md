@@ -7,6 +7,14 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- **A host whose store a placement move fences keeps serving:** the worker took the fence's
+  refusal of a write (`local storage writes are fenced by …`) for an error of its own, so the
+  agent loop ended and the host's one Stado process exited with it at every start, taking its
+  object API, resolver and forwards down for as long as the move's fenced copy lasted. A fenced
+  store now ends the worker's tick as a store that does not answer: the tick says so with the
+  fence's own sentence, which names its transaction and how to lift it, the next poll runs again,
+  and the process goes on serving reads and its other roles.
+
 - **Choosing a host's path no longer starts the Tailscale client:** Stado judged every declared
   SSH path, its own network's `<host>.stado.internal` and LAN names included, by asking this
   machine's `tailscale status --json` whether the tailnet carried traffic to it. A Tailscale client
