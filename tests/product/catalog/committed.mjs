@@ -98,7 +98,9 @@ try {
 	const where = JSON.parse(broken.stdout).catalog_read;
 	assert.equal(where?.revision, first, `catalog_read names the committed head: ${JSON.stringify(where)}`);
 	assert.equal(where?.chosen, "committed-head");
-	assert.match(broken.stderr, /uncommitted edit that does not validate: alpha names no star_repository.*; it is not read/s);
+	// The notice prints the whole cause chain: the catalog-level refusal,
+	// then the product and field it names.
+	assert.match(broken.stderr, /uncommitted edit that does not validate: .*alpha names no star_repository.*; it is not read/s);
 	const claims = run(stado, ["product", "--workspace", workspace, "registry", "check-claims", "alpha", "--json"]);
 	success(claims);
 	report.cases.push({ case: "invalid-edit", catalog_read: where, stderr: broken.stderr });
