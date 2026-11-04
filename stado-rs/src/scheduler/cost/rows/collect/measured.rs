@@ -1,11 +1,13 @@
-//! A job on owned hardware priced from the energy its board drew in the hours
-//! it ran, as the host's beacon measured them (`hours`), at the host's
-//! declared tariff (`targets[].power_tariff`).
+//! A job on owned hardware priced from the energy its board drew above its
+//! idle draw in the hours it ran, as the host's beacon measured them
+//! (`hours`), at the host's declared tariff (`targets[].power_tariff`).
 //!
-//! The cost report is in US dollars, so only a tariff stated in USD prices a
-//! job here; a tariff in another currency leaves the job unpriced with that
-//! cause, because no exchange rate is declared anywhere Stado reads, and a
-//! rate written here would be nobody's statement.
+//! The cost report is in US dollars: a tariff in another currency is
+//! converted at the `usd_rate` it declares ([`PowerTariff::usd_per_kwh`]),
+//! and one with no declared rate leaves the job unpriced with that cause,
+//! because a rate written here would be nobody's statement.
+//!
+//! [`PowerTariff::usd_per_kwh`]: crate::targets::PowerTariff::usd_per_kwh
 
 use std::collections::BTreeMap;
 
@@ -30,8 +32,9 @@ pub struct Energy {
 
 struct Host {
     price_per_kwh: Result<f64, String>,
-    /// board UUID -> hour start -> kWh drawn in that hour.
-    boards: BTreeMap<String, BTreeMap<DateTime<Utc>, f64>>,
+    /// board UUID -> hour start -> kWh drawn above the board's idle draw in
+    /// that hour, or why it cannot be told.
+    boards: BTreeMap<String, BTreeMap<DateTime<Utc>, Result<f64, String>>>,
 }
 
 /// A job's cost in USD, or why it is unpriced.
@@ -68,17 +71,44 @@ impl Energy {
                 .find_map(|slug| beacons.get(slug))
                 .and_then(|beacon| beacon.get("hours"))
                 .and_then(Value::as_object);
-            let mut boards: BTreeMap<String, BTreeMap<DateTime<Utc>, f64>> = BTreeMap::new();
+            // Each board's idle draw over the whole beacon window: the energy
+            // of its zero-utilization samples over the seconds they cover. A
+            // job is charged only what its board drew above it, because the
+            // board draws its idle power whether or not anything runs.
+            let mut idle: BTreeMap<String, (f64, f64)> = BTreeMap::new();
+            for hour in hours.into_iter().flat_map(|hours| hours.values()) {
+                for (uuid, board) in hour["boards"].as_object().into_iter().flatten() {
+                    let sum = idle.entry(uuid.clone()).or_default();
+                    sum.0 += board["idle_watt_seconds"].as_f64().unwrap_or(0.0);
+                    sum.1 += board["idle_seconds"].as_f64().unwrap_or(0.0);
+                }
+            }
+            let mut boards: BTreeMap<String, BTreeMap<DateTime<Utc>, Result<f64, String>>> =
+                BTreeMap::new();
             for (start, hour) in hours.into_iter().flatten() {
                 let Ok(start) = DateTime::parse_from_rfc3339(start) else {
                     continue;
                 };
                 for (uuid, board) in hour["boards"].as_object().into_iter().flatten() {
-                    let kwh = board["watt_seconds"].as_f64().unwrap_or(0.0) / JOULES_PER_KWH;
+                    let energy = board["watt_seconds"].as_f64().unwrap_or(0.0);
+                    let above = match (idle.get(uuid), board["seconds"].as_f64()) {
+                        (Some((idle_energy, idle_seconds)), Some(seconds))
+                            if *idle_seconds > 0.0 =>
+                        {
+                            let watts = idle_energy / idle_seconds;
+                            Ok((energy - watts * seconds).max(0.0) / JOULES_PER_KWH)
+                        }
+                        _ => Err(format!(
+                            "{}'s board {uuid} has no measured idle draw in its beacon, so the \
+                             energy work added on it in the hour {start} cannot be told from the \
+                             power it draws anyway",
+                            target.name
+                        )),
+                    };
                     boards
                         .entry(uuid.clone())
                         .or_default()
-                        .insert(start.with_timezone(&Utc), kwh);
+                        .insert(start.with_timezone(&Utc), above);
                 }
             }
             for slug in &slugs {
@@ -114,8 +144,8 @@ impl Energy {
         Ok((name.as_str(), host))
     }
 
-    /// What `job` cost on its board: each hour it ran contributes the board's
-    /// energy in that hour, split among the jobs of `sharing` that ran on the
+    /// What `job` cost on its board: each hour it ran contributes the energy
+    /// the board drew above its idle draw in that hour, split among the jobs of `sharing` that ran on the
     /// same host and board by the share of the hour each covered, at the
     /// host's USD tariff. Unpriced, with the cause, when the job names no host
     /// or board, the host has no USD tariff, or any hour it ran was not
@@ -153,9 +183,14 @@ impl Energy {
             .map_err(|error| format!("{started} cannot be cut to its hour: {error}"))?;
         while hour < ended {
             let next = hour + Duration::hours(1);
-            let kwh = hours.get(&hour).ok_or_else(|| {
-                format!("{host}'s beacon holds no measurement of board {board} for the hour {hour}")
-            })?;
+            let kwh = hours
+                .get(&hour)
+                .ok_or_else(|| {
+                    format!(
+                        "{host}'s beacon holds no measurement of board {board} for the hour {hour}"
+                    )
+                })?
+                .clone()?;
             let covered = |from: DateTime<Utc>, to: DateTime<Utc>| {
                 (to.min(next) - from.max(hour)).num_milliseconds().max(0) as f64
             };
@@ -174,21 +209,27 @@ impl Energy {
     }
 
     /// What one hour of `host` costs, for a placement that is about to use
-    /// it: the mean energy per hour of its busiest board over the hours its
-    /// beacon measured, at its USD tariff. The busiest board, because a job
-    /// placed on the host will keep a board busy; the mean of measured hours
-    /// only, because an hour not measured is not an hour that cost nothing.
+    /// it: the mean energy per hour its busiest board drew above its idle
+    /// draw over the hours its beacon measured, at its USD tariff. The
+    /// busiest board, because a job placed on the host will keep a board
+    /// busy; the mean of measured hours only, because an hour not measured is
+    /// not an hour that cost nothing. A board whose idle draw is unmeasured
+    /// is left out, and the host is unpriced when every board is.
     pub fn hourly(&self, identity: &str) -> Priced {
         let (host, known) = self.host(identity)?;
         let price = known.price_per_kwh.clone()?;
         known
             .boards
             .values()
-            .filter(|hours| !hours.is_empty())
-            .map(|hours| hours.values().sum::<f64>() / hours.len() as f64)
+            .filter_map(|hours| {
+                let above: Vec<f64> = hours.values().filter_map(|kwh| kwh.clone().ok()).collect();
+                (!above.is_empty()).then(|| above.iter().sum::<f64>() / above.len() as f64)
+            })
             .max_by(f64::total_cmp)
             .map(|kwh| kwh * price)
-            .ok_or_else(|| format!("{host}'s beacon measured no hour of any board"))
+            .ok_or_else(|| {
+                format!("{host}'s beacon measured no hour of any board whose idle draw is known")
+            })
     }
 }
 
