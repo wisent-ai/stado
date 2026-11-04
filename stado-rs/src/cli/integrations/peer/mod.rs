@@ -143,5 +143,9 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             .await
         }
         MarketCommands::Peer(peer) => declare(peer).await,
+        // Answered by the market dispatch before any provider is chosen.
+        MarketCommands::Sources { .. } => Err(CmdError::usage(
+            "stado market sources names no provider; run it without --provider",
+        )),
     }
 }

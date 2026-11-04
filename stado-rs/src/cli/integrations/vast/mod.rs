@@ -14,6 +14,7 @@ mod earnings;
 mod measure;
 mod readiness;
 mod readiness_text;
+mod sources;
 
 pub(crate) use readiness::read_vault;
 
@@ -28,7 +29,11 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
     if let MarketCommands::Peer(peer) = command {
         return super::peer::declare(peer).await;
     }
-    if provider(command) == MarketProvider::Stado {
+    // The source list spans every marketplace, so no provider is named.
+    if let MarketCommands::Sources { check, json } = command {
+        return sources::sources(*check, *json).await;
+    }
+    if provider(command) == Some(MarketProvider::Stado) {
         return super::peer::dispatch(command).await;
     }
     if peer_named(command) {
@@ -108,11 +113,13 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             .await
         }
         MarketCommands::Peer(_) => unreachable!("peer declarations were answered above"),
+        MarketCommands::Sources { .. } => unreachable!("the source list was answered above"),
     }
 }
 
-/// The marketplace a provider-bearing subcommand names.
-pub(crate) fn provider(command: &MarketCommands) -> MarketProvider {
+/// The marketplace a provider-bearing subcommand names; `None` for the
+/// source list, which spans every marketplace.
+pub(crate) fn provider(command: &MarketCommands) -> Option<MarketProvider> {
     match command {
         MarketCommands::List { provider, .. }
         | MarketCommands::Unlist { provider, .. }
@@ -122,8 +129,9 @@ pub(crate) fn provider(command: &MarketCommands) -> MarketProvider {
         | MarketCommands::Measure { provider, .. }
         | MarketCommands::Readiness { provider, .. }
         | MarketCommands::Monitor { provider, .. }
-        | MarketCommands::Follow { provider, .. } => *provider,
-        MarketCommands::Peer(_) => MarketProvider::Stado,
+        | MarketCommands::Follow { provider, .. } => Some(*provider),
+        MarketCommands::Peer(_) => Some(MarketProvider::Stado),
+        MarketCommands::Sources { .. } => None,
     }
 }
 
@@ -139,7 +147,7 @@ fn peer_named(command: &MarketCommands) -> bool {
         | MarketCommands::Readiness { peer, .. }
         | MarketCommands::Monitor { peer, .. }
         | MarketCommands::Follow { peer, .. } => peer.is_some(),
-        MarketCommands::Peer(_) => false,
+        MarketCommands::Peer(_) | MarketCommands::Sources { .. } => false,
     }
 }
 

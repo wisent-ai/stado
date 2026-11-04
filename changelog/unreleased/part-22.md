@@ -167,3 +167,9 @@ The version bump gathers them into the release's own file and removes this one.
   recorded figure. `stado market measure --provider vast --gpu NAME` reads Vast's public offer
   search (no key needed), prints the number of rentable one-board offers and the lowest, median and
   highest hourly price, and keeps each reading with its time and source in the fleet store.
+- **`stado market sources` lists every place a fleet host can earn:** the sources were named only in
+  a plan and docs prose. A declared list (`stado-rs/data/catalog/market-sources.json`) holds each
+  rental marketplace and inference, training, media, proof, storage and bandwidth network with its
+  unit, currency, join page and Stado adapter; `stado market sources [--check] [--json]` prints it
+  and `--check` reports each source whose page no longer answers. Desktop's Registry screen runs it
+  and `stado market measure`.

@@ -144,6 +144,14 @@ enum NativeRegistryOperations {
                   .init(id: "target", label: "Registry target", option: "--target", required: true),
                   .init(id: "since-days", label: "Days back", option: "--since-days", initial: "7"),
               ], fixedArguments: ["--provider", "vast"], mutates: false, jsonOutput: false),
+        .init(id: "market-sources", title: "Every place a fleet host can earn, and which Stado can join",
+              path: ["market", "sources"], hostPlacement: .none, fields: [
+                  .init(id: "check", label: "Ask each source's page whether it still answers", option: "--check", flag: true),
+              ], mutates: false, jsonOutput: false),
+        .init(id: "market-measure", title: "What Vast renters pay for a board model now",
+              path: ["market", "measure"], hostPlacement: .none, fields: [
+                  .init(id: "gpu", label: "Board model as Vast spells it", option: "--gpu", required: true),
+              ], fixedArguments: ["--provider", "vast"], jsonOutput: false),
         .init(id: "market-maintenance", title: "Tell Vast renters this host goes down for maintenance",
               path: ["market", "maintenance"], hostPlacement: .none, fields: [
                   .init(id: "in-minutes", label: "Minutes until the host goes down", option: "--in-minutes", initial: "0"),

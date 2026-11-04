@@ -73,6 +73,18 @@ pub(crate) enum MarketCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Every place a fleet host can earn, from the declared list of sources
+    /// (rental marketplaces, inference, training and media networks, proof,
+    /// storage and bandwidth networks): what each pays for, its unit and
+    /// currency, the page that says how a host joins, and whether Stado
+    /// carries an adapter. --check asks each page whether it still answers
+    /// and exits non-zero naming each that does not.
+    Sources {
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// What the marketplace asks for a board model right now: the number of
     /// rentable one-board on-demand offers and what a renter pays per hour
     /// (lowest, median, highest), read from the public offer search, which
