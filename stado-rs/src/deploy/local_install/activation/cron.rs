@@ -84,3 +84,75 @@ pub(super) async fn install_cron_job(
     ));
     Ok(())
 }
+
+/// Take back the cron fallback an earlier install of this unit wrote, now
+/// that a launchd domain runs it. The line and its wrapper started a second
+/// copy of the unit at every boot beside launchd's own, and the copy that lost
+/// the race for the unit's port restarted for ever. A table with no such line,
+/// or an account with no crontab, is the state asked for and says nothing.
+///
+/// The process cron already started is not stopped here: it is not this
+/// install's to end, and from the next boot on only launchd's copy starts.
+///
+/// `pub(super)` for [`super::execute_plan`], which calls it after every
+/// launchd branch that loaded the job.
+pub(super) async fn retire_cron_fallback(
+    plan: &InstallPlan,
+    home: &Path,
+    runner: &Runner,
+    echo: &mut dyn FnMut(&str),
+) -> Result<(), DeployError> {
+    let wrapper = home
+        .join(".stado")
+        .join("bin")
+        .join(format!("run-{}.sh", plan.label));
+    let wrapper_arg = shlex_quote(&wrapper.to_string_lossy());
+    // The table is filtered only when it holds the line, so an account with
+    // no crontab is not given an empty one.
+    let retire_script = format!(
+        // stderr: crontab -l refuses an account that has no crontab; it then
+        // holds no fallback line and nothing is written. grep -v exits 1 when
+        // the fallback was the only line; the table it leaves is then empty,
+        // which crontab installs as an empty table.
+        "table=$(crontab -l 2>/dev/null) || exit 0; \
+         printf '%s\\n' \"$table\" | grep -Fq -- {wrapper_arg} || exit 0; \
+         {{ printf '%s\\n' \"$table\" | grep -Fv -- {wrapper_arg} || true; }} | crontab - \
+         && echo retired"
+    );
+    let retired = runner(CommandSpec::new(vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        retire_script,
+    ]))
+    .await
+    .map_err(DeployError::unreachable)?;
+    if !retired.succeeded() {
+        return Err(DeployError::unreachable(format!(
+            "launchd now runs {} but its cron fallback line naming {} could not be removed: {}; \
+             every boot still starts a second copy until `crontab -l` no longer lists it",
+            plan.label,
+            wrapper.display(),
+            retired.detail()
+        )));
+    }
+    if retired.stdout.trim() == "retired" {
+        echo(&format!(
+            "[ok]   removed the @reboot cron fallback of {}; launchd alone starts it",
+            plan.label
+        ));
+    }
+    match std::fs::remove_file(&wrapper) {
+        Ok(()) => echo(&format!("[ok]   removed {}", wrapper.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(DeployError(format!(
+                "launchd now runs {} but its cron fallback wrapper {} could not be removed: \
+                 {error}",
+                plan.label,
+                wrapper.display()
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind())))
+        }
+    }
+    Ok(())
+}
