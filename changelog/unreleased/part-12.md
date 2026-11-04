@@ -28,6 +28,13 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- **`stado host processes` on a Mac reports what each process spent in the interval, not its
+  lifetime:** CPU counters were converted by a ratio measured afresh for each reading, which moved
+  by a few parts per million, so a long-lived process's converted total went down between two
+  readings, every process was taken for a new one, its lifetime CPU was reported as spent in the
+  interval and nearly all were counted as ended. The conversion is now the kernel's declared Mach
+  timebase (`mach_timebase_info`), the same for every reading.
+
 - **`placement evacuate --drop-release-targets` names why a release-controlled route stays:** a
   product whose only target is the host being emptied was refused with `stado release policy
   remove` alone, although its route stayed only because `--profile-fixed-routes` could not draft
