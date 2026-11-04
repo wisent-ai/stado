@@ -13,7 +13,6 @@ use crate::machine::{MachineFacade, AGENT_INSTANCE_PREFIX};
 use crate::models::{Job, WorkerResource};
 use crate::queue::JobStorage;
 use chrono::Utc;
-use schema::{HourUnit, Purchase};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -170,24 +169,15 @@ fn select<'a>(
         .ok_or("worker omitted its resource identity")?;
     allocation["worker"] = json!(worker);
     if matches!(identity, WorkerResource::Local) {
-        let book = book.ok_or("provider price book unavailable; see book_error")?;
-        source_complete(book, ProviderId::Local)?;
-        return unique(
-            book.quotes.iter().filter(|quote| {
-                quote.provider == ProviderId::Local
-                    && quote.source == "autonomy policy"
-                    && quote.machine_type.is_none()
-                    && matches!(
-                        Purchase::decode(&quote.purchase_option),
-                        Ok(Purchase::OnDemand)
-                    )
-                    && HourUnit::accepts(&quote.unit)
-                    && quote.currency == "USD"
-                    && quote.hourly_usd.is_finite()
-                    && quote.hourly_usd >= -quote.hourly_usd
-            }),
-            reference,
-        );
+        // Owned hardware has no provider quote: its hours are priced from
+        // the energy its boards measured at the host's declared tariff, by
+        // `stado cost report` per job and `stado cost host` per hour.
+        return Err(format!(
+            "{reference} is owned hardware, which no provider quotes: its hours are priced from \
+             the energy its boards measured at the host's power_tariff, read with `stado cost \
+             host {}` and `stado cost report`",
+            worker.host
+        ));
     }
     let inventory = inventory.ok_or("provider inventory unavailable; see inventory_error")?;
     let resource = placement::resource(job, inventory)?;

@@ -74,4 +74,7 @@ pub(super) struct CandidateContext<'a> {
     pub(super) feedback: &'a [super::storage::PlacementFeedback],
     pub(super) budget: CloudBudget,
     pub(super) now: chrono::DateTime<Utc>,
+    /// Each owned host's measured energy and declared tariff, or why it
+    /// could not be read.
+    pub(super) energy: &'a Result<crate::scheduler::cost::Energy, String>,
 }

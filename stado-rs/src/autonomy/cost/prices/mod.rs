@@ -15,7 +15,6 @@ mod gcp;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::autonomy::policy::AutonomyPolicy;
 use crate::capabilities::ProviderId;
 
 use aws::aws_spot_prices;
@@ -70,7 +69,7 @@ pub struct PriceBook {
     pub quotes: Vec<PriceQuote>,
 }
 
-pub async fn refresh_prices(policy: &AutonomyPolicy) -> PriceBook {
+pub async fn refresh_prices() -> PriceBook {
     let observed_at = Utc::now();
     let configured: std::collections::BTreeSet<ProviderId> = crate::config::wc_providers()
         .iter()
@@ -99,32 +98,10 @@ pub async fn refresh_prices(policy: &AutonomyPolicy) -> PriceBook {
             }
         },
     );
-    let mut sources: Vec<PriceSource> = [gcp, azure, aws].into_iter().flatten().collect();
-    if let Some(hourly) = policy.local_hourly_cost_usd {
-        sources.push(PriceSource {
-            provider: ProviderId::Local,
-            state: PriceState::Complete,
-            observed_at: observed_at.to_rfc3339(),
-            source: "autonomy policy".to_string(),
-            error: None,
-            quotes: vec![PriceQuote {
-                provider: ProviderId::Local,
-                sku: "local-capacity".to_string(),
-                description: "Configured marginal local host cost".to_string(),
-                region: None,
-                machine_type: None,
-                accelerator_type: None,
-                family: None,
-                purchase_option: "on_demand".to_string(),
-                unit: "hour".to_string(),
-                hourly_usd: hourly,
-                currency: "USD".to_string(),
-                source: "autonomy policy".to_string(),
-                observed_at: observed_at.to_rfc3339(),
-                dynamic: true,
-            }],
-        });
-    }
+    // Owned hardware has no quote here: it is priced from the energy its
+    // boards measured at the host's declared tariff
+    // (`crate::scheduler::cost::Energy`), never from a figure in a policy.
+    let sources: Vec<PriceSource> = [gcp, azure, aws].into_iter().flatten().collect();
     let quotes = sources
         .iter()
         .flat_map(|source| source.quotes.iter().cloned())

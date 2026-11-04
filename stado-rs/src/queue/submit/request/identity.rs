@@ -117,6 +117,7 @@ pub(crate) fn immutable_job_projection(job: &Job) -> Value {
         "failed_at",
         "instance_ref",
         "worker_allocation",
+        "gpu_uuid",
         "restarts",
         "last_restart",
         "error",

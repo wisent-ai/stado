@@ -59,6 +59,7 @@ pub fn normalize_job(job: &Job) -> Value {
         "worker_allocation".into(),
         serde_json::json!(job.worker_allocation),
     );
+    out.insert("gpu_uuid".into(), serde_json::json!(job.gpu_uuid));
     let allocation_kind = job
         .instance_ref
         .as_deref()

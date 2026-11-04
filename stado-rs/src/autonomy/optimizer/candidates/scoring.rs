@@ -42,13 +42,23 @@ pub(super) fn candidate(
     };
     let failure_probability =
         observed_failure_probability(feedback, &offer.target_id).unwrap_or_default();
-    // Owned hardware costs what the operator declares in
-    // local_hourly_cost_usd; with nothing declared it has no price, and the
-    // offer is refused by name below rather than priced as free.
-    let hourly = if offer.provider == ProviderId::Local && quote.is_none() {
-        policy.local_hourly_cost_usd
-    } else {
-        quote.map(|price| price.hourly_usd)
+    // Owned hardware costs what its boards measured drawing per hour at the
+    // host's declared tariff; a host with no tariff or no measured hour has
+    // no price, and the offer is refused below with that cause rather than
+    // priced as free. A local offer is `local-<hostname>`.
+    let owned = (offer.provider == ProviderId::Local && quote.is_none()).then(|| {
+        let host = offer
+            .target_id
+            .strip_prefix("local-")
+            .unwrap_or(&offer.target_id);
+        match context.energy {
+            Ok(energy) => energy.hourly(host),
+            Err(cause) => Err(cause.clone()),
+        }
+    });
+    let hourly = match &owned {
+        Some(priced) => priced.as_ref().ok().copied(),
+        None => quote.map(|price| price.hourly_usd),
     };
     // Without a stated or measured run time the run cannot be priced or held
     // to a deadline; the offer is refused by name below, as the makespan
@@ -186,11 +196,11 @@ pub(super) fn candidate(
     if quote.is_none() && offer.provider != ProviderId::Local {
         rejected.push("no fresh dynamic hourly price".to_string());
     }
-    if offer.provider == ProviderId::Local && hourly.is_none() {
-        rejected.push(
-            "owned hardware has no declared hourly cost: set local_hourly_cost_usd in the autonomy policy"
-                .to_string(),
-        );
+    if let Some(Err(cause)) = &owned {
+        rejected.push(format!(
+            "owned hardware has no measured hourly cost: {cause}; declare the host's \
+             power_tariff and let its beacon measure an hour (`stado cost host`)"
+        ));
     }
     if egress.is_none() {
         rejected.push("cross-provider data egress cannot be priced from job metadata".to_string());

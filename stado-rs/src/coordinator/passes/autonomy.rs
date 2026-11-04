@@ -51,7 +51,7 @@ pub(crate) async fn run_autonomy_once(
         {
             book
         }
-        _ => crate::autonomy::cost::refresh_prices(&policy).await,
+        _ => crate::autonomy::cost::refresh_prices().await,
     };
     let cached = crate::autonomy::storage::load_latest_inventory(store).await?;
     let mut inventory = match cached {

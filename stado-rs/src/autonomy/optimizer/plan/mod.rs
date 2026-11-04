@@ -62,6 +62,9 @@ pub async fn plan_queued(
     summary.provider_errors = provider_errors;
     let history_rows = crate::scheduler::cost::collect_completed(store).await?;
     let wall_times = crate::scheduler::cost::wall_time_table(&history_rows);
+    // Owned hosts are priced by the energy their boards drew, read once for
+    // the whole pass.
+    let energy = crate::scheduler::cost::Energy::read(store).await;
     let feedback = super::storage::list_recent_feedback(store).await?;
     let planning_now = Utc::now();
     // The planner considers the whole queue: it is placing capacity, not
@@ -95,6 +98,7 @@ pub async fn plan_queued(
                 total_usd: new_cloud_cost_budget_usd,
             },
             now: planning_now,
+            energy: &energy,
         };
         let candidates = candidates_for_job(&job, &offers, prices, &wall_times, &candidate_context);
         let selected = candidates

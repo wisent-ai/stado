@@ -41,8 +41,6 @@ pub struct AutonomyPolicy {
     pub freshness: FreshnessPolicy,
     pub limits: SafetyLimits,
     #[serde(default)]
-    pub local_hourly_cost_usd: Option<f64>,
-    #[serde(default)]
     pub rules: Vec<ResourceRule>,
     #[serde(default)]
     pub metadata: BTreeMap<String, String>,

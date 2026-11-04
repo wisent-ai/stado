@@ -86,3 +86,10 @@ The version bump gathers them into the release's own file and removes this one.
   TARGET` prices each hour's energy at the tariff the registry declares (`targets[].power_tariff`,
   refused without a source). An hour with no board sample is unpriced, never zero. Desktop's
   Registry screen runs it.
+- **A job on owned hardware is priced from what its board drew:** `local_hourly_cost_usd`, one
+  hand-written figure for every owned host, is removed. A local job records the board it ran on
+  (`gpu_uuid`), and `stado cost report` prices it from that board's measured energy in each hour
+  it ran, shared among the jobs on the board, at the host's USD `power_tariff`; the optimizer
+  prices an owned offer at its busiest board's mean measured hourly energy. A host with no tariff,
+  a tariff in another currency or no measured hour is unpriced with that cause, never free.
+  `stado cost quote` answers an owned allocation by pointing at `stado cost host`.

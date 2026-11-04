@@ -67,6 +67,11 @@ pub struct Job {
     pub instance_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_allocation: Option<super::worker::WorkerAllocation>,
+    /// The board a local worker admitted the job against, by the driver's
+    /// UUID, so its hours can be priced from that board's measured energy
+    /// (`stado cost host`); None for a job that ran on no named board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_uuid: Option<String>,
     /// When the worker that holds this running job stops being trusted to own
     /// it, renewed in the job document ITSELF.
     ///
