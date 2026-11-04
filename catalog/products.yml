@@ -583,41 +583,55 @@ products:
     outcome: Run a standalone worker against a peer fleet's queue while this fleet has no work, withdraw it by draining when work returns, and account the peer's completed jobs at the offered price.
     source: https://stado.wisent.com/docs/peer-fleets
   - title: Sell tokens from the fleet's own inference endpoint
-    status: planned
-    outcome: Publish the OpenAI-compatible deployment behind a public origin with declared prices, throughput and rate limits, so model output is sold per token while yieldable mode keeps the board available to fleet work; only a model whose license allows the sale, and only once measured per-token prices and throughput show it earns more per board-hour than renting the board.
+    status: superseded
+    outcome: Publish the OpenAI-compatible deployment behind a public origin with declared prices, throughput and rate limits, so model output is sold per token while yieldable mode keeps the board available to fleet work.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: compute-marketplace owns offers, rentals, credits and API keys, so the sale is its roadmap item and Stado keeps the metered endpoint'
+    superseded_by: Meter inference per caller for the product that sells it
   - title: Become an inference provider on OpenRouter
-    status: planned
+    status: superseded
     outcome: List the fleet's OpenAI-compatible deployment as an OpenRouter inference provider with per-token prices, so its customers buy our model output without a storefront of our own.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: a listing with prices is an offer, which compute-marketplace owns; Stado keeps the metered endpoint the listing points at'
+    superseded_by: Meter inference per caller for the product that sells it
   - title: Operate a customer's own fleet
     status: planned
-    outcome: Run enrollment, placement, delivery, declared repair and evidence for machines and cloud accounts the customer owns, with the provider's cost and the management fee separately visible.
+    outcome: Run enrollment, placement, delivery, declared repair and evidence for machines and cloud accounts the customer owns, and report per customer the hosts and hours operated, so the product that bills the management fee shows it apart from the provider's cost.
     source: https://stado.wisent.com/docs/earning
   - title: Sell macOS builds, signing and updates
-    status: planned
+    status: superseded
     outcome: Offer the publisher runner, Developer ID signing, notarization and Sparkle publication as a paid surface per release or per repository.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: charging belongs to compute-marketplace; Stado runs the customer''s build isolated and metered'
+    superseded_by: Run outside customers' work isolated and metered
   - title: Sell interactive GPU sessions
-    status: planned
+    status: superseded
     outcome: Charge for a streamed display session on a fleet GPU, which a container marketplace cannot serve.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: charging belongs to compute-marketplace; Stado streams the session isolated and metered'
+    superseded_by: Run outside customers' work isolated and metered
   - title: Sell browser work with a verifiable receipt
-    status: planned
+    status: superseded
     outcome: Charge per authorized browser run whose signed receipt an independent client verifies.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: charging belongs to compute-marketplace; Stado places the run isolated and metered and carries its receipt'
+    superseded_by: Run outside customers' work isolated and metered
   - title: Host releases and updates for other products
     status: planned
-    outcome: Offer the immutable object plane, channels, promotion, rollback and public hostnames as a subscription for a product whose updates Stado carries.
+    outcome: Carry another product's immutable releases, channels, promotion, rollback and public hostnames, and report per product the storage and traffic used, so the product that bills it charges for what was carried.
     source: https://stado.wisent.com/docs/earning
   - title: Sell disposable isolated environments
-    status: planned
+    status: superseded
     outcome: Charge per lease for a scratch target that is destroyed when the run ends.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: charging belongs to compute-marketplace; Stado leases the scratch target isolated and metered'
+    superseded_by: Run outside customers' work isolated and metered
   - title: Sell cloud cost reduction as a service
-    status: planned
+    status: superseded
     outcome: Charge for attributed cost, forecast, anomaly and savings reporting with autonomy budgets that block new cloud spend, against a customer's own accounts.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: charging belongs to compute-marketplace; Stado reads the customer''s accounts and reports the cost and the measured saving'
+    superseded_by: Report cost and savings for a customer's own cloud accounts
   - title: Refuse to sell a model whose license does not allow it
     status: planned
     outcome: Read the license a model repository and its base model declare before any per-token sale, aggregator listing or rented endpoint serves it, and refuse the sale naming the repository and its license when none is declared or it forbids commercial use.
@@ -679,29 +693,40 @@ products:
     outcome: Serve a fleet endpoint on a public hostname through an edge running on a registered host, with TLS and per-customer rate limits returned as early refusals, so anything sold to outside customers is reachable without Tailscale.
     source: https://stado.wisent.com/docs/web-hosting
   - title: Bill outside customers
-    status: planned
+    status: rejected
     outcome: Keep customer accounts, keys, metered usage, prices, invoices with their taxes and payments through a declared payment provider, with the provider's cost and the fee separately visible.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: accounts, credits, keys and payments are compute-marketplace''s, which already takes payment through wisent-integrations; Stado reports the metered use it bills'
   - title: Sell batch inference
-    status: planned
+    status: superseded
     outcome: Accept offline inference batches priced per million tokens and run them in the fleet's idle hours.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: pricing and selling belong to compute-marketplace; Stado runs the batch in idle hours and meters its tokens'
+    superseded_by: Meter inference per caller for the product that sells it
   - title: Sell embeddings and transcription
-    status: planned
+    status: superseded
     outcome: Serve embedding and speech-to-text models from boards the main deployment does not hold, priced per call or token.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: pricing belongs to compute-marketplace; Stado serves and meters the models'
+    superseded_by: Meter inference per caller for the product that sells it
   - title: Sell fine-tuning and evaluation runs
-    status: planned
+    status: superseded
     outcome: Accept a customer's fine-tuning or evaluation job with its data kept apart from every other customer's, and return the result and its receipt.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: accepting and charging the job belongs to compute-marketplace; Stado runs it isolated and metered'
+    superseded_by: Run outside customers' work isolated and metered
   - title: Sell macOS CI minutes
-    status: planned
+    status: superseded
     outcome: Run a customer repository's macOS CI jobs on an isolated runner and charge per minute.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: charging belongs to compute-marketplace; Stado runs the jobs isolated and metered'
+    superseded_by: Run outside customers' work isolated and metered
   - title: Sell remote macOS sessions
-    status: planned
+    status: superseded
     outcome: Charge per hour for a streamed, isolated macOS session on a fleet Mac.
     source: https://stado.wisent.com/docs/earning
+    decision: 'ARCHITECTURE.md, Fleet and money: charging belongs to compute-marketplace; Stado streams the session isolated and metered'
+    superseded_by: Run outside customers' work isolated and metered
   - title: Supply compute and egress to HandToHuman
     status: planned
     outcome: Offer fleet hosts' compute and egress as HandToHuman offers through the marketplace provider family.
@@ -729,6 +754,26 @@ products:
   - title: Measure what a Mac can spare
     status: planned
     outcome: Measure each always-on Mac's spare CPU, memory and hours beside the services it already runs, and refuse to offer a Mac that sleeps or has no measured spare capacity for builds, CI minutes or sessions.
+    source: https://stado.wisent.com/docs/earning
+  - title: Meter inference per caller for the product that sells it
+    status: planned
+    outcome: Serve a deployment's OpenAI-compatible endpoint, batches, embeddings and transcription through the public entrance with a caller key per customer that the selling product issues, refuse a caller past its declared limit at once, and record tokens and calls per key and hour where the selling product reads them; only a model whose license allows the sale is served this way.
+    source: https://stado.wisent.com/docs/inference
+  - title: Run outside customers' work isolated and metered
+    status: planned
+    outcome: Run an outside customer's job, build, CI run, scratch lease, browser run or streamed session with its data, network and credentials kept apart from the fleet's and every other customer's, and record its board-, host- and wall-hours per customer where the selling product reads them.
+    source: https://stado.wisent.com/docs/earning
+  - title: Report cost and savings for a customer's own cloud accounts
+    status: planned
+    outcome: Read a customer's own cloud accounts with a scoped credential and report attributed cost, forecast, anomalies and the measured saving per month, where the selling product reads them.
+    source: https://stado.wisent.com/docs/costs
+  - title: Withdraw offers from a failing host before a contract breaks
+    status: planned
+    outcome: Watch every host with a marketplace contract for a failing board, disk, link or agent, withdraw its other offers at the first sign, announce maintenance for the contract in place, and alert with the failure and the contract's end date.
+    source: https://stado.wisent.com/docs/vast
+  - title: Answer whether the fleet earns
+    status: planned
+    outcome: stado market earnings over a declared window prints the fleet's total income from every source, its measured cost and the margin, and names each host and source that lost money, so the monetisation work is judged by a positive fleet margin and not by delivered items.
     source: https://stado.wisent.com/docs/earning
   integrations:
   - product: skarbiec
@@ -1885,7 +1930,15 @@ products:
   owner_repository: wisent-ai/handtohuman
   star_repository: wisent-ai/wisent
   description: Standardized human work with automatic staffing, recovery, delivery evidence, and provider-independent task lifecycles.
-  roadmap: []
+  roadmap:
+  - title: Report the platform's share of every settled task
+    status: planned
+    outcome: Report per day and per rate card the platform fee kept from every accepted task, beside the worker payouts and the payment provider's fees, so the commission is read as income and not only as ledger rows.
+    source: handtohuman/docs/task-and-payments.md
+  - title: Buy compute and egress from the fleet's offers
+    status: planned
+    outcome: Take a fleet host's compute and residential-egress capacity as an offer the marketplace can staff work onto, priced by the offer, so idle fleet hosts serve HandToHuman work.
+    source: handtohuman/docs/marketplace-and-mobile.md
   integrations:
   - product: stado
     description: HandToHuman submits compute work and places residential-egress workers through Stado.
@@ -2479,7 +2532,39 @@ products:
   description: 'A private, conditional Stado surface for evaluating an operator-controlled
     GPU catalogue and direct capacity resale: a web interface, one backend process
     per host, and instances that run as Stado machine jobs.'
-  roadmap: []
+  roadmap:
+  - title: Sell model output per token
+    status: planned
+    outcome: Sell tokens from a fleet deployment Stado meters per caller, with per-token prices, API keys, credits and limits, only for a model whose license allows the sale, and only once measured prices and throughput show it earns more per board-hour than renting the board.
+    source: compute.wisent.com/docs/architecture.md
+  - title: List the fleet's deployment on an inference aggregator
+    status: planned
+    outcome: List a metered fleet deployment as a provider on an inference aggregator with per-token prices, so the aggregator's customers buy the output without a storefront of ours.
+    source: compute.wisent.com/docs/architecture.md
+  - title: Sell batch inference, embeddings and transcription
+    status: planned
+    outcome: Price and sell offline batches per million tokens and embedding and transcription calls that Stado runs in idle hours and meters.
+    source: compute.wisent.com/docs/architecture.md
+  - title: Sell isolated runs and sessions on the fleet
+    status: planned
+    outcome: Price and sell fine-tuning and evaluation runs, macOS builds, signing and CI minutes, browser runs with receipts, scratch environments and streamed GPU or macOS sessions that Stado runs isolated and meters.
+    source: compute.wisent.com/docs/architecture.md
+  - title: Charge for operating a customer's fleet and hosting its releases
+    status: planned
+    outcome: Charge a management fee per operated host and a subscription for carried releases from the hosts, hours, storage and traffic Stado reports per customer, with the provider's cost and the fee separately visible.
+    source: compute.wisent.com/docs/operations.md
+  - title: Charge a share of a customer's measured cloud saving
+    status: planned
+    outcome: Charge a declared share of the monthly saving Stado measures on a customer's own cloud accounts.
+    source: compute.wisent.com/docs/operations.md
+  - title: Resell other providers' capacity at a margin
+    status: planned
+    outcome: Sell capacity Stado places on outside providers at the provider's sourced quote plus a declared margin, both shown on the invoice, so income grows without owned hardware.
+    source: compute.wisent.com/docs/architecture.md
+  - title: Pass the public launch gates
+    status: planned
+    outcome: Meet every gate the operations page lists before any outside customer pays (payments and ledger, supplier and pricing authority, tenant isolation, acceptable use and export control, capacity evidence and refunds, Stado lease contracts, privacy and recovery), each approved by the operator.
+    source: compute.wisent.com/docs/operations.md
   integrations:
   - product: stado
     description: Every instance is one Stado machine job whose command runs the
