@@ -74,7 +74,7 @@ extension BackendProvisioner {
             )
         }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let queue = DispatchQueue(label: "ai.wisent.stado.service-readiness")
+            let queue = DispatchQueue(label: "com.wisent.stado.service-readiness")
             let file = DispatchSource.makeFileSystemObjectSource(
                 fileDescriptor: descriptor, eventMask: [.extend, .write], queue: queue
             )

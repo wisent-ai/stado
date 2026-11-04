@@ -29,7 +29,7 @@ actor DeploymentRegistryClient {
         configuration: WisentAuthConfiguration? = nil,
         session: URLSession? = nil
     ) {
-        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "ai.wisent.stado"
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.wisent.stado.desktop"
         self.configuration = configuration ?? .production(bundleIdentifier: bundleIdentifier)
         if let session {
             self.session = session
