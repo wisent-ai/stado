@@ -56,9 +56,15 @@ stado_unit_pids() {
 }
 stado_launchd_state() {
   pc_pid=''
+  pc_state=''
+  pc_runs=''
+  pc_exit=''
   if pc_info=$($launch print \"$domain/$unit\" 2>&1); then
     pc_loaded=yes
     pc_pid=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk '$1 == \"pid\" && $2 == \"=\" { print $3; exit }')
+    pc_state=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk -F' = ' '/^\\tstate = / { print $2; exit }')
+    pc_runs=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk '$1 == \"runs\" && $2 == \"=\" { print $3; exit }')
+    pc_exit=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk -F' = ' '/^\\tlast exit reason = / { print $2; exit }')
   else
     pc_loaded=no
   fi
@@ -93,6 +99,16 @@ pub(crate) const NO_DOMAIN_SYSTEM: &str = "    domain=\"system\"
 ///
 /// Require both a loaded unit and its running process. A loaded job whose
 /// program exited is not running; a process outside the unit is not supervised.
+///
+/// A job launchd has scheduled to spawn again (`state = spawn scheduled`)
+/// is not judged until launchd makes that attempt (its `runs` count moves):
+/// the first spawn of a program whose code identity an install just changed
+/// is refused by macOS (`OS_REASON_CODESIGNING`, a launch constraint the
+/// background-task manager re-evaluates moments later), the next one runs,
+/// and an install that read the unit between the two rolled back a release
+/// that was about to run. The wait ends on launchd's own next attempt, so a
+/// unit refused every time is still reported unmet, with launchd's state,
+/// run count and last exit reason in the detail.
 pub(crate) const RUNNING_DESCRIBE: &str = "the unit is loaded and has a pid";
 
 /// Read in the domain the action used, because that is the only domain whose
@@ -101,12 +117,18 @@ pub(crate) const RUNNING_DESCRIBE: &str = "the unit is loaded and has a pid";
 /// the action never addressed.
 pub(crate) const RUNNING_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
     stado_launchd_state
+    pc_scheduled_runs=\"$pc_runs\"
+    while [ \"$pc_loaded\" = yes ] && [ -z \"$pc_pid\" ] && [ \"$pc_state\" = 'spawn scheduled' ] \\
+      && [ \"$pc_runs\" = \"$pc_scheduled_runs\" ]; do
+      /bin/sleep 1
+      stado_launchd_state
+    done
     if [ \"$pc_loaded\" = no ]; then
       stado_post 'unmet' \"no job at $domain/$unit\"
     elif [ -n \"$pc_pid\" ]; then
       stado_post 'met' \"$domain/$unit pid $pc_pid\"
     else
-      stado_post 'unmet' \"$domain/$unit is loaded with no pid\"
+      stado_post 'unmet' \"$domain/$unit is loaded with no pid (launchd state ${pc_state:-unreported}, runs ${pc_runs:-unreported}, last exit reason ${pc_exit:-none})\"
     fi
   elif stado_systemctl is-active --quiet \"$unit\"; then
     pc_pid=$(stado_systemctl show --property=MainPID --value \"$unit\" 2>/dev/null)

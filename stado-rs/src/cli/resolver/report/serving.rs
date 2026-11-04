@@ -47,8 +47,12 @@ pub(crate) fn await_serving(pid: u32) -> Result<(), String> {
             let mut watch =
                 crate::queue::local_file::watch_directories(std::slice::from_ref(&directory))
                     .map_err(|error| std::io::Error::other(error.to_string()))?;
-            if let Some(stuck) = stuck_at_start(pid) {
-                return Err(std::io::Error::other(stuck));
+            // `stado serve` waits on its own resolver inside one of its own
+            // start steps; judging that step would end the start it is in.
+            if pid != std::process::id() {
+                if let Some(stuck) = stuck_at_start(pid) {
+                    return Err(std::io::Error::other(stuck));
+                }
             }
             if let Some(state) = published_state() {
                 if state.pid == pid && state.state == RESOLVER_SERVING && state.listening {
@@ -95,32 +99,45 @@ pub(crate) fn await_serving(pid: u32) -> Result<(), String> {
 /// The start step `stado serve` process `pid` stands in past its due moment
 /// (its `stado serve start: <step>` wait, whose `termin:` is the longest
 /// that step ever took here), said with how long past due and what it waits
-/// on below it; `None` while it is within that or no longer starting. A
-/// serve whose start hung (it waited on a child that never answered) never
-/// publishes, and a wait for its publication held `stado product install
-/// stado` for as long as the hang lasted, which was hours. A register that
-/// cannot be read is no evidence of a hang.
+/// on below it; `None` while it is within that, no longer starting, or
+/// while no wait below the step is past its own due moment. A serve whose
+/// start hung (it waited on a child that never answered) never publishes,
+/// and a wait for its publication held `stado product install stado` for as
+/// long as the hang lasted, which was hours. A start step alone past its
+/// longest is a slow start, not a hung one: one that ran six seconds past
+/// its longest was refused as stuck and its serve role ended, so a hang is
+/// named only when what the step waits on has itself run past the longest
+/// it ever took here. A register that cannot be read is no evidence of a
+/// hang.
 pub(crate) fn stuck_at_start(pid: u32) -> Option<String> {
     let listing = crate::wait::open::listed().ok()?;
     let now = chrono::Utc::now();
     let own: Vec<_> = listing.open.iter().filter(|wait| wait.pid == pid).collect();
     let start = own.iter().find(|wait| wait.field("co").is_some_and(|what| what.starts_with("stado serve start: ")))?;
     let past = start.past_due(now)?;
-    let below: Vec<String> = own
+    let below: Vec<_> = own.iter().filter(|wait| wait.sequence > start.sequence).collect();
+    let overdue: Vec<String> = below
         .iter()
-        .filter(|wait| wait.sequence > start.sequence)
-        .map(|wait| {
-            let since = wait.field("od").unwrap_or("an unknown moment");
-            format!("{} (since {since})", wait.field("co").unwrap_or(&wait.line))
+        .filter_map(|wait| {
+            let late = wait.past_due(now)?;
+            Some(format!(
+                "{} (since {}, {}s past the longest it took here)",
+                wait.field("co").unwrap_or(&wait.line),
+                wait.field("od").unwrap_or("an unknown moment"),
+                late.num_seconds()
+            ))
         })
         .collect();
+    if overdue.is_empty() {
+        return None;
+    }
     Some(format!(
         "the resolver (pid {pid}) cannot publish that it serves: its start stands in \"{}\" {}s past the longest \
-         that step took here (since {}){}",
+         that step took here (since {}), waiting on {}",
         start.field("co").unwrap_or(&start.line),
         past.num_seconds(),
         start.field("od").unwrap_or("an unknown moment"),
-        if below.is_empty() { String::new() } else { format!(", waiting on {}", below.join(", ")) }
+        overdue.join(", ")
     ))
 }
 

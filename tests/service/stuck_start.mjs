@@ -60,19 +60,21 @@ function success(answer) {
 }
 const ensure = () => run(binary, ['service', 'ensure', 'stado', '--host', host,
   '--reason', 'a unit stuck at start is restarted', '--json']);
-// The `stado serve start:` wait process `pid` stands in, with its due moment,
-// from the unit's own register.
+// The `stado serve start:` wait process `pid` stands in, with its due moment
+// and whether a wait below it is past its own due moment, from the unit's
+// own register: a start is stuck only when what it waits on is overdue too.
 function startWait(pid) {
   const waits = join(home, '.stado/waits');
-  for (const name of readdirSync(waits).filter(entry => entry.startsWith(`${pid}-`))) {
-    const line = readFileSync(join(waits, name), 'utf8').trim();
-    const what = line.replace(/^czekam: /, '').split('; ')[0];
-    if (what.startsWith('stado serve start: ')) {
-      const due = line.split('; ').find(part => part.startsWith('termin: '))?.slice('termin: '.length);
-      return { what, due };
-    }
-  }
-  return undefined;
+  const lines = readdirSync(waits).filter(entry => entry.startsWith(`${pid}-`))
+    .map(name => ({ sequence: Number(name.split('-')[1]), line: readFileSync(join(waits, name), 'utf8').trim() }))
+    .sort((a, b) => a.sequence - b.sequence);
+  const field = (line, name) => line.split('; ').find(part => part.startsWith(`${name}: `))?.slice(name.length + 2);
+  const start = lines.find(({ line }) => line.replace(/^czekam: /, '').startsWith('stado serve start: '));
+  if (!start) return undefined;
+  const due = field(start.line, 'termin');
+  const overdue = lines.filter(({ sequence, line }) => sequence > start.sequence
+    && Date.parse(field(line, 'termin') ?? '') < Date.now());
+  return { what: start.line.replace(/^czekam: /, '').split('; ')[0], due, overdue: overdue.length > 0 };
 }
 // The register publishes no change when a due moment passes, so the unit's
 // status is read again a second later.
@@ -96,7 +98,7 @@ try {
     const listed = JSON.parse(success(run(binary, ['service', 'status', 'stado', '--host', host, '--json'])));
     const pid = [listed].flat().map(entry => entry.pid).find(Boolean);
     const wait = pid && startWait(pid);
-    if (wait?.due && Date.parse(wait.due) < Date.now()) {
+    if (wait?.due && Date.parse(wait.due) < Date.now() && wait.overdue) {
       stuck = { pid, ...wait };
       break;
     }

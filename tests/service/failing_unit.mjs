@@ -42,13 +42,16 @@ function success(answer) {
   assert.ok(succeeded(answer), answer.stderr || answer.error?.message || answer.signal);
   return answer.stdout.trim();
 }
+// A plist string is XML text: `<` and `&` in the script (a shell redirection)
+// must be escaped, or launchd refuses the file with "Input/output error".
+const xml = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 function plist(label, script) {
   const path = join(output, `${label}.plist`);
   writeFileSync(path, `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>Label</key><string>${label}</string>
-<key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string><string>${script}</string></array>
+<key>Label</key><string>${xml(label)}</string>
+<key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string><string>${xml(script)}</string></array>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><false/>
 </dict></plist>

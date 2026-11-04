@@ -24,3 +24,13 @@ The version bump gathers them into the release's own file and removes this one.
   the cron line and wrapper are removed, and the bind is tried again, saying `port <p> was held
   by pid <pid>, a copy of this node cron started from <wrapper>`. Any other holder is left alone
   and the bind refusal stands. `tests/network/cron_copy.mjs` runs it on a dedicated account.
+- **A start or restart waits for launchd's next spawn of a job it scheduled:** macOS refuses the
+  first spawn of a program whose code identity an install just changed (`OS_REASON_CODESIGNING`)
+  and runs the next one; the postcondition read the unit between the two, answered `loaded with
+  no pid`, and `stado product install stado` rolled back a release that was about to run. A job
+  in `spawn scheduled` is now judged after launchd's next attempt, and a unit still without a pid
+  is reported with launchd's state, run count and last exit reason.
+- **A slow start is no longer refused as a hung one:** a start step past its longest was judged
+  stuck even when nothing below it was overdue, and `stado serve` judged its own start, so a
+  resolver that took six seconds longer than ever before ended the serve. A start is now judged
+  stuck only when a wait below its step is past its own longest, and never by the serve itself.
