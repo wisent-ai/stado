@@ -576,7 +576,7 @@ products:
     source: https://stado.wisent.com/docs/integrations
   - title: Earn from the idle GPU on a compute marketplace
     status: in_progress
-    outcome: List the idle GPU automatically on Vast.ai and withdraw the offer when fleet work returns; the capability ships and awaits its credential.
+    outcome: List every idle board on a compute marketplace with stado market follow, offering only boards nothing else holds, on short renewed contracts, after renter isolation is proven, and withdraw the offer when fleet work returns; the loop ships and awaits its credential, per-board listing, contract length and isolation.
     source: https://stado.wisent.com/docs/vast
   - title: Lend idle workers to another Stado fleet
     status: in_progress
@@ -584,7 +584,7 @@ products:
     source: https://stado.wisent.com/docs/peer-fleets
   - title: Sell tokens from the fleet's own inference endpoint
     status: planned
-    outcome: Publish the OpenAI-compatible deployment behind a public origin with declared prices, throughput and rate limits, so model output is sold per token while yieldable mode keeps the board available to fleet work.
+    outcome: Publish the OpenAI-compatible deployment behind a public origin with declared prices, throughput and rate limits, so model output is sold per token while yieldable mode keeps the board available to fleet work; only a model whose license allows the sale, and only once measured per-token prices and throughput show it earns more per board-hour than renting the board.
     source: https://stado.wisent.com/docs/earning
   - title: Become an inference provider on OpenRouter
     status: planned
@@ -725,6 +725,10 @@ products:
   - title: Tell when another board pays for itself
     status: planned
     outcome: From measured margins, stado fleet expansion plan answers whether and when buying another board pays back its purchase price.
+    source: https://stado.wisent.com/docs/earning
+  - title: Measure what a Mac can spare
+    status: planned
+    outcome: Measure each always-on Mac's spare CPU, memory and hours beside the services it already runs, and refuse to offer a Mac that sleeps or has no measured spare capacity for builds, CI minutes or sessions.
     source: https://stado.wisent.com/docs/earning
   integrations:
   - product: skarbiec
