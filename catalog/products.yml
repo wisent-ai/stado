@@ -618,6 +618,114 @@ products:
     status: planned
     outcome: Charge for attributed cost, forecast, anomaly and savings reporting with autonomy budgets that block new cloud spend, against a customer's own accounts.
     source: https://stado.wisent.com/docs/earning
+  - title: Refuse to sell a model whose license does not allow it
+    status: planned
+    outcome: Read the license a model repository and its base model declare before any per-token sale, aggregator listing or rented endpoint serves it, and refuse the sale naming the repository and its license when none is declared or it forbids commercial use.
+    source: https://stado.wisent.com/docs/earning
+  - title: Isolate a rented board from the host it runs on
+    status: planned
+    outcome: Before a board is listed, prove from the host that a renter's container reaches only its own board, its own disk and the internet, and none of the host's credentials, agent, registry or local network; a host that fails is not listed and the refusal names what the container could reach.
+    source: https://stado.wisent.com/docs/earning
+  - title: Keep marketplace contracts short enough to return the board
+    status: planned
+    outcome: List on-demand offers with an end date the fleet's own work can wait for and renew it while the board stays idle, since a marketplace contract cannot be ended before its end date.
+    source: https://stado.wisent.com/docs/vast
+  - title: List only the boards nothing else holds
+    status: planned
+    outcome: Marketplace and peer loops read which board an inference reservation or a rental holds and offer every other board of the host, instead of withdrawing the whole host for one held board.
+    source: https://stado.wisent.com/docs/earning
+  - title: Price owned energy in any tariff currency
+    status: planned
+    outcome: Convert a power tariff declared in a currency other than the comparison currency through a declared exchange-rate source with its date, so a host whose electricity is billed in another currency has a priced hour instead of an unpriced one.
+    source: https://stado.wisent.com/docs/costs
+  - title: Price a sale by the energy it adds
+    status: planned
+    outcome: Measure each board's idle draw and charge a sale or job only the energy above it, so the cost of a rental is what renting added rather than what the board draws anyway.
+    source: https://stado.wisent.com/docs/costs
+  - title: Count hardware wear in an owned hour
+    status: planned
+    outcome: Spread a host's declared purchase price over its declared service life and add that share to every owned hour beside energy, so a margin reads what the hardware costs and not only its electricity.
+    source: https://stado.wisent.com/docs/costs
+  - title: Measure and declare a host's uplink
+    status: planned
+    outcome: Measure each listed host's upload and download bandwidth on a schedule and publish the measured figures in its offers, refusing to list a host whose measurement is older than its declared window.
+    source: https://stado.wisent.com/docs/earning
+  - title: Announce maintenance to the marketplace before taking a host down
+    status: planned
+    outcome: A deployment, release or restart on a listed host first schedules a maintenance window with the marketplace for every active contract and waits for it, so fleet work does not lower the host's reliability score.
+    source: https://stado.wisent.com/docs/vast
+  - title: Price offers from the live market
+    status: planned
+    outcome: Set and keep each offer's price at a declared position in the live market for the same board, never below the host's measured hourly cost, instead of a price typed once.
+    source: https://stado.wisent.com/docs/vast
+  - title: Offer interruptible and reserved rentals
+    status: planned
+    outcome: Publish an interruptible minimum bid and a reserved-rental discount beside the on-demand price, so idle gaps an on-demand renter does not take still earn.
+    source: https://stado.wisent.com/docs/vast
+  - title: Offer boards on any GPU marketplace through one provider family
+    status: planned
+    outcome: Make marketplaces a capability family with one adapter per marketplace, each answering readiness, listing, withdrawal and earnings, so a board is offered wherever its margin is highest.
+    source: https://stado.wisent.com/docs/earning
+  - title: Keep every source's earnings per host and day
+    status: planned
+    outcome: Record the income every source states (marketplaces, peer fleets, token sales, paid runs) per host and day beside that day's measured cost, so every source's margin reads from one ledger.
+    source: https://stado.wisent.com/docs/earning
+  - title: Measure what a market would pay before building for it
+    status: planned
+    outcome: Read and keep the live price and occupancy of the fleet's boards on each marketplace, the per-token prices of the models it could sell, and each deployment's measured tokens per second and traffic, so the choice of what to sell is made against measured figures.
+    source: https://stado.wisent.com/docs/earning
+  - title: Give fleet services a public entrance without a tailnet
+    status: planned
+    outcome: Serve a fleet endpoint on a public hostname through an edge running on a registered host, with TLS and per-customer rate limits returned as early refusals, so anything sold to outside customers is reachable without Tailscale.
+    source: https://stado.wisent.com/docs/web-hosting
+  - title: Bill outside customers
+    status: planned
+    outcome: Keep customer accounts, keys, metered usage, prices, invoices with their taxes and payments through a declared payment provider, with the provider's cost and the fee separately visible.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell batch inference
+    status: planned
+    outcome: Accept offline inference batches priced per million tokens and run them in the fleet's idle hours.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell embeddings and transcription
+    status: planned
+    outcome: Serve embedding and speech-to-text models from boards the main deployment does not hold, priced per call or token.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell fine-tuning and evaluation runs
+    status: planned
+    outcome: Accept a customer's fine-tuning or evaluation job with its data kept apart from every other customer's, and return the result and its receipt.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell macOS CI minutes
+    status: planned
+    outcome: Run a customer repository's macOS CI jobs on an isolated runner and charge per minute.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell remote macOS sessions
+    status: planned
+    outcome: Charge per hour for a streamed, isolated macOS session on a fleet Mac.
+    source: https://stado.wisent.com/docs/earning
+  - title: Supply compute and egress to HandToHuman
+    status: planned
+    outcome: Offer fleet hosts' compute and egress as HandToHuman offers through the marketplace provider family.
+    source: https://stado.wisent.com/docs/earning
+  - title: Stop paying outside for a model the fleet serves
+    status: in_progress
+    outcome: Report every inference route that pays an outside provider for a model a running deployment serves, with the route change that puts the deployment first; shipped as stado inference route audit and awaiting release.
+    source: https://stado.wisent.com/docs/inference
+  - title: Give each board-hour to the use with the highest margin
+    status: planned
+    outcome: Decide every board-hour between the fleet's own work, rentals and token sales by measured income and cost, pricing the delay of the fleet's own queued work as a declared value per job-hour so a rental never wins only because waiting work is free.
+    source: https://stado.wisent.com/docs/earning
+  - title: Measure every source and stop the ones that lose
+    status: planned
+    outcome: Give each earning source a measured income per board-hour from the ledger and withdraw a source whose margin stays negative for a declared window, naming the window and the figures.
+    source: https://stado.wisent.com/docs/earning
+  - title: Show income, cost and margin of every source on one screen
+    status: planned
+    outcome: Stado Desktop's Earning screen shows, per host and source, income, measured cost and margin from the ledger, with the commands that wrote them.
+    source: https://stado.wisent.com/docs/earning
+  - title: Tell when another board pays for itself
+    status: planned
+    outcome: From measured margins, stado fleet expansion plan answers whether and when buying another board pays back its purchase price.
+    source: https://stado.wisent.com/docs/earning
   integrations:
   - product: skarbiec
     description: Stado obtains scoped host and workload credentials from Skarbiec.
