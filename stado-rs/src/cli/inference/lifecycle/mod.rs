@@ -12,6 +12,7 @@ pub struct PlanOptions {
     pub revision: String,
     pub gpu_mode: crate::inference::schema::GpuMode,
     pub port: u16,
+    pub visibility: crate::inference::schema::Visibility,
     pub max_model_len: u64,
     pub kv_cache_memory_gb: Option<u64>,
     pub cache_dir: Option<String>,

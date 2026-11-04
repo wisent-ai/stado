@@ -5,13 +5,16 @@ import WisentDesignSystem
 /// the declared deployments behind them, with what each host's beacon last
 /// reported.
 ///
-/// Read-only on purpose. Until this screen existed the approved chat model
-/// was visible only in `stado inference list`; an operator asked which model
-/// the chat used and the desktop could not say. The screen runs that same
-/// command and `stado inference status` and shows their answers, so the model
-/// an operator approved is the model this window names.
+/// Until this screen existed the approved chat model was visible only in
+/// `stado inference list`; an operator asked which model the chat used and
+/// the desktop could not say. The screen runs that same command and `stado
+/// inference status` and shows their answers, so the model an operator
+/// approved is the model this window names. Its Plan and apply section runs
+/// `stado inference plan` and `apply` on the selected API host, with the
+/// endpoint's network chosen as the CLI chooses it.
 struct InferenceView: View {
     @ObservedObject var store: InferenceStore
+    @ObservedObject var fleetStore: FleetControlStore
     let scope: String
 
     var body: some View {
@@ -48,6 +51,13 @@ struct InferenceView: View {
             }
             routesSection
             deploymentsSection
+            WisentSectionBox(
+                title: "Plan and apply",
+                detail: "Plan a deployment on a registered GPU host and apply the plan id it prints, as `stado inference plan` and `apply` do. The endpoint binds on the network Visibility names: lan, a private address of the host's own interfaces, needs no outside provider; tailscale binds the host's tailnet address. A host with no address on the chosen network is refused with the addresses it holds."
+            ) {
+                NativeCapabilityActions(host: "", fleet: fleetStore, operations: NativeInferenceOperations.all)
+                    .disabled(!fleetStore.isConfigured)
+            }
         }
         .task { await store.refresh() }
     }

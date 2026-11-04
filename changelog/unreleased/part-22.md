@@ -40,3 +40,11 @@ The version bump gathers them into the release's own file and removes this one.
   history [--path P] [--json]` lists them, and Desktop's Registry screen runs it. A part that
   cannot be read, a record that cannot be stored and a gap between records are each said, never
   left out.
+- **An inference deployment no longer needs Tailscale:** `stado inference plan` refused a host
+  without the Tailscale client, bound the endpoint only on its tailnet address, and the registry
+  accepted no other visibility. `--visibility lan` (the default) binds the endpoint on a private
+  address of the host's own interfaces and `--visibility tailscale` on its tailnet address; the
+  inventory reads every interface address with `ip` instead of asking Tailscale, a host with no
+  address on the chosen network is refused naming the addresses it holds and the visibility that
+  fits, and the registry checks each visibility against its own address rule. Desktop's Inference
+  screen gains a Plan and apply section with the same choice.

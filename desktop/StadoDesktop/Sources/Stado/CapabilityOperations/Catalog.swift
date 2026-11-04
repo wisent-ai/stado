@@ -18,6 +18,7 @@ enum NativeOperationCatalog {
         ("change-queue", NativeChangeQueueOperations.all),
         ("credentials", NativeCredentialOperations.all),
         ("registry", NativeRegistryOperations.all),
+        ("inference", NativeInferenceOperations.all),
         ("operator-contact", NativeOperatorContactOperations.all),
         ("compute-providers", NativeComputeProviderOperations.all),
         ("fleet-sandboxes", NativeFleetSandboxOperations.all),

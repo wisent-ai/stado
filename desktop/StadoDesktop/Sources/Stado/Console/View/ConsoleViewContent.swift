@@ -53,7 +53,7 @@ extension ConsoleView {
             case .disk:
                 DiskView(store: store, cleanupStore: cleanupStore, scope: scopeName)
             case .inference:
-                InferenceView(store: inferenceStore, scope: scopeName)
+                InferenceView(store: inferenceStore, fleetStore: fleetStore, scope: scopeName)
             case .earning:
                 EarningView(store: vastStore, scope: scopeName)
             case .databases:

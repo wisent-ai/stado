@@ -32,6 +32,11 @@ pub enum InferenceCommands {
         /// Port the vLLM endpoint listens on.
         #[arg(long)]
         port: u16,
+        /// The network the endpoint binds on: `lan`, a private address of the
+        /// host's own interfaces, needs no outside provider; `tailscale` binds
+        /// the host's tailnet address.
+        #[arg(long, value_enum, default_value_t = crate::inference::schema::Visibility::Lan)]
+        visibility: crate::inference::schema::Visibility,
         /// Longest context the model is served with.
         #[arg(long)]
         max_model_len: u64,
@@ -209,6 +214,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
             revision,
             gpu_mode,
             port,
+            visibility,
             max_model_len,
             kv_cache_memory_gb,
             cache_dir,
@@ -222,6 +228,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                 revision,
                 gpu_mode,
                 port,
+                visibility,
                 max_model_len,
                 kv_cache_memory_gb,
                 cache_dir,

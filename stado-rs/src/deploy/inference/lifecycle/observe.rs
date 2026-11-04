@@ -8,6 +8,12 @@ use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
 use crate::inference::schema::Deployment;
 use crate::targets::ComputeTarget;
 
+/// The host's inventory. `ADDRESSES` lists every global IPv4 address of the
+/// host's interfaces that are up (`ip -4 -o addr show scope global up`),
+/// space-separated after the tab; the plan picks the one its visibility binds
+/// on. The host needs no Tailscale client: a host that has one reports its
+/// tailnet address among the others, because the client puts it on an
+/// interface.
 pub async fn inventory(target: &ComputeTarget, runner: &Runner) -> Result<Value, DeployError> {
     let script = r#"set -euo pipefail
 printf 'HOST\t'; hostname
@@ -16,9 +22,8 @@ if ! command -v nvidia-smi >/dev/null; then printf 'ERROR\tnvidia-smi missing\n'
 printf 'GPU\t'; nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 printf 'CUDA_CAPABILITY\t'; nvidia-smi --query-gpu=compute_cap --format=csv,noheader
 printf 'RAM\t'; free -b | grep '^Mem:'
-if ! command -v tailscale >/dev/null; then printf 'ERROR\ntailscale missing\n'; false; fi
-printf 'TAILSCALE\t'
-tailscale ip | while IFS= read -r address; do case "$address" in *:*) ;; *) printf '%s\n' "$address"; break ;; esac; done
+if ! command -v ip >/dev/null; then printf 'ERROR\tip (iproute2) missing, so the host addresses cannot be read\n'; exit 1; fi
+printf 'ADDRESSES\t'; ip -4 -o addr show scope global up | while read -r _ _ _ cidr _; do printf '%s ' "${cidr%/*}"; done; printf '\n'
 printf 'PROCESSES\t'; nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader || true
 if ! command -v docker >/dev/null; then printf 'ERROR\tdocker missing\n'; exit 1; fi
 printf 'DOCKER\t'; docker version --format '{{.Server.Version}}'

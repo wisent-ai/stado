@@ -7,12 +7,11 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 
 use super::names::{
-    gateway_selector, identifier, immutable_revision, ipv4, route_alias, safe_reference,
-    sha256_image,
+    gateway_selector, identifier, immutable_revision, route_alias, safe_reference, sha256_image,
 };
 use super::{
-    parse, ENGINE_VLLM, LOCAL_PROVIDER_CREDENTIAL, PROTOCOL_OPENAI_CHAT, STATE_RETIRED,
-    STATE_RUNNING, VISIBILITY_TAILSCALE,
+    parse, Visibility, ENGINE_VLLM, LOCAL_PROVIDER_CREDENTIAL, PROTOCOL_OPENAI_CHAT, STATE_RETIRED,
+    STATE_RUNNING,
 };
 
 pub fn validate(document: &Value) -> Result<(), String> {
@@ -103,13 +102,38 @@ pub fn validate(document: &Value) -> Result<(), String> {
                 "{location}.resources.cache_dir: must be a safe absolute path"
             ));
         }
-        if deployment.endpoint.visibility != VISIBILITY_TAILSCALE
-            || !ipv4(&deployment.endpoint.host)
-            || deployment.endpoint.protocol != PROTOCOL_OPENAI_CHAT
-            || !ports.insert((deployment.endpoint.host.as_str(), deployment.endpoint.port))
-        {
+        let endpoint = &deployment.endpoint;
+        let visibility = Visibility::named(&endpoint.visibility).ok_or_else(|| {
+            format!(
+                "{location}.endpoint.visibility: {:?} is no visibility; it is one of {}",
+                endpoint.visibility,
+                Visibility::ALL.map(Visibility::word).join(", ")
+            )
+        })?;
+        match endpoint.host.parse::<std::net::Ipv4Addr>() {
+            Ok(address) if visibility.holds(address) => {}
+            Ok(_) => {
+                return Err(format!(
+                    "{location}.endpoint.host: {} is not an address the {visibility} visibility binds on",
+                    endpoint.host
+                ))
+            }
+            Err(_) => {
+                return Err(format!(
+                    "{location}.endpoint.host: {:?} is not an IPv4 address",
+                    endpoint.host
+                ))
+            }
+        }
+        if endpoint.protocol != PROTOCOL_OPENAI_CHAT {
             return Err(format!(
-                "{location}.endpoint: requires a unique Tailscale IPv4 OpenAI chat endpoint"
+                "{location}.endpoint.protocol: must be {PROTOCOL_OPENAI_CHAT}"
+            ));
+        }
+        if !ports.insert((endpoint.host.as_str(), endpoint.port)) {
+            return Err(format!(
+                "{location}.endpoint: {}:{} is already another deployment's endpoint",
+                endpoint.host, endpoint.port
             ));
         }
         if deployment.credential_item != LOCAL_PROVIDER_CREDENTIAL {

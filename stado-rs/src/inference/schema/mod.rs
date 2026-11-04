@@ -40,7 +40,57 @@ impl std::fmt::Display for GpuMode {
     }
 }
 
-pub const VISIBILITY_TAILSCALE: &str = "tailscale";
+/// The network a deployment's endpoint is bound on, as the registry names
+/// it. The endpoint is a vLLM listener, so it needs an address of the host's
+/// own: Stado's network carries SSH between hosts and has no address to bind,
+/// so the host's own private network is the path that needs no outside
+/// provider, and Tailscale is one an operator may choose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[value(rename_all = "lowercase")]
+pub enum Visibility {
+    /// A private IPv4 address of one of the host's own interfaces
+    /// (10/8, 172.16/12, 192.168/16).
+    Lan,
+    /// The host's Tailscale IPv4 address (100.64.0.0/10).
+    Tailscale,
+}
+
+impl Visibility {
+    /// Every visibility, as a refusal names them.
+    pub const ALL: [Self; 2] = [Self::Lan, Self::Tailscale];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Lan => "lan",
+            Self::Tailscale => "tailscale",
+        }
+    }
+
+    /// The visibility the registry writes as `word`, if it is one.
+    pub fn named(word: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|visibility| visibility.word() == word)
+    }
+
+    /// Whether `address` is one this visibility binds an endpoint on.
+    pub fn holds(self, address: std::net::Ipv4Addr) -> bool {
+        let [first, second, ..] = address.octets();
+        let shared = first == 100 && (64..128).contains(&second);
+        match self {
+            Self::Lan => address.is_private(),
+            Self::Tailscale => shared,
+        }
+    }
+}
+
+impl std::fmt::Display for Visibility {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.word())
+    }
+}
+
 pub const PROTOCOL_OPENAI_CHAT: &str = "openai-chat";
 pub const LOCAL_PROVIDER_CREDENTIAL: &str = "provider:local-openai";
 

@@ -25,10 +25,50 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
                 .stating(crate::primitives::failure::FailureCode::InfraDown),
         );
     }
-    let endpoint_host = field(&inventory, "TAILSCALE")
+    let addresses = field(&inventory, "ADDRESSES").ok_or_else(|| {
+        CmdError::click(format!(
+            "the inventory of {} printed no ADDRESSES line, so the host's addresses are unknown: {inventory}",
+            options.host
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let held: Vec<std::net::Ipv4Addr> = addresses
+        .split_whitespace()
+        .filter_map(|word| word.parse().ok())
+        .collect();
+    let endpoint_host = held
+        .iter()
+        .find(|address| options.visibility.holds(**address))
         .ok_or_else(|| {
-            CmdError::click("target inventory returned no Tailscale IPv4 address")
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            let interfaces = match held.is_empty() {
+                true => "no global IPv4 address".to_string(),
+                false => held
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            };
+            let usable: Vec<&str> = schema::Visibility::ALL
+                .into_iter()
+                .filter(|other| {
+                    *other != options.visibility && held.iter().any(|address| other.holds(*address))
+                })
+                .map(schema::Visibility::word)
+                .collect();
+            let fix = match usable.as_slice() {
+                [] => format!("connect the host to the {} network", options.visibility),
+                usable => format!(
+                    "choose --visibility {}, or connect the host to the {} network",
+                    usable.join(" or "),
+                    options.visibility
+                ),
+            };
+            CmdError::click(format!(
+                "{} has no address the {} visibility binds an endpoint on; its interfaces hold \
+                 {interfaces}: {fix}",
+                options.host, options.visibility
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused)
         })?
         .to_string();
     let previous = registry
@@ -70,7 +110,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         },
         endpoint: schema::Endpoint {
             host: endpoint_host,
-            visibility: schema::VISIBILITY_TAILSCALE.to_string(),
+            visibility: options.visibility.word().to_string(),
             port: options.port,
             protocol: schema::PROTOCOL_OPENAI_CHAT.to_string(),
         },

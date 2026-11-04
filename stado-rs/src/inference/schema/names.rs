@@ -61,12 +61,6 @@ pub fn gateway_selector(value: &str) -> bool {
     value == "best"
 }
 
-/// The endpoint host must be an IPv4 address; which network it sits on is the
-/// deployment's `visibility`.
-pub(super) fn ipv4(value: &str) -> bool {
-    value.parse::<std::net::Ipv4Addr>().is_ok()
-}
-
 /// An image pinned by a SHA-256 digest: hex that decodes to exactly one
 /// SHA-256 output.
 pub(super) fn sha256_image(value: &str) -> bool {
