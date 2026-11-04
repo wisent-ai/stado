@@ -17,12 +17,18 @@ pub async fn secret(vendor: GpuCloudVendor, field: &str) -> Result<String, GpuCl
     match crate::skarbiec::read_string(&role, field).await {
         Ok(Some(value)) if !value.trim().is_empty() => Ok(value.trim().to_string()),
         Ok(_) => Err(GpuCloudError::Credential(format!(
-            "{}: no live Skarbiec item tagged {} carries a non-empty field {field}; store the \
-             {} credential with `stado credentials item put --host <vault host> --role {role} \
-             --type api-key` and the JSON object on standard input",
+            "{}: no live Skarbiec item tagged {} carries a non-empty field {field}; store the {} \
+             credential with `{}`",
             vendor.display_name(),
             crate::skarbiec::roles::role_tag(&role),
             vendor.display_name(),
+            crate::skarbiec::roles::put_command(
+                "<vault host>",
+                &role,
+                "api-key",
+                field,
+                &format!("<{} {field}>", vendor.display_name())
+            ),
         ))),
         Err(error) => Err(GpuCloudError::Credential(format!(
             "{}: reading field {field} of Skarbiec role {role}: {error}",
