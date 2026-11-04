@@ -25,7 +25,18 @@ pub fn report(catalog: &Value) -> Result<Value> {
     let mut violations = Vec::new();
     for product in products {
         let id = crate::catalog::text(product, "id")?;
-        let repository = crate::catalog::text(product, "star_repository")?;
+        // A record that names no repository has no star request to open:
+        // that product alone is the violation, and every other is checked.
+        let Some(repository) = product.get("star_repository") else {
+            let row = json!({"product": id, "star_repository": null, "ok": false,
+                "cause": format!("{id} names no star_repository, so its GitHub star request links nowhere")});
+            violations.push(row.clone());
+            checked.push(row);
+            continue;
+        };
+        let repository = repository
+            .as_str()
+            .with_context(|| format!("{id}.star_repository: expected a string"))?;
         let (owner, name) = repository
             .split_once('/')
             .with_context(|| format!("{id}.star_repository {repository:?} is not OWNER/REPO"))?;

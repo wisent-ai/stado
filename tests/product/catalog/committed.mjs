@@ -90,8 +90,8 @@ try {
 	const first = git("rev-parse", "HEAD");
 
 	// 1. An edit that does not validate (the product loses the
-	//    star_repository every record names) is not read.
-	writeFileSync(catalogFile, catalog("The broken alpha.").replace("  star_repository: example-org/alpha\n", ""));
+	//    owner_repository every record names) is not read.
+	writeFileSync(catalogFile, catalog("The broken alpha.").replace("  owner_repository: example-org/alpha\n", ""));
 	const broken = read();
 	success(broken);
 	assert.equal(alpha(broken).description, "The committed alpha.");
@@ -100,7 +100,7 @@ try {
 	assert.equal(where?.chosen, "committed-head");
 	// The notice prints the whole cause chain: the catalog-level refusal,
 	// then the product and field it names.
-	assert.match(broken.stderr, /uncommitted edit that does not validate: .*alpha names no star_repository.*; it is not read/s);
+	assert.match(broken.stderr, /uncommitted edit that does not validate: .*owner_repository: expected a string.*; it is not read/s);
 	const claims = run(stado, ["product", "--workspace", workspace, "registry", "check-claims", "alpha", "--json"]);
 	success(claims);
 	report.cases.push({ case: "invalid-edit", catalog_read: where, stderr: broken.stderr });
