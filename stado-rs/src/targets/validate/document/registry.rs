@@ -214,6 +214,62 @@ pub(crate) fn validate_registry_body(
                 return Err(verr(&format!("{at}.{unknown}"), "is not a hardware field"));
             }
         }
+        if let Some(heat) = target.get("heat_use") {
+            let at = format!("{location}.heat_use");
+            let object = heat
+                .as_object()
+                .ok_or_else(|| verr(&at, "must be {price_per_kwh, currency, source, months?}"))?;
+            if !object
+                .get("price_per_kwh")
+                .and_then(Value::as_f64)
+                .is_some_and(|price| price.is_finite() && price > 0.0)
+            {
+                return Err(verr(
+                    &format!("{at}.price_per_kwh"),
+                    "must be a number above zero: what one kWh of heat from the heating it \
+                     replaces costs",
+                ));
+            }
+            for field in ["currency", "source"] {
+                if !object
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.trim().is_empty())
+                {
+                    return Err(verr(
+                        &format!("{at}.{field}"),
+                        if field == "source" {
+                            "must name where the heating price was read, so no heat is valued \
+                             at a number nobody stated"
+                        } else {
+                            "must be a non-empty currency code"
+                        },
+                    ));
+                }
+            }
+            if let Some(months) = object.get("months") {
+                let listed = months.as_array().filter(|months| {
+                    !months.is_empty()
+                        && months.iter().all(|month| {
+                            month
+                                .as_u64()
+                                .is_some_and(|month| (1..=12).contains(&month))
+                        })
+                });
+                if listed.is_none() {
+                    return Err(verr(
+                        &format!("{at}.months"),
+                        "must be a non-empty list of month numbers 1 to 12, or absent for every \
+                         month",
+                    ));
+                }
+            }
+            if let Some(unknown) = object.keys().find(|key| {
+                !["price_per_kwh", "currency", "source", "months"].contains(&key.as_str())
+            }) {
+                return Err(verr(&format!("{at}.{unknown}"), "is not a heat_use field"));
+            }
+        }
         let platform_location = format!("{location}.release_platform");
         // The platform is one of the shipped names; a target that declares
         // none, or declares it in another shape, is refused the same way.

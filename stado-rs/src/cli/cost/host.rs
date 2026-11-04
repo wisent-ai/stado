@@ -136,6 +136,33 @@ pub(crate) async fn host(
     let wear = hardware
         .as_ref()
         .map(|hardware| hardware.per_hour() * rows.len() as f64);
+    // Heat: the boards turn every measured kWh into heat in the room; where
+    // the registry declares that heat replaces heating, the kWh given off in
+    // the declared months is heating not bought. Nothing is said for a host
+    // with no declared use.
+    let heat = host.heat_use().map(|heat_use| {
+        let mut heat_kwh = 0.0;
+        let mut replacing_kwh = 0.0;
+        for row in &rows {
+            let Some(kwh) = row["kwh"].as_f64() else {
+                continue;
+            };
+            heat_kwh += kwh;
+            let month = row["hour"]
+                .as_str()
+                .and_then(|hour| chrono::DateTime::parse_from_rfc3339(hour).ok())
+                .map(|hour| chrono::Datelike::month(&hour));
+            if month.is_some_and(|month| heat_use.replaces_heating_in(month)) {
+                replacing_kwh += kwh;
+            }
+        }
+        json!({
+            "use": heat_use,
+            "kwh": heat_kwh,
+            "kwh_replacing_heating": replacing_kwh,
+            "saving": replacing_kwh * heat_use.price_per_kwh,
+        })
+    });
     let unpriced: Vec<&str> = rows
         .iter()
         .filter(|row| row["cost"].is_null())
@@ -156,6 +183,7 @@ pub(crate) async fn host(
                 "usd_unread": usd.as_ref().err(),
                 "hardware": hardware,
                 "wear": wear,
+                "heat": heat,
                 "unpriced_hours": unpriced,
             }))?
         );
@@ -253,6 +281,19 @@ pub(crate) async fn host(
             "wear over {} hour(s) {wear:.4} {}",
             rows.len(),
             hardware.currency
+        );
+    }
+    if let Some(heat) = &heat {
+        println!(
+            "heat {:.3} kWh from the boards, {:.3} kWh of it replacing heating, saving {:.4} {} \
+             at {} {}/kWh of heat ({})",
+            heat["kwh"].as_f64().unwrap_or(0.0),
+            heat["kwh_replacing_heating"].as_f64().unwrap_or(0.0),
+            heat["saving"].as_f64().unwrap_or(0.0),
+            heat["use"]["currency"].as_str().unwrap_or("?"),
+            heat["use"]["price_per_kwh"],
+            heat["use"]["currency"].as_str().unwrap_or("?"),
+            heat["use"]["source"].as_str().unwrap_or("?"),
         );
     }
     Ok(())

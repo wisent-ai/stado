@@ -209,3 +209,8 @@ The version bump gathers them into the release's own file and removes this one.
   offers or withdraws it, and `follow` starts it once the host is idle, holding its capacity
   reservation, and stops it and releases the reservation when fleet work appears. Desktop's Registry
   screen manages nodes.
+- **`stado cost host` counts the heat a host's boards give off where it replaces heating:** the
+  boards turn every kWh they draw into heat, and a host that warms the room it stands in saved
+  heating no report showed. A target may declare `heat_use {price_per_kwh, currency, source,
+  months?}`; `cost host` prints the window's heat, the part given off in those months and its
+  saving, and nothing for a host with no declared use.

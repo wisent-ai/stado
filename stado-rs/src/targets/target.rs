@@ -243,6 +243,26 @@ impl ComputeTarget {
             source: hardware.get("source")?.as_str()?.to_string(),
         })
     }
+
+    /// Where this host's heat replaces heating, `targets[].heat_use`;
+    /// validation guarantees its fields.
+    pub fn heat_use(&self) -> Option<HeatUse> {
+        let heat = self.extra.get("heat_use")?;
+        let months = match heat.get("months") {
+            Some(months) => months
+                .as_array()?
+                .iter()
+                .map(|month| month.as_u64().and_then(|month| u32::try_from(month).ok()))
+                .collect::<Option<Vec<u32>>>()?,
+            None => Vec::new(),
+        };
+        Some(HeatUse {
+            price_per_kwh: heat.get("price_per_kwh")?.as_f64()?,
+            currency: heat.get("currency")?.as_str()?.to_string(),
+            source: heat.get("source")?.as_str()?.to_string(),
+            months,
+        })
+    }
 }
 
 /// Hours in a declared service year (365 days); a leap day is not counted,
@@ -307,5 +327,29 @@ impl HardwareCost {
     /// purchase currency.
     pub fn per_hour(&self) -> f64 {
         self.purchase_price / (self.service_years * HOURS_PER_SERVICE_YEAR)
+    }
+}
+
+/// Where a host's heat replaces heating, `targets[].heat_use`: what one kWh
+/// of heat delivered by the heating it replaces costs, and in which months.
+/// A board turns the electricity it draws into heat, so each measured kWh
+/// is a kWh of heat in the room the host stands in.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct HeatUse {
+    /// The price of one kWh of delivered heat from the replaced heating (its
+    /// fuel or electricity price divided by its efficiency).
+    pub price_per_kwh: f64,
+    pub currency: String,
+    /// Where the price was read.
+    pub source: String,
+    /// The months (1 to 12) in which the heat replaces heating; empty means
+    /// every month.
+    pub months: Vec<u32>,
+}
+
+impl HeatUse {
+    /// Whether heat given off in `month` (1 to 12) replaces heating.
+    pub fn replaces_heating_in(&self, month: u32) -> bool {
+        self.months.is_empty() || self.months.contains(&month)
     }
 }
