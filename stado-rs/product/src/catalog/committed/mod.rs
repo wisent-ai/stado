@@ -1,15 +1,22 @@
-//! The catalog an installation executes, read from a committed revision.
+//! The catalog an installation executes, and every reader acts on, read
+//! from a committed revision.
 //!
 //! An installation runs fields of its recipe — the build, `after_install`,
 //! the service it ensures — so the recipe it reads is code it executes. The
 //! working tree of the catalog's checkout is whatever an executor has half
 //! written: an install that read it ran an `after_install` verb renamed in an
 //! uncommitted edit, against a binary built from a revision that still had the
-//! old one. So an installation reads `catalog/products.yml` from a commit: the
-//! installed revision when the installed product is the repository the catalog
-//! lives in (Stado itself), else the checkout's committed `HEAD`. The record
-//! of what was read — path, revision and why that revision — is kept on the
-//! installation and printed in its report.
+//! old one, and every reader of a checkout shared by several sessions was
+//! refused while one session's edit did not validate. So an installation
+//! reads `catalog/products.yml` from a commit: the installed revision when the
+//! installed product is the repository the catalog lives in (Stado itself),
+//! else the checkout's committed `HEAD`. A reader takes the committed `HEAD`
+//! the same way ([`super::read`]). The record of what was read — path,
+//! revision and why that revision — is kept on the installation and printed
+//! in its report and in `catalog --json`.
+
+mod working_tree;
+pub use working_tree::{edit_visibility, report_working_tree, tracked};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -164,11 +171,11 @@ fn published_if_ahead(root: &Path, head: String) -> Result<(String, Choice)> {
     })
 }
 
-/// A catalog an installation was given that its checkout's commit does not
-/// hold: an installation executes the committed catalog, never a file on
-/// disk, so an uncommitted one is refused before anything is read or built.
-/// `stado product status` and `catalog` read the file itself; only an
-/// installation needs it committed.
+/// A catalog its checkout tracks but whose commit does not hold it (added to
+/// the index and never committed, or absent from the `origin/main` a lagging
+/// head is read at): an installation executes the committed catalog and a
+/// reader acts on it, never a file on disk, so it is refused before anything
+/// is read or built. A catalog no checkout tracks is read as it stands.
 #[derive(Debug)]
 pub struct Uncommitted {
     pub catalog: std::path::PathBuf,
@@ -180,9 +187,9 @@ impl std::fmt::Display for Uncommitted {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "the catalog {} is not committed in {} at {}; an installation executes the \
+            "the catalog {} is not committed in {} at {}; installations and readers take the \
              committed catalog, never the file on disk, so nothing was read or built. Commit it \
-             and install again, or name a committed catalog with --catalog",
+             and run the command again, or name a committed catalog with --catalog",
             self.catalog.display(),
             self.root.display(),
             self.commit

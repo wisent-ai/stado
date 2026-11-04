@@ -1,4 +1,4 @@
-use super::{current, rows, EMBEDDED};
+use super::{read, rows, EMBEDDED};
 use crate::common::{atomic_write, checked, emit, Arguments, Runtime};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
@@ -98,7 +98,7 @@ pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     if !args.positional.is_empty() {
         bail!("catalog does not take positional arguments");
     }
-    let document = current(runtime)?;
+    let (document, catalog_read) = read(runtime)?;
     if args.has("--check-package") {
         if runtime.embedded_catalog {
             bail!("catalog authority {} is absent; an embedded catalog cannot independently check itself", runtime.catalog.display());
@@ -179,7 +179,11 @@ pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     } else if args.has("--output") || args.has("--check") {
         services(&document)?
     } else {
-        rows(&document)?
+        // Which catalog the rows are: the committed revision of the checkout
+        // that tracks the file, or null for an untracked or embedded one.
+        let mut listed = rows(&document)?;
+        listed["catalog_read"] = serde_json::to_value(&catalog_read)?;
+        listed
     };
     let mut bytes = serde_json::to_vec_pretty(&result)?;
     bytes.push(b'\n');
