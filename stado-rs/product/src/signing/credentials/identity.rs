@@ -118,7 +118,7 @@ impl Credentials {
             true,
         )?;
         put_first(keychain)?;
-        self.listed = true;
+        self.listed.set(true);
         Ok(())
     }
 

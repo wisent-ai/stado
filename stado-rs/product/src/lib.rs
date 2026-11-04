@@ -83,8 +83,8 @@ pub use signing::{acceptable as signature_acceptable, inspect as inspect_signatu
 /// the stable code identifier a product's program carries, and the signature
 /// itself.
 pub use signing::{
-    identifier as code_identifier, sign_with as sign_program, Choice as SigningChoice,
-    Team as SigningTeam,
+    current as current_code_identifier, identifier as code_identifier, sign_with as sign_program,
+    Choice as SigningChoice, Team as SigningTeam,
 };
 
 use std::sync::OnceLock;

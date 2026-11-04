@@ -100,6 +100,8 @@ define_providers! {
     Attestation => ("attestation", []),
     Weles => ("weles", []),
     TranscriptLake => ("transcript-lake", []),
+    Obraz => ("obraz", []),
+    SearchEndpoint => ("search-endpoint", []),
     OwnerFile => ("owner-file", []),
     Macos => ("macos", []),
     Linux => ("linux", []),

@@ -9,7 +9,7 @@ mod signer;
 use anyhow::{Context, Result};
 pub use command::stage::stage_with;
 pub use command::{acceptable, run};
-pub use core::{identifier, inspect, native, SignatureState};
+pub use core::{current, identifier, inspect, native, SignatureState};
 pub use credentials::{Choice, Source, Team};
 pub use policy::Policy;
 use serde_json::Value;
@@ -64,15 +64,17 @@ pub fn prepare(
         let previous = inspect(destination)?;
         let candidate = inspect(source)?;
         let id = if crate::signing::SignatureState::is_stable(&previous) {
-            previous["identifier"]
-                .as_str()
-                .context("previous code has no identifier")?
-                .to_owned()
+            current(
+                previous["identifier"]
+                    .as_str()
+                    .context("previous code has no identifier")?,
+            )
         } else if crate::signing::SignatureState::is_stable(&candidate) {
-            candidate["identifier"]
-                .as_str()
-                .context("candidate has no identifier")?
-                .to_owned()
+            current(
+                candidate["identifier"]
+                    .as_str()
+                    .context("candidate has no identifier")?,
+            )
         } else {
             identifier(
                 product,

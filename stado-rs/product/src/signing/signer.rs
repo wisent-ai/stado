@@ -161,7 +161,10 @@ impl Signer {
         }
         let before = self.previous(&path, previous)?;
         if crate::signing::SignatureState::is_stable(&before) {
-            if before["identifier"] != identifier {
+            if before["identifier"] != identifier
+                && before["identifier"].as_str().map(super::core::current).as_deref()
+                    != Some(identifier)
+            {
                 bail!(
                     "code identifier would change: {} -> {identifier}",
                     before["identifier"]

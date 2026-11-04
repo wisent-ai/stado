@@ -68,6 +68,13 @@ try {
   for (const signature of signatures) {
     assert.equal(signature.identity, authority, `a placed file is signed by ${signature.identity}, not ${authority}`);
   }
+  // The kept keychain is listed only while Stado signs: left on the user's
+  // search list, every other program asking it for an identity met the
+  // fleet's key, locked after a restart, behind a password dialog.
+  const searched = spawnSync('/usr/bin/security', ['list-keychains', '-d', 'user'], { encoding: 'utf8' });
+  report.search_list = searched.stdout;
+  assert.equal(searched.status, 0, searched.stderr);
+  assert.ok(!searched.stdout.includes(keychain), `${keychain} is still on the user's search list: ${searched.stdout}`);
   report.result = 'passed';
 } finally {
   report.finished_at = new Date().toISOString();

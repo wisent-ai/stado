@@ -111,10 +111,37 @@ pub fn absolute(path: &Path) -> Result<PathBuf> {
     }
 }
 
+/// The code identifier of program `name` of `product`, in the convention
+/// every Wisent name follows: `com.wisent.<product>` for the program the
+/// product is named after, `com.wisent.<product>.<name>` for any other.
 pub fn identifier(product: &str, name: &str) -> Result<String> {
-    let identifier = format!("ai.wisent.{product}.{name}");
+    let identifier = if name == product {
+        format!("{PREFIX}{product}")
+    } else {
+        format!("{PREFIX}{product}.{name}")
+    };
     validate_identifier(&identifier)?;
     Ok(identifier)
+}
+
+const PREFIX: &str = "com.wisent.";
+const RETIRED: &str = "ai.wisent.";
+
+/// The identifier `kept` is named by now: one in the retired `ai.wisent.`
+/// spelling, which broke the `com.wisent.<product>` convention, read as
+/// the same program under the convention (`ai.wisent.oko.oko` is
+/// `com.wisent.oko`, `ai.wisent.lem.LemCLI` is `com.wisent.lem.LemCLI`);
+/// any other unchanged. A signature carrying the retired spelling moves to
+/// this one once, and is never refused as an identity change for it.
+pub fn current(kept: &str) -> String {
+    match kept.strip_prefix(RETIRED) {
+        Some(rest) => match rest.split_once('.') {
+            Some((product, name)) if product == name => format!("{PREFIX}{product}"),
+            Some((product, name)) => format!("{PREFIX}{product}.{name}"),
+            None => format!("{PREFIX}{rest}"),
+        },
+        None => kept.to_string(),
+    }
 }
 
 pub fn validate_identifier(identifier: &str) -> Result<()> {

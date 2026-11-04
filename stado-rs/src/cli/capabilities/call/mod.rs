@@ -1,24 +1,34 @@
-//! `stado capabilities call inference --consumer C`: one model request,
-//! answered by the alternative of the family that answers it.
+//! `stado capabilities call FAMILY --consumer C`: one request of a called
+//! family (`inference`, `image`, `search`), answered by the alternative of
+//! the family that answers it.
 //!
-//! The caller writes the OpenAI chat-completions request it would send to a
-//! model gateway on standard input and reads the answer on standard output.
-//! It names no gateway, no key and no alternative: Stado resolves the family
-//! in its selected order (`resolve::choose`) and asks the chosen alternative,
-//! so an alternative added to the catalog or an order the operator selects
-//! changes every caller's answer without a line of any caller changing.
+//! The caller writes the request on standard input and reads the answer on
+//! standard output: for `inference` the OpenAI chat-completions request it
+//! would send to a model gateway; for `image` and `search` the shapes
+//! `families` names. It names no gateway, no key and no alternative: Stado
+//! resolves the family in its selected order (`resolve::choose`) and asks the
+//! chosen alternative, so an alternative added to the catalog or an order the
+//! operator selects changes every caller's answer without a line of any
+//! caller changing.
 //!
 //! - **brama**: the request goes to the route the service directory hands the
 //!   consumer, with the consumer's Brama bearer (the `token` of the item
 //!   playing `<consumer>-model-router`) and, when an item plays
 //!   `<consumer>-agent-auth`, its request signature.
+//! - **obraz**: `obraz edit` runs the request's plan (`families::obraz`).
+//! - **search-endpoint**: the declared address is sent the query
+//!   (`families::endpoint`).
 //! - **attestation**: the statement recorded for this exact request answers
 //!   it; with none, the request is kept and refused, naming the commands that
 //!   read it and record the answer.
 //!
-//! An alternative that cannot answer this request is named with its cause and
-//! the next one is tried, the same request; the refusal when none answers
-//! names every one.
+//! An alternative that cannot answer this request, or answers in another
+//! shape than the family's, is named with its cause and the next one is
+//! tried, the same request; the refusal when none answers names every one.
+
+mod families;
+
+pub(crate) use families::check_answer;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -28,10 +38,11 @@ use sha2::{Digest, Sha256};
 use super::record::Unreachable;
 use super::resolve::{choose, Resolution};
 use crate::capabilities::alternatives::{Family, Reach};
+use crate::capabilities::CapabilityKind;
 use crate::cli::CmdError;
 
 /// What one alternative did with the request.
-enum Outcome {
+pub(super) enum Outcome {
     /// It answered: the answer, as the caller reads it.
     Answered(Value),
     /// It could not answer this request; the next alternative is asked.
@@ -54,7 +65,7 @@ fn signing_role(consumer: &str) -> String {
 
 /// One field of the item playing `role`, from the selected credential store;
 /// `Ok(None)` when no item plays the role.
-async fn role_field(role: &str, field: &str) -> Result<Option<String>, String> {
+pub(super) async fn role_field(role: &str, field: &str) -> Result<Option<String>, String> {
     let store = crate::cli::secrets::store().map_err(|error| error.to_string())?;
     let item = match crate::cli::secrets::item_in_role(&store, role).await {
         Ok(item) => item,
@@ -208,17 +219,34 @@ fn attested(family: &Family, consumer: &str, request: &Value) -> Outcome {
 
 async fn ask(resolution: &Resolution, request: &Value, body: &str) -> Outcome {
     let consumer = resolution.consumer.as_str();
-    match resolution.chosen.alternative.reach {
+    let family = resolution.family;
+    let outcome = match resolution.chosen.alternative.reach {
         Reach::Directory { .. } => brama(&resolution.chosen.route, consumer, body).await,
-        Reach::Attestation => attested(resolution.family, consumer, request),
-        Reach::Program { name } => Outcome::Passed(format!(
-            "the program {name} answers no {} request",
-            resolution.family.id
-        )),
-        Reach::OwnerFile => Outcome::Passed(format!(
-            "the owner file answers no {} request",
-            resolution.family.id
-        )),
+        Reach::Attestation => attested(family, consumer, request),
+        Reach::Program { .. } if family.id == CapabilityKind::Image => {
+            families::obraz(&resolution.chosen.route, request).await
+        }
+        Reach::Declared { key_role, .. } if family.id == CapabilityKind::Search => {
+            families::endpoint(&resolution.chosen.route, key_role, body).await
+        }
+        Reach::Program { name } => {
+            Outcome::Passed(format!("the program {name} answers no {} request", family.id))
+        }
+        Reach::Declared { url, .. } => {
+            Outcome::Passed(format!("the address {} names answers no {} request", url.path, family.id))
+        }
+        Reach::OwnerFile => {
+            Outcome::Passed(format!("the owner file answers no {} request", family.id))
+        }
+    };
+    // An answer in another shape than the family's is that alternative
+    // unable to answer; the next one is asked.
+    match outcome {
+        Outcome::Answered(answer) => match families::check_answer(family, &answer) {
+            Ok(()) => Outcome::Answered(answer),
+            Err(cause) => Outcome::Passed(cause),
+        },
+        other => other,
     }
 }
 
@@ -240,14 +268,11 @@ pub(crate) async fn run(
     }
     let request: Value = serde_json::from_str(input).map_err(|error| {
         refuse(CmdError::usage(format!(
-            "standard input is not one JSON chat-completions request: {error}"
+            "standard input is not one JSON {} request: {error}",
+            family.id
         )))
     })?;
-    if !request["messages"].is_array() {
-        return Err(refuse(CmdError::usage(
-            "the request names no messages: standard input is an OpenAI chat-completions request",
-        )));
-    }
+    families::check_request(family, &request).map_err(|cause| refuse(CmdError::usage(cause)))?;
     let body = request.to_string();
     let mut tried: Vec<Unreachable> = Vec::new();
     loop {

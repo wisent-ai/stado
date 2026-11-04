@@ -29,7 +29,10 @@ pub(in crate::cli::release_catalog) struct PinInputArgs {
     /// Input name, mount and environment key.
     #[arg(long)]
     name: String,
-    /// The repository whose committed source is published.
+    /// The repository whose committed source is published: a checkout's
+    /// path, or a bare repository name (`jeden`) for that repository's
+    /// canonical checkout in Stado's workspace, whatever directory the
+    /// command runs in.
     #[arg(long)]
     source: PathBuf,
     /// Commit, tag or branch to pin.
@@ -119,6 +122,7 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
         )));
     }
     let (manifest_path, mut manifest, product) = manifest::read(checkout)?;
+    let source = &resolved_source(source)?;
     let commit = String::from_utf8_lossy(&git(
         source,
         &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
@@ -130,33 +134,11 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
     let bundle_archive;
     let swiftpm_archive;
     let (stored_path, digest) = if *cargo {
-        git(
-            source,
-            &[
-                "diff",
-                "--exit-code",
-                &commit,
-                "--",
-                "*.toml",
-                "**/Cargo.lock",
-                "Cargo.lock",
-            ],
-        )?;
+        manifests_match(source, &commit, "before the export")?;
         cargo_archive = stado_product::export_private_cargo_sources(source).map_err(|error| {
             CmdError::click(format!("private Cargo source export failed: {error:#}"))
         })?;
-        git(
-            source,
-            &[
-                "diff",
-                "--exit-code",
-                &commit,
-                "--",
-                "*.toml",
-                "**/Cargo.lock",
-                "Cargo.lock",
-            ],
-        )?;
+        manifests_match(source, &commit, "after the export")?;
         (
             cargo_archive.archive.as_path(),
             cargo_archive.sha256.clone(),
@@ -253,4 +235,71 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
         );
     }
     Ok(())
+}
+
+/// The Cargo manifests and lockfiles of `source`'s working tree are the ones
+/// `commit` records: a cargo input is exported from the working tree, so a
+/// manifest or lock edited since the commit would be published as the
+/// commit's. Refused naming each file that differs and what to do, never as
+/// a raw `git diff` dump: the dump read as a failed command, not as a lock
+/// moved since the pinned revision.
+fn manifests_match(source: &Path, commit: &str, when: &str) -> Result<(), CmdError> {
+    let changed = git(
+        source,
+        &[
+            "diff",
+            "--name-only",
+            commit,
+            "--",
+            "*.toml",
+            "**/Cargo.lock",
+            "Cargo.lock",
+        ],
+    )?;
+    let changed = String::from_utf8_lossy(&changed);
+    let files: Vec<&str> = changed.lines().filter(|line| !line.is_empty()).collect();
+    if files.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::refused(format!(
+        "{} holds Cargo manifests or lockfiles that differ from {commit} {when}: {}; commit \
+         them and pin that commit, or restore them to {commit}, so the published input is the \
+         revision it names",
+        source.display(),
+        files.join(", ")
+    )))
+}
+
+/// The checkout `--source` names. A path that exists is that path. A bare
+/// name with no `/` that is no path here is a repository of the product
+/// organization, read from its canonical checkout: run from a directory that
+/// held no such entry, `--source jeden` was joined to the working directory
+/// and refused as `cannot change to 'jeden'`.
+fn resolved_source(source: &Path) -> Result<PathBuf, CmdError> {
+    if source.exists() {
+        return Ok(source.to_path_buf());
+    }
+    let Some(name) = source
+        .to_str()
+        .filter(|name| !name.is_empty() && !name.contains('/'))
+    else {
+        return Err(CmdError::refused(format!(
+            "--source {} is neither a path that exists nor a repository name: name a \
+             checkout's path, or a repository of wisent-ai by its name alone",
+            source.display()
+        )));
+    };
+    let runtime = stado_product::common::Runtime::new(None).map_err(|error| {
+        CmdError::click(format!(
+            "--source {name} names no path here, and the workspace that holds canonical \
+             checkouts cannot be read: {error:#}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    stado_product::canonical_checkout(&runtime, &format!("wisent-ai/{name}")).map_err(|error| {
+        CmdError::refused(format!(
+            "--source {name} names no path here and no canonical checkout of wisent-ai/{name}: \
+             {error:#}; name the checkout's path instead"
+        ))
+    })
 }

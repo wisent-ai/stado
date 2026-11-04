@@ -105,10 +105,15 @@ fn import(
         command("/usr/bin/security", &["set-keychain-settings", path], true)?;
     }
     command("/usr/bin/security", &["unlock-keychain", "-p", "", path], true)?;
-    // `codesign` builds the identity's chain from the user's search list and
-    // answered `no identity found` for a keychain named with --keychain that
-    // was not on it.
-    super::keychain::put_first(path)?;
+    // The kept keychain is never left on the user's search list. A Mac that
+    // restarted locks it while it stays listed, and every program that asks
+    // the list for an identity — a product's own build script among them —
+    // then meets the fleet's key behind a password dialog naming this
+    // keychain. `security find-identity` below reads it by path; `codesign`
+    // needs it listed and gets it for its signature only
+    // (`Credentials::unlock_for_signing`, taken off again at `close`). An
+    // entry an earlier release left behind is taken off here.
+    super::keychain::take_off(path)?;
     if chain.len() > 1 {
         keep_apple_issuers(&chain[1..].concat())?;
     }

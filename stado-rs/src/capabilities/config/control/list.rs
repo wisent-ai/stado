@@ -83,4 +83,8 @@ pub const CONTROL_CONFIG: &[ConfigField] = &[
     alternatives::BROWSER_AUTOMATION_ORDER_CONFIG,
     alternatives::MAIL_ORDER_CONFIG,
     alternatives::TRANSCRIPTS_ORDER_CONFIG,
+    alternatives::IMAGE_ORDER_CONFIG,
+    alternatives::SEARCH_ORDER_CONFIG,
+    alternatives::SEARCH_ENDPOINT_URL_CONFIG,
+    alternatives::SEARCH_ENDPOINT_KEY_ROLE_CONFIG,
 ];

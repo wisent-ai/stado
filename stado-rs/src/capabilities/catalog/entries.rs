@@ -242,6 +242,22 @@ define_capabilities! {
             ProviderId::TranscriptLake => (Implemented, "capabilities::alternatives + transcript-lake program", "The privacy-masked transcript archive"),
         ]
     },
+    Image => {
+        id: "image",
+        summary: "Make or edit a product's picture: an Obraz edit plan, or a statement recorded for the exact request when Obraz does not answer.",
+        providers: provider_rows![
+            ProviderId::Obraz => (Implemented, "capabilities::alternatives + obraz program (obraz edit)", "Obraz runs the plan; its model steps reach the image-model service its deployment names"),
+            ProviderId::Attestation => (Implemented, "capabilities::alternatives + cli::capabilities::attestation", "A picture recorded for the exact request, kept under ~/.stado/attestations"),
+        ]
+    },
+    Search => {
+        id: "search",
+        summary: "Search the web for a product: results with their addresses, from a declared search endpoint, or a statement recorded for the exact query.",
+        providers: provider_rows![
+            ProviderId::SearchEndpoint => (Implemented, "capabilities::alternatives + capabilities.search.endpoint.url", "A search service the operator declares, answering POST {query, count} with {results: [{title, url, snippet}]}"),
+            ProviderId::Attestation => (Implemented, "capabilities::alternatives + cli::capabilities::attestation", "Results recorded for the exact query, kept under ~/.stado/attestations"),
+        ]
+    },
     Build => {
         id: "build",
         summary: "Build reproducible binaries, images, or deployable service artifacts.",

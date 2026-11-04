@@ -90,7 +90,10 @@ pub fn sign(
     }
     let observed = inspect(path)?;
     let before = signer.previous(path, previous)?;
-    if crate::signing::SignatureState::is_stable(&before) && before["identifier"] != code_identifier
+    if crate::signing::SignatureState::is_stable(&before)
+        && before["identifier"] != code_identifier
+        && before["identifier"].as_str().map(super::core::current).as_deref()
+            != Some(code_identifier)
     {
         bail!(
             "bundle identifier would change: {} -> {code_identifier}",

@@ -233,6 +233,40 @@ fn owner_file() -> Proven {
     }
 }
 
+/// A declared address: proven by any HTTP answer from it, after refusing an
+/// address that is unset or not `https://`.
+async fn declared(url: &crate::capabilities::ConfigField) -> Proven {
+    let Some(address) = crate::config_file::field_value(url)
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Proven {
+            route: url.path.to_owned(),
+            outcome: Err(format!(
+                "{} is unset; declare the address with `stado config set {} https://…`",
+                url.path, url.path
+            )),
+        };
+    };
+    if !address.starts_with("https://") {
+        return Proven {
+            route: address.clone(),
+            outcome: Err(format!("{} is {address}, which is not an https:// address", url.path)),
+        };
+    }
+    let outcome = match reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => match crate::wait::request(client.head(&address)).await {
+            Ok(_) => Ok(()),
+            Err(error) => Err(format!("{address}: {}", crate::cli::http_failure(&error))),
+        },
+        Err(error) => Err(crate::cli::http_failure(&error)),
+    };
+    Proven { route: address, outcome }
+}
+
 async fn prove(
     family: &Family,
     alternative: &Alternative,
@@ -243,6 +277,7 @@ async fn prove(
         Reach::Directory { service } => directory(service, consumer, bound).await,
         Reach::Attestation => attestation(family, consumer),
         Reach::Program { name } => program(name),
+        Reach::Declared { url, .. } => declared(url).await,
         Reach::OwnerFile => owner_file(),
     }
 }
@@ -252,6 +287,7 @@ fn kind(reach: &Reach) -> &'static str {
         Reach::Directory { .. } => "directory",
         Reach::Attestation => "attestation",
         Reach::Program { .. } => "program",
+        Reach::Declared { .. } => "declared",
         Reach::OwnerFile => "owner-file",
     }
 }

@@ -152,6 +152,16 @@ async fn accept_forever(listener: TcpListener, context: Arc<Context>) -> Result<
         match listener.accept().await {
             Ok((stream, from)) => {
                 let context = Arc::clone(&context);
+                // The same keepalive the dialling side turns on: a peer that
+                // vanished ends this half too instead of holding it forever.
+                if let Err(error) =
+                    nix::sys::socket::setsockopt(&stream, nix::sys::socket::sockopt::KeepAlive, &true)
+                {
+                    eprintln!(
+                        "stado network: connection from {from}: turning on TCP keepalive failed: \
+                         {error}"
+                    );
+                }
                 tokio::spawn(async move {
                     if let Err(cause) = handle(stream, context).await {
                         eprintln!("stado network: connection from {from}: {cause}");

@@ -58,7 +58,7 @@ pub(super) fn predict(
     let product = env!("CARGO_PKG_NAME");
     let signature = &installed.program.signature;
     let identifier = match (&signature.state[..], &signature.identifier) {
-        ("stable", Some(identifier)) => identifier.clone(),
+        ("stable", Some(identifier)) => stado_product::current_code_identifier(identifier),
         _ => stado_product::code_identifier(product, super::installed::INSTALLED)
             .map_err(|error| CmdError::declaration(format!("{error:#}")))?,
     };

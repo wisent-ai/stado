@@ -11,12 +11,12 @@
 //! how a product works on its own: a product that is down costs the caller
 //! one named refusal, never its whole function.
 //!
-//! A model request is not even resolved by the caller: it hands the request
-//! to `stado capabilities call inference --consumer PRODUCT`, which sends it
-//! to the alternative that answers and prints that alternative's answer. So
-//! an alternative added here, or an order the operator selects, changes what
-//! every product's model request reaches without a line of that product
-//! changing.
+//! A model request, a picture request and a search are not even resolved by
+//! the caller: it hands the request to `stado capabilities call FAMILY
+//! --consumer PRODUCT` (`inference`, `image`, `search`), which sends it to the
+//! alternative that answers and prints that alternative's answer. So an
+//! alternative added here, or an order the operator selects, changes what
+//! every product's request reaches without a line of that product changing.
 //!
 //! The families and their alternatives are declared here once. The selected
 //! order of a family is the configuration key `capabilities.<family>.order`
@@ -42,6 +42,15 @@ pub enum Reach {
     Attestation,
     /// A program found on this machine's PATH.
     Program { name: &'static str },
+    /// An address the operator declares in the configuration key `url`
+    /// names, answering Stado's own request shape for the family, with the
+    /// bearer the credential-store item playing the role `key_role` names
+    /// holds in field `token`, when one is declared. Proven by any HTTP
+    /// answer from the address.
+    Declared {
+        url: &'static ConfigField,
+        key_role: &'static ConfigField,
+    },
     /// The owner-only credential file `credentials.store` names as
     /// `file://PATH`.
     OwnerFile,
@@ -89,6 +98,26 @@ pub const TRANSCRIPTS_ORDER_CONFIG: ConfigField = ConfigField::list(
     "transcripts-order",
     "STADO_TRANSCRIPTS_ORDER",
     "capabilities.transcripts.order",
+);
+pub const IMAGE_ORDER_CONFIG: ConfigField = ConfigField::list(
+    "image-order",
+    "STADO_IMAGE_ORDER",
+    "capabilities.image.order",
+);
+pub const SEARCH_ORDER_CONFIG: ConfigField = ConfigField::list(
+    "search-order",
+    "STADO_SEARCH_ORDER",
+    "capabilities.search.order",
+);
+pub const SEARCH_ENDPOINT_URL_CONFIG: ConfigField = ConfigField::scalar(
+    "search-endpoint-url",
+    "STADO_SEARCH_ENDPOINT_URL",
+    "capabilities.search.endpoint.url",
+);
+pub const SEARCH_ENDPOINT_KEY_ROLE_CONFIG: ConfigField = ConfigField::scalar(
+    "search-endpoint-key-role",
+    "STADO_SEARCH_ENDPOINT_KEY_ROLE",
+    "capabilities.search.endpoint.key_role",
 );
 
 /// Every family a product resolves through Stado, each with its
@@ -154,6 +183,39 @@ pub const FAMILIES: &[Family] = &[
                 name: "transcript-lake",
             },
         }],
+    },
+    Family {
+        id: CapabilityKind::Image,
+        order: IMAGE_ORDER_CONFIG,
+        called: true,
+        alternatives: &[
+            Alternative {
+                provider: ProviderId::Obraz,
+                reach: Reach::Program { name: "obraz" },
+            },
+            Alternative {
+                provider: ProviderId::Attestation,
+                reach: Reach::Attestation,
+            },
+        ],
+    },
+    Family {
+        id: CapabilityKind::Search,
+        order: SEARCH_ORDER_CONFIG,
+        called: true,
+        alternatives: &[
+            Alternative {
+                provider: ProviderId::SearchEndpoint,
+                reach: Reach::Declared {
+                    url: &SEARCH_ENDPOINT_URL_CONFIG,
+                    key_role: &SEARCH_ENDPOINT_KEY_ROLE_CONFIG,
+                },
+            },
+            Alternative {
+                provider: ProviderId::Attestation,
+                reach: Reach::Attestation,
+            },
+        ],
     },
 ];
 

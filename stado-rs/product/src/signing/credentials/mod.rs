@@ -21,7 +21,7 @@ mod selection;
 
 use super::core::command;
 use anyhow::{bail, Context, Result};
-use std::{fs, path::PathBuf};
+use std::{cell::Cell, fs, path::PathBuf};
 
 pub struct Credentials {
     directory: Option<PathBuf>,
@@ -30,9 +30,14 @@ pub struct Credentials {
     /// Whether the keychain is one the operator named, whose identity he
     /// chooses: by name or digest, or as its only valid identity.
     pub operator_keychain: bool,
-    /// Whether this scope put its temporary keychain on the user's search
-    /// list, so `close` takes exactly that one entry off again.
-    listed: bool,
+    /// Whether this scope put a keychain Stado owns (its temporary keychain,
+    /// or a recipe role's kept keychain) on the user's search list, so
+    /// `close` takes exactly that one entry off again. The search list is the
+    /// operator's: every program that asks it for an identity, a product's
+    /// own build script among them, finds what is on it, and a kept role
+    /// keychain left first there handed the fleet's key to a `codesign` its
+    /// access list does not name, which macOS answers with a password dialog.
+    listed: Cell<bool>,
     temporary_keychain: bool,
     /// The host's signing lock, held from the moment this scope makes its
     /// keychain until `close` has deleted it.
@@ -58,7 +63,7 @@ impl Credentials {
             keychain: None,
             identity: None,
             operator_keychain: source.operator_keychain(),
-            listed: false,
+            listed: Cell::new(false),
             temporary_keychain: false,
             host_lock: None,
         };
@@ -108,12 +113,13 @@ impl Credentials {
             true,
         )?;
         put_first(keychain)?;
+        self.listed.set(true);
         Ok(())
     }
 
     pub fn close(&mut self) -> Result<()> {
         let mut errors = Vec::new();
-        if std::mem::take(&mut self.listed) {
+        if self.listed.replace(false) {
             if let Some(keychain) = self.keychain.as_ref() {
                 if let Err(error) = take_off(&keychain.to_string_lossy()) {
                     errors.push(error.to_string());

@@ -100,6 +100,15 @@ fn is_stado(program: &Path) -> bool {
 
 /// Every Stado role process on this host that nothing accounts for, this
 /// process left out.
+///
+/// Only a process run under `home` is one of this home's roles. A test
+/// journey, a second account or a build run by hand starts `stado serve`
+/// under a HOME of its own, with its own role locks and store; read as one of
+/// this home's roles it held no lock here and its program was not this
+/// home's installed Stado, so the resident's health pass killed it within
+/// seconds, before it had done what it was started for. A process whose
+/// environment cannot be read (another user's) is not one of this home's
+/// either, and is left alone.
 pub fn strays(home: &Path) -> Result<Vec<Stray>, CmdError> {
     let own = std::process::id();
     let installed = installed_program(home);
@@ -115,6 +124,15 @@ pub fn strays(home: &Path) -> Result<Vec<Stray>, CmdError> {
         let retired = role_word == RETIRED_ROLE_COMMAND;
         if role_word != ROLE_COMMAND && !retired {
             // Not a role: a one-shot command somebody is running.
+            continue;
+        }
+        let started_in = match crate::deploy::service::process_home(process.pid) {
+            Ok(Some(started_in)) => started_in,
+            // Started under no home, or one this account cannot read: that
+            // home's own health pass judges it.
+            Ok(None) | Err(_) => continue,
+        };
+        if !same_directory(&started_in, home) {
             continue;
         }
         // A program that cannot be examined refuses the scan: called gone,
@@ -214,4 +232,11 @@ fn gone(pid: nix::unistd::Pid) -> Result<(), CmdError> {
         std::thread::yield_now();
     }
     Ok(())
+}
+
+/// Whether `a` and `b` name one directory, a trailing slash or a link on the
+/// way included; a path that cannot be resolved is compared as written.
+fn same_directory(a: &Path, b: &Path) -> bool {
+    let resolved = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    resolved(a) == resolved(b)
 }

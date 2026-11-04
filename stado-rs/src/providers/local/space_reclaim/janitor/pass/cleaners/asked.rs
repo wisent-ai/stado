@@ -46,8 +46,14 @@ fn charge_wait(report: &mut CleanupReport, wait: Instant) {
 }
 
 /// Ask the queue about the candidates on disk now, before any lock is taken.
+/// A cleaner with no candidate on disk asks nothing: the answer could only
+/// be about trees that are not there. Asked anyway, the work-tree question
+/// listed every queue prefix of the fleet store through the object API on a
+/// host holding no job tree at all, and while those listings stood a build
+/// waiting for the janitor's turn compiled nothing.
 pub(crate) async fn ask(home: &Path, report: &mut CleanupReport) -> Asked {
     let workdirs = match queue_workdirs::candidate_job_ids(home) {
+        Ok(candidates) if candidates.is_empty() => Some((candidates, Vec::new())),
         Ok(candidates) => {
             let wait = Instant::now();
             let live = match fetch_live_job_ids(&candidates).await {

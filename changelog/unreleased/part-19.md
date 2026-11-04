@@ -509,3 +509,56 @@ The version bump gathers them into the release's own file and removes this one.
   every build it ran inherited that: a build an operator's session waited on compiled at
   scheduling priority 20 beside the session's 31. The unit now declares `Interactive`; the host
   scan still moves itself into the background band. A host takes it on its next unit install.
+- **The host store keeps no record of a finished routine under `queue/` or `running/`:** every
+  transition leaves a cleaned sentinel in the prefix it left, and only the fleet reaper deleted
+  them, so every host routine fired every few minutes left two for good: a laptop held 8,849 under
+  `running/` after four days, and each host pass downloaded all of them to list the live jobs. The
+  host pass now deletes every sentinel whose job has settled in a terminal prefix, as the fleet
+  reaper does, and says each sweep that retired something.
+- **The health pass ends only its own home's stray roles:** it judged every `stado serve` on the
+  machine against its own role locks and installed binary, so a test journey's isolated
+  deployment, run under a HOME of its own, held no lock here and ran a checkout's build, and the
+  resident killed it with SIGKILL within seconds: the host-routine journey could never see its
+  routine fire. A role process started under another HOME, or whose environment cannot be read,
+  is now left to that home's own pass; the home is read from the kernel's record of the process.
+- **`product sync --clone-missing` clones what a product's build reads, not only the product:** the
+  sync cloned a product's own source and then installed it with a runtime that could clone nothing,
+  so a build whose Git dependency had no checkout in the workspace was refused (`no canonical
+  checkout answers for lbartoszcze/autoversion …; no checkout was created`) on every pass and
+  Skrzynka stayed six weeks behind its origin. The installation now runs with the sync's cloning
+  runtime.
+- **A janitor pass with no job work tree on disk asks the fleet queue nothing:** the work-tree
+  cleaner listed every queue prefix of the fleet store through the object API to learn which of its
+  candidates were live, also when it had none; on a laptop with no job tree each listing could
+  stand for ten minutes while a build waiting for the janitor's turn compiled nothing. With no
+  candidate the answer is the empty keep-list and the queue is not read.
+- **`release catalog input pin --source NAME` reads the repository's canonical checkout:** a bare
+  name was joined to the working directory, so `--source jeden` run from inside `jeden` was
+  refused as `cannot change to 'jeden'`. A path that exists is still that path; a name with no `/`
+  reads `wisent-ai/<name>`'s canonical checkout from Stado's workspace, and one with none is
+  refused naming it. A cargo pin whose checkout holds a manifest or lock changed since the pinned
+  revision is refused naming each file and how to repair it, instead of quoting `git diff`.
+- **A Stado network connection whose peer vanished ends:** `stado network connect`, the
+  `ProxyCommand` of every `ssh` to a `<host>.stado.internal`, copied until the peer closed, and the
+  node's sockets carried no keepalive, so a peer gone without closing (a host asleep, a route
+  dropped) held the connection and its `ssh` without end: a pre-push probe of `true` stood 61
+  minutes, and on a laptop three such connects stood four days. Every socket the network dials or
+  accepts now turns on TCP keepalive and is ended by the kernel's idle time, interval and probe
+  count, as host-connections.md states.
+- **`stado ci delivery` names a plan with no cadence as a stall:** a delivery plan declared without
+  `--every` fires no pass, and the path's `stalled` list said nothing of it, so the routine read as
+  standing while nothing had run it since 2026-10-28. Such a plan is now a stall naming when it was
+  declared and the `stado ci plan set … --every SECONDS` that declares it again with its own
+  purpose and steps.
+- **Installing Skrzynka's CLI declares its database:** only the service recipe ran `stado database
+  create skrzynka --provider fleet …` after installing, and both surfaces install the same
+  `~/.local/bin/skrzynka`. A host that installed the CLI (the host sync installs `--surface cli`)
+  got a Skrzynka that keeps every row in the fleet database `skrzynka`, which nothing declared there,
+  so every command and the running service answered `unknown database "skrzynka"`. The CLI recipe
+  runs the same create, which places nothing anew on a host that already has the database.
+- **`product sync` installs a surface again when its catalog recipe changed:** a ready installation
+  was kept whatever the catalog now said, so a step a recipe gained (an `after_install` declaring
+  the database a product now keeps its rows in) never ran on a host whose files already matched
+  their source: Skrzynka's CLI, installed before its recipe declared the database, stayed without
+  it. An installation whose recorded recipe differs from the catalog's is installed again, and the
+  row's note says why.

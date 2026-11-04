@@ -443,6 +443,14 @@ path = "../tests/host_silence/refused_dependency.rs"
 name = "privacy-tcc-quiet"
 path = "../tests/privacy/tcc_quiet.rs"
 
+# The real stado signs copies of itself with the operator's signing identity
+# (WISENT_CODESIGN_KEYCHAIN, WISENT_CODESIGN_IDENTITY): a program carries
+# com.wisent.<product>, a retired ai.wisent.<product>.<product> moves to it,
+# and any other identifier change is refused.
+[[test]]
+name = "signing-convention-identifier"
+path = "../tests/signing/convention_identifier.rs"
+
 # The host-silence store journeys and mcp-killed-child run a real fleet store on
 # a real Skarbiec (SKARBIEC names its binary); run with STADO_TEST_REQUEST_LIMITS
 # declared.
