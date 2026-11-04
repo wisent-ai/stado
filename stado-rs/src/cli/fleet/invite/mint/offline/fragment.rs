@@ -10,10 +10,12 @@
 /// `set -eu` and calls `exit` on a missing tool must not be able to close that
 /// shell.
 ///
-/// The address rules are the join program's, in its order — tailnet DNS name,
-/// then a multicast `.local` name only where something answers for it, then the
-/// IPv4 address of the default interface, then the bare hostname. Two commands
-/// choosing an address by different rules would report two different machines.
+/// The address order: a multicast `.local` name only where something answers
+/// for it, then the IPv4 address of the default interface, then the
+/// machine's tailnet DNS name when it is on a tailnet, then the bare hostname.
+/// The fleet's own paths come first; Tailscale is an option a machine may
+/// run, never one joining needs, and `stado network up` puts the host on
+/// Stado's own network once it has joined.
 pub(super) const OFFLINE_SNIPPET: &str = r##"sh <<'STADO_OFFLINE_INVITE'
 # stado offline invite for '@TARGET@' -- run this ON THE MACHINE BEING ADDED.
 #
@@ -84,44 +86,8 @@ login_user="$(id -un)"
 short_hostname="$(uname -n | awk '{ sub(/\..*$/, "", $0); print tolower($0) }')"
 [ -n "$short_hostname" ] || die 'this machine does not report a hostname'
 
-tailscale_bin=''
-if command -v tailscale >/dev/null 2>&1; then
-    tailscale_bin="$(command -v tailscale)"
-else
-    for candidate in \
-        /Applications/Tailscale.app/Contents/MacOS/Tailscale \
-        /usr/local/bin/tailscale \
-        /opt/homebrew/bin/tailscale
-    do
-        if [ -x "$candidate" ]; then
-            tailscale_bin="$candidate"
-            break
-        fi
-    done
-fi
-
 address=''
 address_kind=''
-if [ -n "$tailscale_bin" ]; then
-    # --peers=false leaves exactly this machine's own record, so the DNSName
-    # read back cannot be some other node's.
-    tailnet_name="$("$tailscale_bin" status --json --peers=false 2>/dev/null |
-        awk 'match($0, /"DNSName"[ \t]*:[ \t]*"[^"]*"/) {
-                field = substr($0, RSTART, RLENGTH)
-                sub(/^"DNSName"[ \t]*:[ \t]*"/, "", field)
-                sub(/"$/, "", field)
-                print field
-                exit
-            }' || true)"
-    tailnet_name="${tailnet_name%.}"
-    case "$tailnet_name" in
-        ''|*[!A-Za-z0-9.-]*) ;;
-        *)
-            address="$tailnet_name"
-            address_kind='tailnet name'
-            ;;
-    esac
-fi
 
 if [ -z "$address" ]; then
     case "$os_name" in
@@ -162,6 +128,47 @@ if [ -z "$address" ]; then
     if [ -n "$address" ]; then
         address_kind='IPv4 address of the default interface'
     fi
+fi
+
+# A tailnet name only when the machine has no address of its own network:
+# Tailscale is an option a machine may run, never the path joining needs.
+tailscale_bin=''
+if [ -z "$address" ]; then
+    if command -v tailscale >/dev/null 2>&1; then
+        tailscale_bin="$(command -v tailscale)"
+    else
+        for candidate in \
+            /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+            /usr/local/bin/tailscale \
+            /opt/homebrew/bin/tailscale
+        do
+            if [ -x "$candidate" ]; then
+                tailscale_bin="$candidate"
+                break
+            fi
+        done
+    fi
+fi
+
+if [ -n "$tailscale_bin" ]; then
+    # --peers=false leaves exactly this machine's own record, so the DNSName
+    # read back cannot be some other node's.
+    tailnet_name="$("$tailscale_bin" status --json --peers=false 2>/dev/null |
+        awk 'match($0, /"DNSName"[ \t]*:[ \t]*"[^"]*"/) {
+                field = substr($0, RSTART, RLENGTH)
+                sub(/^"DNSName"[ \t]*:[ \t]*"/, "", field)
+                sub(/"$/, "", field)
+                print field
+                exit
+            }' || true)"
+    tailnet_name="${tailnet_name%.}"
+    case "$tailnet_name" in
+        ''|*[!A-Za-z0-9.-]*) ;;
+        *)
+            address="$tailnet_name"
+            address_kind='tailnet name'
+            ;;
+    esac
 fi
 
 if [ -z "$address" ]; then

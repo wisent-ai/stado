@@ -59,3 +59,7 @@ The version bump gathers them into the release's own file and removes this one.
   `infra_down`. When the resolver published why it does not serve that adapter (it holds no
   listener, it left the adapter unserved, or it is no longer running), the refusal now carries
   that reason and points at `stado resolver status`, with the same exit code.
+- **Joining a machine prefers its own network over Tailscale:** the offline invite fragment
+  advertised the machine's tailnet name whenever a Tailscale client was installed. It now picks
+  a `.local` name that answers, then the default interface's IPv4 address, and reads Tailscale
+  only on a machine that has neither, so a machine joins without Tailscale.
