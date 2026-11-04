@@ -116,6 +116,7 @@
       "registry_allowance": null,
       "plan_schema": "wisent.gui-automation-plan.v1",
       "reservation": {"cpu_cores": 1, "ram_gb": 1, "vram_gb": 0},
+      "maintenance": true,
       "report": ["target", "operation", "autologin", "remote_management", "accessibility", "runtime"]
     },
     {

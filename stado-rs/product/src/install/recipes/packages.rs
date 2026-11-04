@@ -150,21 +150,17 @@ pub fn prepare(
     // that nested install place the dependency itself into the product's
     // prefix instead of installing its build tools in the clone: Weles failed
     // on `@wisent/cost-tracker` with `tsc: command not found`. The versioned
-    // prefix is instead an npm project of its own,
-    // found from the working directory, which npm does not export.
+    // prefix is instead an npm project of its own, found from the working
+    // directory, which npm does not export; what it installs is the product's
+    // own packed build ([`npm_packed`]).
     let (mut command, directory, bin) = match kind {
         RecipeKind::Npm => {
+            let packed = npm_packed(root, &scratch)?;
             fs::write(prefix.join("package.json"), "{\"private\":true}\n")?;
             let mut command = Command::new("npm");
             command
-                .args([
-                    "install",
-                    "--install-links",
-                    "--no-save",
-                    "--no-audit",
-                    "--no-fund",
-                ])
-                .arg(root);
+                .args(["install", "--no-save", "--no-audit", "--no-fund"])
+                .arg(&packed);
             (command, prefix.clone(), prefix.join("node_modules/.bin"))
         }
         RecipeKind::Pip | RecipeKind::Pipx => {
@@ -222,6 +218,42 @@ pub fn prepare(
         cache: None,
         resumed_from: None,
     })
+}
+
+/// The committed tree of `root`, built with its own dependencies and packed:
+/// the tarball `npm install` places. Installing the checkout directory itself
+/// ran its `prepare` script (`npm run build`) in a copy npm made without the
+/// package's own development dependencies, so Weles's `tsc` was "command not
+/// found" and no Weles from source could be installed. The commit is exported
+/// into `scratch`, `npm ci` installs exactly its lockfile (its development
+/// tools included) and runs its `prepare`, and `npm pack --ignore-scripts`
+/// packs what that built.
+fn npm_packed(root: &Path, scratch: &Path) -> Result<std::path::PathBuf> {
+    let commit = source::git(root, &["rev-parse", "--verify", "HEAD^{commit}"])
+        .with_context(|| format!("{} names no commit to build", root.display()))?;
+    let tree = scratch.join("source");
+    source::export(root, &commit, &tree)?;
+    checked(
+        Command::new("npm")
+            .args(["ci", "--no-audit", "--no-fund"])
+            .env("TMPDIR", scratch)
+            .current_dir(&tree),
+    )
+    .with_context(|| format!("`npm ci` of {} at {commit} failed", root.display()))?;
+    let packed = checked(
+        Command::new("npm")
+            .args(["pack", "--ignore-scripts", "--json", "--pack-destination"])
+            .arg(scratch)
+            .env("TMPDIR", scratch)
+            .current_dir(&tree),
+    )
+    .with_context(|| format!("`npm pack` of {} at {commit} failed", root.display()))?;
+    let listed: Value = serde_json::from_slice(&packed.stdout)
+        .with_context(|| format!("`npm pack --json` of {} printed no JSON", root.display()))?;
+    let file = listed[0]["filename"]
+        .as_str()
+        .with_context(|| format!("`npm pack --json` of {} named no tarball: {listed}", root.display()))?;
+    Ok(scratch.join(file))
 }
 
 /// What a failed Cargo run recorded: its error and its evidence file, each

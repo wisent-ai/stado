@@ -34,3 +34,12 @@ The version bump gathers them into the release's own file and removes this one.
   stuck even when nothing below it was overdue, and `stado serve` judged its own start, so a
   resolver that took six seconds longer than ever before ended the serve. A start is now judged
   stuck only when a wait below its step is past its own longest, and never by the serve itself.
+- **An npm product installs from source again:** the recipe installed the checkout directory, whose
+  `prepare` script (`npm run build`) npm ran in a copy without the package's own development
+  dependencies, so Weles failed with `tsc: command not found` and no Weles from source could be
+  installed. The committed tree is exported, `npm ci` installs its lockfile and runs its build, and
+  the packed result is what the product's versioned prefix installs.
+- **Host GUI automation runs on a busy host:** `stado workload run gui-automation` sets up the
+  host's own Accessibility grants and Apple two-factor helper, yet it took a capacity hold, so a
+  host whose load left no free core refused it with `has no room for gui-automation`. It is
+  declared a maintenance kind and takes no hold.
