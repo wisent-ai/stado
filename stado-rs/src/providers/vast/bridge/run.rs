@@ -133,9 +133,61 @@ pub async fn auto_list_loop(
         pace.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         pace
     });
+    // Whether a maintenance notice was already sent for the failure now
+    // running, so one failure is announced once, not on every poll.
+    let mut announced: Option<String> = None;
     loop {
         if let Some(pace) = pace.as_mut() {
             pace.tick().await;
+        }
+        // A host whose boards or disk are failing takes no new renter, and
+        // the renter it holds is told to save their work: a contract broken
+        // by a crash costs the host's reliability score.
+        if !params.dry_run {
+            match crate::providers::vast::failing::failing().await {
+                Some(cause) => {
+                    if let Some(client) = client {
+                        if listed {
+                            match client.unlist_machine().await {
+                                Ok(_) => {
+                                    listed = false;
+                                    log(&format!("unlisted: this host is failing: {cause}"));
+                                }
+                                Err(exc) => log(&format!(
+                                    "unlist of a failing host failed: {exc}; it is failing: {cause}"
+                                )),
+                            }
+                        }
+                        if announced.as_deref() != Some(cause.as_str()) {
+                            let category = if cause.contains("GiB free") {
+                                "disk"
+                            } else {
+                                "gpu"
+                            };
+                            match client
+                                .schedule_maintenance(chrono::Utc::now().timestamp(), 1.0, category)
+                                .await
+                            {
+                                Ok(answer) => {
+                                    log(&format!(
+                                        "told Vast's renters of the failure ({cause}): {answer}"
+                                    ));
+                                    announced = Some(cause.clone());
+                                }
+                                Err(exc) => log(&format!(
+                                    "the maintenance notice for the failure ({cause}) failed: {exc}"
+                                )),
+                            }
+                        }
+                    }
+                    idle_since = None;
+                    if params.once {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                None => announced = None,
+            }
         }
         // A reservation record that cannot be read may be one, so it holds the
         // cards exactly as a readable one does, and every line names its cause.

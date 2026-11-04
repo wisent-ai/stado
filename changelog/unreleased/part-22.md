@@ -159,3 +159,7 @@ The version bump gathers them into the release's own file and removes this one.
   H --category C [--in-minutes M]` sends Vast's maintenance notice and prints how many renters were
   told; `stado host reboot` sends it first for a host Vast lists and refuses to reboot when Vast
   refuses the notice. Desktop's Registry screen runs both.
+- **A failing host withdraws its Vast offer and tells its renter:** a host kept its offer while its
+  NVIDIA driver failed or its disk filled, so a contract broke on it and cost reliability score. The
+  follow loop now reads the driver and the free space every poll; a failure unlists the host and
+  sends a one-hour maintenance notice once, and the host lists again only after it clears.

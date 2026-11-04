@@ -30,6 +30,7 @@
 mod bridge;
 mod client;
 mod error;
+pub mod failing;
 pub mod isolation;
 
 pub use bridge::{
