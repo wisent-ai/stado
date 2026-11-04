@@ -128,6 +128,11 @@ struct PublicOriginReport: Decodable, Identifiable, Sendable {
     let edgeSelection: PublicOriginEdgeSelection
     let observations: StorageReconciliationJSON
     let registryObservation: StorageReconciliationJSON?
+    /// The newest recorded registry write that changed this declaration, as
+    /// `stado registry history` keeps it: null when no recorded write
+    /// changed it, `{unread}` when the records cannot be listed. Absent from
+    /// a report by a Stado that does not read authors.
+    let lastChanged: StorageReconciliationJSON?
 
     /// The declaration's name, the selected origin, or the CLI's own word
     /// for a boundary that is neither declared nor reported.
@@ -140,6 +145,7 @@ struct PublicOriginReport: Decodable, Identifiable, Sendable {
         case edgeSelection = "edge_selection"
         case observations
         case registryObservation = "registry_observation"
+        case lastChanged = "last_changed"
     }
 
     init(from decoder: Decoder) throws {
@@ -160,6 +166,7 @@ struct PublicOriginReport: Decodable, Identifiable, Sendable {
         edgeSelection = try values.decode(PublicOriginEdgeSelection.self, forKey: .edgeSelection)
         observations = try values.decode(StorageReconciliationJSON.self, forKey: .observations)
         registryObservation = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .registryObservation)
+        lastChanged = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .lastChanged)
     }
 
     /// What the row is about, as the CLI names it on stderr: the declared

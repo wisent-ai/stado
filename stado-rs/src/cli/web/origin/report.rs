@@ -34,8 +34,17 @@ pub(crate) async fn list(json_output: bool) -> Result<(), CmdError> {
         CmdError::click(detail).machine_readable(json_output)
     })?;
     let origins = public_origin::declarations(&document);
+    let authors = last_changed(&origins).await;
     if json_output {
-        let rows: Vec<Value> = origins.iter().map(declaration_row).collect();
+        let rows: Vec<Value> = origins
+            .iter()
+            .zip(&authors)
+            .map(|(origin, author)| {
+                let mut row = declaration_row(origin);
+                row["last_changed"] = author.clone();
+                row
+            })
+            .collect();
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
@@ -43,18 +52,73 @@ pub(crate) async fn list(json_output: bool) -> Result<(), CmdError> {
         println!("no public origins are declared");
         return Ok(());
     }
-    for origin in &origins {
+    for (origin, author) in origins.iter().zip(&authors) {
         println!(
-            "{} {} target={} publication={} upstream={} paths={}",
+            "{} {} target={} publication={} upstream={} paths={} last_changed={}",
             origin.name,
             origin.origin(),
             origin.target,
             origin.publication,
             origin.upstream,
-            origin.paths.join(",")
+            origin.paths.join(","),
+            changed_by(author)
         );
     }
     Ok(())
+}
+
+/// The newest recorded write that changed each origin's declaration, as
+/// `stado registry history --path public_origins.<name>` lists it; `null`
+/// when no recorded write changed it, and `{"unread": <cause>}` when the
+/// records cannot be listed. A declaration whose author nobody recorded is
+/// said to be that, never attributed to the reader.
+async fn last_changed(origins: &[PublicOrigin]) -> Vec<Value> {
+    let store = match crate::targets::RegistryStore::open().await {
+        Ok(store) => store,
+        Err(error) => {
+            let unread =
+                json!({ "unread": format!("the registry store cannot be opened: {error}") });
+            return vec![unread; origins.len()];
+        }
+    };
+    let mut authors = Vec::with_capacity(origins.len());
+    for origin in origins {
+        let path = format!("{}.{}", public_origin::POLICY_KEY, origin.name);
+        authors.push(match store.write_history(Some(&path)).await {
+            // A record whose changed paths are unknown is listed by the
+            // history because it cannot be ruled out; it is not named as
+            // this origin's author, because it may not have touched it.
+            Ok(records) => records
+                .iter()
+                .rev()
+                .find(|record| record["changed"].is_array())
+                .cloned()
+                .unwrap_or(Value::Null),
+            Err(error) => json!({ "unread": error.to_string() }),
+        });
+    }
+    authors
+}
+
+/// One author record as the list line says it.
+fn changed_by(record: &Value) -> String {
+    if record.is_null() {
+        return "unrecorded (written before Stado recorded registry authors)".to_string();
+    }
+    if let Some(cause) = record["unread"].as_str() {
+        return format!("unread ({cause})");
+    }
+    let by = &record["by"];
+    let actor = by["actor"].as_str().unwrap_or("unread account");
+    let host = by["host"].as_str().unwrap_or("unread host");
+    let session = match by["session"].as_str() {
+        Some(session) => format!(" session {session}"),
+        None => String::new(),
+    };
+    format!(
+        "{actor}@{host}{session} at {}",
+        record["recorded_at"].as_str().unwrap_or("an unread time")
+    )
 }
 
 pub(crate) fn declaration_row(origin: &PublicOrigin) -> Value {
@@ -106,15 +170,22 @@ pub(crate) async fn status(name: Option<&str>, json_output: bool) -> Result<(), 
     }
     let mut rows = Vec::new();
     let mut broken = Vec::new();
-    let examined = futures::future::join_all(
-        declared
-            .iter()
-            .filter(|origin| name.is_none_or(|wanted| wanted == origin.name))
-            .map(|origin| verdict::examine(origin, &selection, &registry)),
-    )
-    .await;
-    for mut row in examined {
+    let shown: Vec<PublicOrigin> = declared
+        .iter()
+        .filter(|origin| name.is_none_or(|wanted| wanted == origin.name))
+        .cloned()
+        .collect();
+    let (examined, authors) = tokio::join!(
+        futures::future::join_all(
+            shown
+                .iter()
+                .map(|origin| verdict::examine(origin, &selection, &registry)),
+        ),
+        last_changed(&shown),
+    );
+    for (mut row, author) in examined.into_iter().zip(authors) {
         row["registry_observation"] = json!(registry_read);
+        row["last_changed"] = author;
         let word = field(&row["verdict"]);
         if row["verdict"].as_str() != Some(VERDICT_SERVING) {
             broken.push(format!("{}: {word}", field(&row["name"])));
@@ -166,6 +237,9 @@ fn print_row(row: &Value) {
     let text = |key: &str| field(&row[key]);
     let nested = |section: &str, key: &str| field(&row[section][key]);
     println!("{} {} {}", text("name"), text("verdict"), text("origin"));
+    if row.get("last_changed").is_some() {
+        println!("  last changed: {}", changed_by(&row["last_changed"]));
+    }
     println!(
         "  resolution:  {} — {}",
         nested("resolution", "state"),

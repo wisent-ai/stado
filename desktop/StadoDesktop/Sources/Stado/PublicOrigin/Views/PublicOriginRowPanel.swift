@@ -39,6 +39,13 @@ struct PublicOriginRowPanel: View {
                 if let observation = report.registryObservation {
                     diagnostic("Registry reading", observation)
                 }
+                if let author = report.lastChanged {
+                    // The newest recorded write that changed this declaration:
+                    // account, host, agent session, command and time; null
+                    // when no recorded write did, so an agent's declaration
+                    // never reads as the operator's.
+                    diagnostic("Last changed by", author)
+                }
                 diagnostic("Diagnostic readings", report.observations)
                 if let receipt {
                     PublicOriginReceiptPanel(receipt: receipt)

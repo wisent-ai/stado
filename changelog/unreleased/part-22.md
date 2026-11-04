@@ -63,3 +63,7 @@ The version bump gathers them into the release's own file and removes this one.
   advertised the machine's tailnet name whenever a Tailscale client was installed. It now picks
   a `.local` name that answers, then the default interface's IPv4 address, and reads Tailscale
   only on a machine that has neither, so a machine joins without Tailscale.
+- **Every public origin says who last changed it:** `stado web origin list` and `status` carry
+  `last_changed`, the newest recorded registry write that changed the declaration (account, host,
+  agent session, time), or say it was never recorded; Desktop's Public origin row shows it as
+  Last changed by.
