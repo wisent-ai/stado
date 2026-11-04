@@ -139,6 +139,11 @@ enum NativeRegistryOperations {
                   .init(id: "target", label: "Registry target", required: true),
                   .init(id: "since-hours", label: "Hours back (the beacon keeps the last day)", option: "--since-hours", initial: "24"),
               ], mutates: false, jsonOutput: false),
+        .init(id: "market-earnings", title: "What a host earned on Vast.ai per day, beside its cost and margin",
+              path: ["market", "earnings"], hostPlacement: .none, fields: [
+                  .init(id: "target", label: "Registry target", option: "--target", required: true),
+                  .init(id: "since-days", label: "Days back", option: "--since-days", initial: "7"),
+              ], fixedArguments: ["--provider", "vast"], mutates: false, jsonOutput: false),
         .init(id: "registry-document-validate", title: "Validate a supplied registry document",
               path: ["registry", "validate"], hostPlacement: .none,
               payload: .file(option: nil, label: "Registry JSON document", initial: ""),

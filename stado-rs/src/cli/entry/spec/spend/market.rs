@@ -73,6 +73,31 @@ pub(crate) enum MarketCommands {
         #[arg(long)]
         json: bool,
     },
+    /// What a registry host earned on the marketplace, day by day, as the
+    /// marketplace itself states it, beside what the same days of the host
+    /// cost (`stado cost host`) and the margin.
+    ///
+    /// Vast.ai states income per machine and day (GPU, storage, upload and
+    /// download, gross); a day it states no row for is printed as not
+    /// stated, never as zero. Each run reads the marketplace and keeps every
+    /// stated day in the fleet store (`market/earnings/<provider>/<host>/
+    /// <day>.json`), so the ledger outlives the marketplace's own window.
+    Earnings {
+        /// The marketplace to read.
+        #[arg(long, value_enum)]
+        provider: MarketProvider,
+        /// Taken only with --provider stado, which is refused.
+        #[arg(long)]
+        peer: Option<String>,
+        /// The registry host whose machine is read.
+        #[arg(long)]
+        target: String,
+        /// Whole days back from today to read.
+        #[arg(long = "since-days", default_value_t = 7)]
+        since_days: u32,
+        #[arg(long)]
+        json: bool,
+    },
     /// Whether this machine can earn on the marketplace, and which
     /// provisioning step is missing when it cannot: the Skarbiec channel this
     /// host holds, the vault that would declare the credential, and the

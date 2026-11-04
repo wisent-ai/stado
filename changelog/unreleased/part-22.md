@@ -93,3 +93,10 @@ The version bump gathers them into the release's own file and removes this one.
   prices an owned offer at its busiest board's mean measured hourly energy. A host with no tariff,
   a tariff in another currency or no measured hour is unpriced with that cause, never free.
   `stado cost quote` answers an owned allocation by pointing at `stado cost host`.
+- **`stado market earnings`: what a host earned, beside its cost:** income on Vast.ai was read only
+  as a live listing, so no command said what a host had earned. `stado market earnings --provider
+  vast --target HOST [--since-days N]` reads Vast's own per-machine, per-day statement of GPU,
+  storage and bandwidth income, keeps each stated day in the fleet store
+  (`market/earnings/vast/<host>/<day>.json`), and prints each day beside the host's measured cost
+  of that day and the margin; a day Vast did not state is printed as not stated, never zero.
+  Desktop's Registry screen runs it.

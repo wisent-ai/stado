@@ -73,6 +73,14 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             offers::unlist(&required_peer(peer, "unlist")?, *json).await
         }
         MarketCommands::Status { peer, json, .. } => offers::status(peer.as_deref(), *json).await,
+        // A peer fleet states no income of its own: what this host lent it is
+        // what `market status --provider stado` computes from the sessions.
+        // Refused, not answered with an empty ledger.
+        MarketCommands::Earnings { .. } => Err(CmdError::refused(
+            "stado market earnings reads a marketplace's own statement of income, and a Stado \
+             peer fleet states none; what this host lent a peer is read with `stado market \
+             status --provider stado --peer <peer>`",
+        )),
         MarketCommands::Readiness {
             peer,
             vault_host,

@@ -9,6 +9,8 @@
 //! credential. `--provider stado` and `stado market peer` are answered by
 //! [`super::peer`].
 
+#[path = "earnings.rs"]
+mod earnings;
 mod readiness;
 mod readiness_text;
 
@@ -49,6 +51,12 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             list(*price_gpu, *price_disk, *price_min_bid, *json).await
         }
         MarketCommands::Unlist { json, .. } => unlist(*json).await,
+        MarketCommands::Earnings {
+            target,
+            since_days,
+            json,
+            ..
+        } => earnings::earnings(target, *since_days, *json).await,
         MarketCommands::Status { json, .. } => status(*json).await,
         MarketCommands::Readiness {
             vault_host,
@@ -100,6 +108,7 @@ pub(crate) fn provider(command: &MarketCommands) -> MarketProvider {
         MarketCommands::List { provider, .. }
         | MarketCommands::Unlist { provider, .. }
         | MarketCommands::Status { provider, .. }
+        | MarketCommands::Earnings { provider, .. }
         | MarketCommands::Readiness { provider, .. }
         | MarketCommands::Monitor { provider, .. }
         | MarketCommands::Follow { provider, .. } => *provider,
@@ -113,6 +122,7 @@ fn peer_named(command: &MarketCommands) -> bool {
         MarketCommands::List { peer, .. }
         | MarketCommands::Unlist { peer, .. }
         | MarketCommands::Status { peer, .. }
+        | MarketCommands::Earnings { peer, .. }
         | MarketCommands::Readiness { peer, .. }
         | MarketCommands::Monitor { peer, .. }
         | MarketCommands::Follow { peer, .. } => peer.is_some(),

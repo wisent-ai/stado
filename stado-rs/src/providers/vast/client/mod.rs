@@ -7,6 +7,7 @@
 //! `offers`, and the Python-shaped JSON readers those two share in `json`.
 
 mod credentials;
+mod earnings;
 pub(super) mod json;
 mod machine;
 mod offers;
@@ -20,6 +21,7 @@ use super::VastError;
 pub use credentials::{
     read_vast_api_key, vast_api_key_available, vast_refusal, VAST_FIELD, VAST_ROLE,
 };
+pub use earnings::{EarnedDay, SECONDS_PER_DAY};
 pub use machine::{parse_machine_id_env, system_hostname};
 pub use offers::ListMachineParams;
 
