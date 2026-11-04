@@ -62,3 +62,12 @@ The version bump gathers them into the release's own file and removes this one.
 
 - **The product library compiles again:** the working tree's catalog notice called a `validate`
   its module does not have; it calls the catalog's own.
+- **A `stado serve` under launchd reads the macOS Tailscale app as its command line:** run with
+  no terminal, the program inside `Tailscale.app` started its window instead of answering
+  `status --json`, and the serve waiting on it at its host-identity step never bound its API or
+  resolver for hours while launchd called the unit running. It is run with
+  `TAILSCALE_BE_CLI=true` and no input. `tests/network/tailnet_without_terminal.rs`.
+- **A wait for this host's resolver refuses a serve stuck at start:** `stado service ensure`,
+  and `stado product install stado` through it, waited for a resolver that would never publish;
+  once the serve stands in a start step past the longest that step took here, the wait ends
+  naming the step, how long past due, what it waits on and `stado service restart`.

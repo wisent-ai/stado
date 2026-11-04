@@ -47,6 +47,9 @@ pub(crate) fn await_serving(pid: u32) -> Result<(), String> {
             let mut watch =
                 crate::queue::local_file::watch_directories(std::slice::from_ref(&directory))
                     .map_err(|error| std::io::Error::other(error.to_string()))?;
+            if let Some(stuck) = stuck_at_start(pid) {
+                return Err(std::io::Error::other(stuck));
+            }
             if let Some(state) = published_state() {
                 if state.pid == pid && state.state == RESOLVER_SERVING && state.listening {
                     return Ok(());
@@ -87,6 +90,38 @@ pub(crate) fn await_serving(pid: u32) -> Result<(), String> {
         },
     )
     .map_err(|error| error.to_string())
+}
+
+/// The start step `stado serve` process `pid` stands in past its due moment
+/// (its `stado serve start: <step>` wait, whose `termin:` is the longest
+/// that step ever took here), said with how long past due and what it waits
+/// on below it; `None` while it is within that or no longer starting. A
+/// serve whose start hung (it waited on a child that never answered) never
+/// publishes, and a wait for its publication held `stado product install
+/// stado` for as long as the hang lasted, which was hours. A register that
+/// cannot be read is no evidence of a hang.
+fn stuck_at_start(pid: u32) -> Option<String> {
+    let listing = crate::wait::open::listed().ok()?;
+    let now = chrono::Utc::now();
+    let own: Vec<_> = listing.open.iter().filter(|wait| wait.pid == pid).collect();
+    let start = own.iter().find(|wait| wait.field("co").is_some_and(|what| what.starts_with("stado serve start: ")))?;
+    let past = start.past_due(now)?;
+    let below: Vec<String> = own
+        .iter()
+        .filter(|wait| wait.sequence > start.sequence)
+        .map(|wait| {
+            let since = wait.field("od").unwrap_or("an unknown moment");
+            format!("{} (since {since})", wait.field("co").unwrap_or(&wait.line))
+        })
+        .collect();
+    Some(format!(
+        "the resolver (pid {pid}) cannot publish that it serves: its start stands in \"{}\" {}s past the longest \
+         that step took here (since {}){}; restart its unit (`stado service restart`)",
+        start.field("co").unwrap_or(&start.line),
+        past.num_seconds(),
+        start.field("od").unwrap_or("an unknown moment"),
+        if below.is_empty() { String::new() } else { format!(", waiting on {}", below.join(", ")) }
+    ))
 }
 
 /// [`follow_version`] of the registry the authority serves now. The host this

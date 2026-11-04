@@ -90,6 +90,29 @@ pub struct Open {
     pub line: String,
 }
 
+impl Open {
+    /// The value of `name` in the wait's line (`co` is the text before the
+    /// first field name): `None` when the line carries no such field.
+    pub fn field(&self, name: &str) -> Option<&str> {
+        let body = self.line.strip_prefix("czekam: ")?;
+        let mut parts = body.split("; ");
+        let first = parts.next()?;
+        if name == "co" {
+            return Some(first);
+        }
+        parts.find_map(|part| part.strip_prefix(name).and_then(|rest| rest.strip_prefix(": ")))
+    }
+
+    /// How long past its due moment (`termin:`) the wait stands at `now`;
+    /// `None` while it is not due yet, or when it carries no due moment
+    /// (`termin: brak`, an operation never measured here).
+    pub fn past_due(&self, now: chrono::DateTime<chrono::Utc>) -> Option<chrono::Duration> {
+        let due = chrono::DateTime::parse_from_rfc3339(self.field("termin")?).ok()?;
+        let past = now.signed_duration_since(due.with_timezone(&chrono::Utc));
+        (past > chrono::Duration::zero()).then_some(past)
+    }
+}
+
 /// What one reading of the register found.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Listing {

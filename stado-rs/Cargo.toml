@@ -209,6 +209,10 @@ name = "network-local-network"
 path = "../tests/network/local_network.rs"
 
 [[test]]
+name = "network-tailnet-without-terminal"
+path = "../tests/network/tailnet_without_terminal.rs"
+
+[[test]]
 name = "alerts-operator-contact"
 path = "../tests/alerts/operator_contact.rs"
 

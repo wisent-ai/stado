@@ -145,9 +145,32 @@ static MAP: LazyLock<Tailnet> = LazyLock::new(|| {
     }
 });
 
+/// This node as its Tailscale client states it now, read afresh: how many
+/// addresses the tailnet names, and why this node carries no traffic when it
+/// carries none. `Ok(None)` when no Tailscale client is installed; `Err` names
+/// the client and why it could not be read. What `stado host link` and the
+/// release channel check read, through [`address_of`], asked directly.
+pub fn own() -> Result<Option<(usize, Option<String>)>, String> {
+    let Some(binary) = binary()? else { return Ok(None) };
+    let read = read(&binary).map_err(|error| format!("{} could not be read: {error}", binary.display()))?;
+    Ok(Some((read.members.len(), read.own)))
+}
+
+/// The variable Tailscale's macOS app reads to answer as its command line.
+/// Run with no terminal (any launchd unit, `stado serve` among them), the
+/// program inside `Tailscale.app` takes itself for the app being opened and
+/// starts its window instead: it printed "The Tailscale GUI failed to start"
+/// or, with the app's window already up, never answered at all, and a
+/// `stado serve` waiting on it at start never bound its API or resolver for
+/// hours while launchd reported the unit running. The standalone
+/// `tailscale` CLIs ignore it.
+const BE_CLI: (&str, &str) = ("TAILSCALE_BE_CLI", "true");
+
 fn read(binary: &Path) -> Result<Tailnet, String> {
-    let output = crate::wait::output(Command::new(binary).args(["status", "--json"]))
-        .map_err(|error| format!("`status --json` did not run: {error}"))?;
+    let output = crate::wait::output(
+        Command::new(binary).args(["status", "--json"]).env(BE_CLI.0, BE_CLI.1).stdin(std::process::Stdio::null()),
+    )
+    .map_err(|error| format!("`status --json` did not run: {error}"))?;
     if !output.status.success() {
         return Err(format!(
             "`status --json` exited {}: {}",
