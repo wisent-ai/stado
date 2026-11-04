@@ -13,7 +13,11 @@ products:
   owner_repository: wisent-ai/ster
   star_repository: wisent-ai/ster
   description: Native representation reading, direction learning, evaluation and activation steering.
-  roadmap: []
+  roadmap:
+  - title: Sell steering vectors and representation evaluations
+    status: planned
+    outcome: Sell trained steering vectors for open-weight models and paid representation evaluations of a customer's model, trained on fleet boards in idle hours, with the vector, its evaluation and the model revision it was trained for delivered together.
+    source: ster/README.md
   integrations:
   - product: preferences
     description: Ster trains steering vectors from the contrastive pair sets Preferences exports as format ster-pairs.
@@ -727,6 +731,30 @@ products:
   - title: Keep the list of earning sources current
     status: planned
     outcome: stado market sources lists every source the family knows with its kind, unit, payout currency, admission rules and last read price, re-reads them on a schedule, and reports a source that appeared in the markets it reads or changed its rules, so a new way to earn becomes a recorded item instead of being missed.
+    source: https://stado.wisent.com/docs/earning
+  - title: Serve open video, image and speech models from fleet boards
+    status: planned
+    outcome: Deploy open video-generation, image-generation, speech and transcription models on idle boards behind the same metered endpoint as text inference, so the product that sells them and the inference networks that pay for them can use fleet boards, with each model's license checked before it is served.
+    source: https://stado.wisent.com/docs/inference
+  - title: Run sandboxes as a sold product
+    status: planned
+    outcome: Lease isolated, disposable sandboxes on fleet hosts for AI agents and code execution (a Linux container or micro-VM per run, an optional board, a macOS sandbox on a fleet Mac), each with its own network policy, time limit and teardown receipt, metered per second for the product that sells them.
+    source: https://stado.wisent.com/docs/capabilities/scratch
+  - title: Answer agent compute calls paid per request
+    status: planned
+    outcome: Accept compute calls from AI agents that pay per request through an agent payment protocol (HTTP 402 payment schemes), run them as isolated jobs and record each payment beside the job's measured cost, so agents can buy fleet compute without an account.
+    source: https://stado.wisent.com/docs/earning
+  - title: Run scheduled batch work for customers in the cheapest hours
+    status: planned
+    outcome: Accept customer batch jobs with a deadline (embedding a corpus, transcribing an archive, rendering a queue, evaluating a model) and place them in the hours where the fleet's idle boards and electricity tariff make them cheapest, recording each job's measured cost against its price.
+    source: https://stado.wisent.com/docs/earning
+  - title: Reuse the heat a board produces
+    status: planned
+    outcome: Record each host's heat output from its measured energy and, where the operator declares a use (space or water heating), count the heating it replaced at the declared heating price as a saving beside the host's cost.
+    source: https://stado.wisent.com/docs/costs
+  - title: Sell the fleet's own operational data
+    status: planned
+    outcome: Publish aggregated, anonymised measurements the fleet already keeps (board prices and occupancy across marketplaces, energy per job, failure rates per board model) as a paid dataset or feed, with nothing that identifies a host, an operator or a customer.
     source: https://stado.wisent.com/docs/earning
   - title: Keep every source's earnings per host and day
     status: planned
@@ -2613,6 +2641,22 @@ products:
     status: planned
     outcome: Meet every gate the operations page lists before any outside customer pays (payments and ledger, supplier and pricing authority, tenant isolation, acceptable use and export control, capacity evidence and refunds, Stado lease contracts, privacy and recovery), each approved by the operator.
     source: compute.wisent.com/docs/operations.md
+  - title: Sell sandboxes for AI agents and code execution
+    status: planned
+    outcome: Price and sell the disposable sandboxes Stado leases, per second with an optional board, through API keys and credits, for agent builders who need isolated code execution.
+    source: compute.wisent.com/docs/architecture.md
+  - title: Sell video, image and speech generation per output
+    status: planned
+    outcome: Price and sell open video, image, speech and transcription models Stado serves from fleet boards, per second of video, per image, per minute of audio, through API keys and credits.
+    source: compute.wisent.com/docs/architecture.md
+  - title: Sell to AI agents that pay per request
+    status: planned
+    outcome: Accept payment per request from AI agents through an agent payment protocol, without an account, for inference, sandboxes and compute calls, each payment recorded with the request it paid for.
+    source: compute.wisent.com/docs/architecture.md
+  - title: Sell reserved capacity with a guaranteed price
+    status: planned
+    outcome: Sell fixed blocks of fleet capacity (board-hours per month) at a price agreed in advance, so steady customers buy the base load and the marketplaces fill the rest.
+    source: compute.wisent.com/docs/operations.md
   integrations:
   - product: stado
     description: Every instance is one Stado machine job whose command runs the
@@ -2672,6 +2716,14 @@ products:
   - title: Sell generated videos
     status: planned
     outcome: Sell Wisent videos per second of output, priced from the measured render cost on fleet boards or the renderer's own price, and render on fleet boards only while that margin beats renting them.
+    source: film/README.md
+  - title: Render videos on fleet boards with open video models
+    status: planned
+    outcome: Add an open video-generation model served on fleet boards as one of Film's renderers, beside the vendors', so a video can be made at the fleet's own measured cost instead of a vendor's price.
+    source: film/README.md
+  - title: Sell video generation as an API
+    status: planned
+    outcome: Offer Film's renderers to outside callers per second of video through the selling product's keys and credits, recording which renderer made each video and its cost.
     source: film/README.md
   integrations:
   - product: brama
@@ -2734,6 +2786,10 @@ products:
   - title: Sell generated images
     status: planned
     outcome: Sell Wisent images per image, priced from the measured ComfyUI render cost on fleet boards, and render on fleet boards only while that margin beats renting them.
+    source: obraz/README.md
+  - title: Sell trained image adapters
+    status: planned
+    outcome: Train a creator's image adapter (LoRA) on fleet boards in idle hours and sell it, or images made with it, with the training cost measured per adapter.
     source: obraz/README.md
   integrations:
   - product: brama
