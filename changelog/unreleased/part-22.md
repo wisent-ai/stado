@@ -48,3 +48,9 @@ The version bump gathers them into the release's own file and removes this one.
   address on the chosen network is refused naming the addresses it holds and the visibility that
   fits, and the registry checks each visibility against its own address rule. Desktop's Inference
   screen gains a Plan and apply section with the same choice.
+- **A host's link report reads its own network first:** the beacon's link block took its path only
+  from `tailscale status --json`, so a host reached over Stado's own network with no Tailscale
+  client reported `path_kind: unknown`. The path now comes from the host's Stado network node
+  (`direct` or `relay`, with the endpoint the registry declares for it), and Tailscale is read only
+  when the host has no node or its node could not tell, with that cause in `unread`. `source` names
+  both readings, such as `pmset+stado-network`.

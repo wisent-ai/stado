@@ -26,32 +26,40 @@ use serde_json::{Map, Value};
 
 use super::Runner;
 
+mod own_network;
 mod platform;
 mod probes;
 mod tailnet;
 mod timestamps;
 
+use own_network::own_network_path;
 use platform::{
     linux_interface_changes, linux_sleep_wake, macos_interface_changes, macos_sleep_wake,
 };
 use probes::window_seconds;
 use tailnet::tailnet_path;
 
-/// The host holds at least one direct path to the tailnet.
+/// The host holds at least one direct path to a peer.
 pub const PATH_KIND_DIRECT: &str = "direct";
-/// Every path the host holds runs through a DERP relay.
+/// Every path the host holds runs through a relay.
 pub const PATH_KIND_RELAY: &str = "relay";
-/// Tailscale is absent, not running, or answered nothing usable.
+/// No path source this host has could tell.
 pub const PATH_KIND_UNKNOWN: &str = "unknown";
 
-/// macOS: `pmset -g log` for sleep/wake, `tailscale status --json` for the
-/// path, `log show` for interface changes.
-pub const SOURCE_MACOS: &str = "pmset+tailscale";
-/// Linux: `journalctl` for suspend/resume, `tailscale status --json` for the
-/// path, `journalctl -k` for interface changes.
-pub const SOURCE_LINUX: &str = "journalctl+tailscale";
-/// Nothing on this host could be read: not the platform's log tool, not
-/// tailscale. Every field is null and the reader is told so by name.
+/// The path read from this host's Stado network node.
+pub const PATH_SOURCE_STADO_NETWORK: &str = "stado-network";
+/// The path read from `tailscale status --json`, on a host that has no Stado
+/// network node or whose node could not tell.
+pub const PATH_SOURCE_TAILSCALE: &str = "tailscale";
+
+/// macOS: `pmset -g log` for sleep/wake and `log show` for interface
+/// changes; the source is `pmset+<path source>`.
+pub const SOURCE_MACOS: &str = "pmset";
+/// Linux: `journalctl` for suspend/resume and `journalctl -k` for interface
+/// changes; the source is `journalctl+<path source>`.
+pub const SOURCE_LINUX: &str = "journalctl";
+/// Nothing on this host could be read: not the platform's log tool, not a
+/// path source. Every field is null and the reader is told so by name.
 pub const SOURCE_UNSUPPORTED: &str = "unsupported";
 /// The beacon's first link collection beside it has not finished yet: every
 /// field is null and `unread` says so.
@@ -90,7 +98,9 @@ pub struct BeaconLink {
     /// Interface changes inside the window, oldest first. An empty list is a
     /// legitimate answer: a quiet window is the common case.
     pub interface_changes: Vec<InterfaceChange>,
-    /// [`SOURCE_MACOS`], [`SOURCE_LINUX`] or [`SOURCE_UNSUPPORTED`].
+    /// [`SOURCE_MACOS`] or [`SOURCE_LINUX`], joined by `+` to the path source
+    /// that answered ([`PATH_SOURCE_STADO_NETWORK`] or
+    /// [`PATH_SOURCE_TAILSCALE`]), or [`SOURCE_UNSUPPORTED`] / [`SOURCE_PENDING`].
     pub source: String,
     /// Every datum above the host could not read, each with its cause. A
     /// null with no entry here is a datum the host has no tool for (no
@@ -221,7 +231,15 @@ pub async fn collect_link(runner: &Runner, period: Option<std::time::Duration>) 
                 .to_string(),
         );
     }
-    let path = read(&mut unread, "tailnet path", tailnet_path(runner).await);
+    // The fleet's own network first; Tailscale is asked only when this host
+    // has no Stado network node or its node could not tell, so a host that
+    // runs no Tailscale reports the path it holds instead of `unknown`.
+    let own = read(&mut unread, "Stado network path", own_network_path().await);
+    let path = match own {
+        Some(path) => Some((path, PATH_SOURCE_STADO_NETWORK)),
+        None => read(&mut unread, "tailnet path", tailnet_path(runner).await)
+            .map(|path| (path, PATH_SOURCE_TAILSCALE)),
+    };
 
     let (sleep_wake, changes, platform_source) = match std::env::consts::OS {
         "macos" => (
@@ -263,9 +281,9 @@ pub async fn collect_link(runner: &Runner, period: Option<std::time::Duration>) 
 
     // What decides the source is which probes ANSWERED, not what they found:
     // a quiet host that has never slept read its log successfully, while a
-    // host with no `pmset` and no `tailscale` published a block holding no
-    // measurement at all, and calling that one `pmset+tailscale` would claim
-    // two readings nobody took.
+    // host with no `pmset` and no path source published a block holding no
+    // measurement at all, and naming a source for it would claim readings
+    // nobody took.
     let answered = path.is_some() || sleep_wake.is_some() || changes.is_some();
     if !answered {
         return BeaconLink::unsupported(collected_at, unread);
@@ -274,9 +292,12 @@ pub async fn collect_link(runner: &Runner, period: Option<std::time::Duration>) 
         Some(halves) => halves,
         None => (None, None),
     };
-    let (path_kind, endpoint) = match path {
-        Some(path) => path,
-        None => (PATH_KIND_UNKNOWN.to_string(), None),
+    let ((path_kind, endpoint), source) = match path {
+        Some((path, path_source)) => (path, format!("{platform_source}+{path_source}")),
+        None => (
+            (PATH_KIND_UNKNOWN.to_string(), None),
+            platform_source.to_string(),
+        ),
     };
     BeaconLink {
         collected_at,
@@ -288,7 +309,7 @@ pub async fn collect_link(runner: &Runner, period: Option<std::time::Duration>) 
             Some(changes) => changes,
             None => Vec::new(),
         },
-        source: platform_source.to_string(),
+        source,
         unread: Some(unread),
     }
 }
