@@ -115,6 +115,26 @@ pub(crate) enum RegistryCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Print who changed the canonical registry, oldest first.
+    ///
+    /// Every write is recorded beside the document by the store that took
+    /// it: when, the generation it made and replaced, the account, host and
+    /// agent session that made it (and, for a write relayed to the registry
+    /// authority, the authority host that applied it), the command line, and
+    /// the dotted paths it changed. --path lists only the writes that changed
+    /// that path or a part of it, in the spelling `pull --path` reads. A
+    /// write whose record could not be stored is shown as a gap before the
+    /// next recorded one; writes made before records were kept are not
+    /// listed.
+    History {
+        /// List only writes that changed this dotted path or a part of it:
+        /// `public_origins.release-object`, `targets.<host>`.
+        #[arg(long)]
+        path: Option<String>,
+        /// Emit a `stado.registry-history.v1` object instead of lines.
+        #[arg(long)]
+        json: bool,
+    },
     /// Print which registry target is this machine.
     #[command(name = "self")]
     SelfTarget {

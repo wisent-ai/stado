@@ -28,3 +28,15 @@ The version bump gathers them into the release's own file and removes this one.
   refuse before planning: `the public edge is declared on <target>, which the canonical registry
   does not hold, so no hostname can be published through it`, followed by the `stado web edge
   provision` and `stado web edge declare` commands that fix it.
+
+### Added
+
+- **`stado registry history`: who changed the registry:** a registry write left only a new
+  generation, so an entry an agent wrote read the same as one the operator declared, and nobody
+  could say who made a change. Every write is now recorded beside the document by the store that
+  took it, with the time, the generation it made and replaced, the account, host and agent session
+  that made it, the command line and the dotted paths it changed; a write relayed to the registry
+  authority is recorded there under its caller, with the authority beside it. `stado registry
+  history [--path P] [--json]` lists them, and Desktop's Registry screen runs it. A part that
+  cannot be read, a record that cannot be stored and a gap between records are each said, never
+  left out.

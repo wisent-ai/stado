@@ -130,6 +130,10 @@ enum NativeRegistryOperations {
         .init(id: "registry-document-read", title: "Read the canonical registry and its generation",
               path: ["registry", "pull"], hostPlacement: .none,
               fixedArguments: ["--with-generation"], mutates: false, jsonOutput: false),
+        .init(id: "registry-document-history", title: "Show who changed the registry, or one path of it",
+              path: ["registry", "history"], hostPlacement: .none, fields: [
+                  .init(id: "path", label: "Dotted path, such as public_origins.release-object (empty: every write)", option: "--path"),
+              ], mutates: false, jsonOutput: false),
         .init(id: "registry-document-validate", title: "Validate a supplied registry document",
               path: ["registry", "validate"], hostPlacement: .none,
               payload: .file(option: nil, label: "Registry JSON document", initial: ""),

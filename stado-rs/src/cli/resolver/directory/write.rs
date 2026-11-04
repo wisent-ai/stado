@@ -66,8 +66,12 @@ pub(crate) async fn authority_compare_and_swap(
     // The guards a whole-document replace earns already ran here against the
     // document at `expected`; the authority's swap is conditional on that
     // same generation, so its own guards are told the decision was made.
+    // The authority records the write; it is told who on this host made it,
+    // or its record would name only its own process that applied it.
     let remote = format!(
-        "{} registry push - --if-generation {} --force --allow-empty-fleet --json{}",
+        "{}={} {} registry push - --if-generation {} --force --allow-empty-fleet --json{}",
+        crate::targets::RELAYED_FOR,
+        crate::deploy::shlex_quote(&crate::targets::own_provenance().await.to_string()),
         crate::deploy::shlex_quote(&command),
         crate::deploy::shlex_quote(expected),
         match fence {

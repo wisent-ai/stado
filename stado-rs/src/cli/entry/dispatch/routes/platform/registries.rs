@@ -60,6 +60,7 @@ pub(super) async fn dispatch(command: RegistryCommands) -> Result<(), CmdError> 
             .await
         }
         RegistryCommands::Set { path, value, json } => registry::set(&path, &value, json).await,
+        RegistryCommands::History { path, json } => registry::history(path.as_deref(), json).await,
         RegistryCommands::SelfTarget {
             name_only,
             local,

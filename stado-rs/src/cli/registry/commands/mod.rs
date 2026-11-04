@@ -1,8 +1,9 @@
 //! The operator-facing verbs: [`validate`] and `import` of a local document,
-//! [`push`] and [`pull`] of the canonical one, `self`, and the [`host`]
-//! family. The local-file source both `validate` and `push` resolve, and
-//! `self`, live here.
+//! [`push`] and [`pull`] of the canonical one, [`history`] of its writes,
+//! `self`, and the [`host`] family. The local-file source both `validate`
+//! and `push` resolve, and `self`, live here.
 
+pub(in crate::cli::registry) mod history;
 pub(in crate::cli::registry) mod host;
 pub(in crate::cli::registry) mod pull;
 pub(in crate::cli::registry) mod push;

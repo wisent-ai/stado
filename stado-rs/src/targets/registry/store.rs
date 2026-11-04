@@ -8,11 +8,14 @@ use crate::targets::*;
 mod authority;
 #[path = "store/downloader.rs"]
 mod downloader;
+#[path = "store/journal.rs"]
+mod journal;
 #[path = "store/local.rs"]
 mod local;
 
 pub(crate) use downloader::download_registry;
 pub use downloader::{set_registry_downloader_for_testing, RegistryDownloader};
+pub(crate) use journal::{own_provenance, RELAYED_FOR};
 
 /// Read/write handle on the canonical registry document, backend-aware.
 ///
@@ -148,7 +151,8 @@ impl RegistryStore {
 
     /// Create the registry object; `false` when one already exists. A
     /// created document leaves no snapshot this command recalled standing
-    /// for the registry.
+    /// for the registry, and is recorded as a write that changed the whole
+    /// document.
     pub async fn create_if_absent(&self, content: &str) -> Result<bool, StorageError> {
         let created = self
             .backend
@@ -156,6 +160,20 @@ impl RegistryStore {
             .await?;
         if created {
             crate::cli::resolver::forget_recalled_registry();
+            match self.backend.download_text_versioned(&self.blob).await {
+                Ok(Some(written)) => {
+                    self.record_write(None, Ok(None), &written.version, content)
+                        .await
+                }
+                Ok(None) => eprintln!(
+                    "stado: the registry was created, but the record of who created it was not \
+                     stored: reading it back found no document"
+                ),
+                Err(error) => eprintln!(
+                    "stado: the registry was created, but the record of who created it was not \
+                     stored: its generation could not be read back ({error})"
+                ),
+            }
         }
         Ok(created)
     }
@@ -165,12 +183,14 @@ impl RegistryStore {
     /// authority is another host, the swap runs on that authority over SSH
     /// (`crate::cli::resolver::authority_compare_and_swap`), the channel the
     /// reads above use, so the swap itself never stands behind this host's
-    /// resolver. A swap that landed forgets the authority snapshot this
-    /// command recalled and brings this host's resolver to the store version
-    /// written (`crate::cli::resolver::follow_written`): this host's next
-    /// read takes that resolver first, so this is what lets a command read
-    /// what it wrote; on the authority it is also what every other host reads
-    /// next.
+    /// resolver; the authority's own swap records the write, under this
+    /// caller's provenance. A swap that landed here is recorded with the
+    /// paths it changed (`stado registry history`), forgets the authority
+    /// snapshot this command recalled and brings this host's resolver to the
+    /// store version written (`crate::cli::resolver::follow_written`): this
+    /// host's next read takes that resolver first, so this is what lets a
+    /// command read what it wrote; on the authority it is also what every
+    /// other host reads next.
     pub async fn compare_and_swap(
         &self,
         expected_version: &str,
@@ -185,10 +205,15 @@ impl RegistryStore {
                 return Ok(generation);
             }
         }
+        // Read before the swap, which is conditional on the same generation:
+        // when it lands, this is exactly the document it replaced.
+        let before = self.before_write(expected_version).await;
         let generation = self
             .backend
             .compare_and_swap_text(&self.blob, expected_version, content)
             .await?;
+        self.record_write(Some(expected_version), before, &generation, content)
+            .await;
         crate::cli::resolver::forget_recalled_registry();
         crate::cli::resolver::follow_written(&generation).await;
         Ok(generation)
@@ -210,12 +235,17 @@ impl RegistryStore {
         relative: &str,
         content: &str,
     ) -> Result<(String, bool), StorageError> {
-        let key = match self.blob.rsplit_once('/') {
-            Some((prefix, _)) => format!("{prefix}/{relative}"),
-            None => relative.to_string(),
-        };
+        let key = self.beside_key(relative);
         let created = self.backend.upload_text_if_absent(&key, content).await?;
         Ok((key, created))
+    }
+
+    /// The store key of `relative` beside the registry document.
+    fn beside_key(&self, relative: &str) -> String {
+        match self.blob.rsplit_once('/') {
+            Some((prefix, _)) => format!("{prefix}/{relative}"),
+            None => relative.to_string(),
+        }
     }
 }
 
