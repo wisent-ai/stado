@@ -100,3 +100,8 @@ The version bump gathers them into the release's own file and removes this one.
   (`market/earnings/vast/<host>/<day>.json`), and prints each day beside the host's measured cost
   of that day and the margin; a day Vast did not state is printed as not stated, never zero.
   Desktop's Registry screen runs it.
+- **`stado inference route audit`: routes that pay outside for a model the fleet serves:** a route
+  could send traffic to an outside provider for the very model a running deployment serves, and
+  nothing said so. The audit lists each such route or fallback with the deployment, its host and
+  the `route set` that makes the deployment the primary and keeps the outside provider as the
+  fallback; it writes nothing and exits non-zero on a finding. Desktop's Inference screen runs it.

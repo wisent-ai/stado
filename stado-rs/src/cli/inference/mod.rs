@@ -208,6 +208,15 @@ pub enum RouteCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Every route or fallback that pays an outside provider for a model a
+    /// running deployment of this fleet already serves, with the deployment
+    /// and the `route set` that makes it the primary and keeps the outside
+    /// provider as the first fallback. Reads the registry only; exits
+    /// non-zero when it finds one.
+    Audit {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
@@ -282,6 +291,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                 probe_bearer_role,
                 json,
             } => routes::show(repair, probe_bearer_role.as_deref(), json).await,
+            RouteCommands::Audit { json } => routes::audit(json).await,
         },
         InferenceCommands::Blockers { host, json } => process::blockers(&host, json).await,
         InferenceCommands::Release {

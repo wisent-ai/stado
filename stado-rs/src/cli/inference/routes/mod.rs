@@ -207,9 +207,11 @@ async fn remove_once(alias: &str, expected: &str, json_output: bool) -> Result<(
     .await
 }
 
+mod audit;
 mod commit;
 mod show;
 
+pub use audit::audit;
 pub use show::show;
 
 use commit::{commit_routes, RouteChange};

@@ -23,5 +23,7 @@ enum NativeInferenceOperations {
         .init(id: "inference-apply", title: "Apply a saved inference plan", path: ["inference", "apply"], hostPlacement: .none, fields: [
             .init(id: "plan-id", label: "Plan id the plan printed", required: true),
         ]),
+        .init(id: "inference-route-audit", title: "Routes that pay an outside provider for a model a running deployment serves",
+              path: ["inference", "route", "audit"], hostPlacement: .none, mutates: false, jsonOutput: false),
     ]
 }
