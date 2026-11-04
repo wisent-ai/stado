@@ -205,7 +205,7 @@ pub fn perform(
         let scratch = plan.scratch.clone();
         let checkout = plan.source_directory.clone();
         let kept = plan.cache.clone();
-        let resident_host = if surface == "cli" {
+        let resident = if surface == "cli" {
             services::migrate_host_unit(product, &runtime.home, &plan)?
         } else {
             None
@@ -213,23 +213,23 @@ pub fn perform(
         // From here the unit carries the candidate's command line: an
         // installation that stops before committing renders it again through
         // the executable still installed, which the unit goes on starting.
-        let installed_program = match resident_host {
+        let installed_program = match resident {
             Some(_) => Some(services::installed_binary(&plan, id)?),
             None => None,
         };
-        let admitted = match resident_host.as_deref() {
-            Some(resident) => services::admit_units(&plan, id, resident),
+        let admitted = match resident.as_ref() {
+            Some(resident) => services::admit_units(&plan, id, &resident.host),
             None => Ok(()),
         };
         let committed = admitted
             .and_then(|()| transaction::commit(&installing, id, surface, host, selected, plan));
-        let mut installed = match (committed, installed_program) {
+        let mut installed = match (committed, installed_program.as_deref()) {
             (Ok(installed), _) => installed,
             (Err(failed), Some(program)) => {
                 return Err(services::restored_after(
                     product,
                     &runtime.home,
-                    &program,
+                    program,
                     failed,
                 ))
             }
@@ -277,7 +277,7 @@ pub fn perform(
             id,
             surface,
             host,
-            resident_host: resident_host.as_deref(),
+            resident: resident.as_ref().zip(installed_program.as_deref()),
             recipe: selected,
             lock: &lock,
         }

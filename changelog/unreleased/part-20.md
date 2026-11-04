@@ -73,3 +73,9 @@ The version bump gathers them into the release's own file and removes this one.
   stands in a `stado serve start:` step past the longest that step took here, ensure says the
   step and what it waits on, restarts the unit once and ensures again; the wait for the
   resolver refuses a new process stuck again with its own step.
+- **An install of Stado starts a resident unit that serves nothing on the release it places:**
+  the install restarted its own unit through the candidate before placing it, which started the
+  release already installed, the one hung at start, so every install failed at that step and its
+  fix never reached the path the unit runs. A resident unit that serves none of its declared
+  ports is now left as it is until the candidate is placed, then started on it, and must serve.
+  `tests/install/resident/resident_unit.mjs` stalls the unit with SIGSTOP before an install.

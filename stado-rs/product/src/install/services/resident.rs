@@ -6,7 +6,10 @@
 //! another may carry an option the started one refuses, and then it restarts
 //! without end.
 
-use crate::{catalog::text, common::checked};
+use crate::{
+    catalog::text,
+    common::{capture, checked},
+};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -43,10 +46,8 @@ fn resident_label(product: &Value, home: &Path) -> Result<Option<String>> {
     Ok(None)
 }
 
-/// Render `label` through `program`: the host it names for itself, then its
-/// own `service ensure`, which writes the unit from that executable's catalog
-/// and the machine's record and restarts it. Returns the host.
-fn render(program: &Path, id: &str, label: &str, reason: &str) -> Result<String> {
+/// The host `program` names for itself.
+fn host_of(program: &Path, label: &str) -> Result<String> {
     let self_host = checked(std::process::Command::new(program).args([
         "registry",
         "self",
@@ -61,6 +62,13 @@ fn render(program: &Path, id: &str, label: &str, reason: &str) -> Result<String>
             program.display()
         );
     }
+    Ok(host.to_owned())
+}
+
+/// Render `label` on `host` through `program`: its own `service ensure`,
+/// which writes the unit from that executable's catalog and the machine's
+/// record and restarts it.
+fn render_on(program: &Path, id: &str, label: &str, host: &str, reason: &str) -> Result<()> {
     let outcome = checked(std::process::Command::new(program).args([
         "service", "ensure", id, "--host", host, "--reason", reason, "--json",
     ]))?;
@@ -69,29 +77,106 @@ fn render(program: &Path, id: &str, label: &str, reason: &str) -> Result<String>
         program.display(),
         String::from_utf8_lossy(&outcome.stdout).trim()
     );
-    Ok(host.to_owned())
+    Ok(())
+}
+
+/// Render `label` through `program` on the host it names for itself.
+/// Returns the host.
+fn render(program: &Path, id: &str, label: &str, reason: &str) -> Result<String> {
+    let host = host_of(program, label)?;
+    render_on(program, id, label, &host, reason)?;
+    Ok(host)
+}
+
+/// Why the resident unit serves none of its declared ports now, read through
+/// `program`'s `service serving` (without waiting); `None` while every
+/// declared port is served.
+fn not_serving(program: &Path, id: &str, host: &str) -> Result<Option<String>> {
+    let output = capture(std::process::Command::new(program).args([
+        "service", "serving", id, "--host", host, "--json",
+    ]))?;
+    let rows: Value = serde_json::from_slice(&output.stdout).with_context(|| {
+        format!(
+            "{id} on {host}: `service serving` through {} answered no unit rows: {}",
+            program.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+    })?;
+    let rows = rows
+        .as_array()
+        .with_context(|| format!("{id} on {host}: `service serving` answered {rows}, not unit rows"))?;
+    if !rows.is_empty() && rows.iter().all(|row| row["serving"] == "serving") {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::to_string(rows)?))
+}
+
+/// The resident unit an installation carries to the candidate release.
+pub struct Resident {
+    pub host: String,
+    label: String,
+    /// Set when the unit served nothing before the installation: it was not
+    /// rendered through the candidate while the predecessor still occupied
+    /// the installed path, because restarting it there starts the
+    /// predecessor again, the very executable that does not serve. It is
+    /// rendered through the installed release once that is placed
+    /// ([`render_placed`]).
+    pub stalled: Option<String>,
 }
 
 /// Reconcile a resident product's native unit through the prepared candidate
 /// while the predecessor still occupies its installed path. The candidate's
 /// own catalog, rather than the installed binary's old catalog, owns argv.
+///
+/// A unit that serves none of its declared ports is left as it is: its
+/// restart would start the predecessor at the installed path again. An
+/// install of Stado whose own unit hung at start (the predecessor waited on
+/// a Tailscale client that never answered) failed at this step every time,
+/// and the fix it carried never reached the path the unit starts.
 pub fn migrate_host_unit(
     product: &Value,
     home: &Path,
     plan: &crate::install::plan::Prepared,
-) -> Result<Option<String>> {
+) -> Result<Option<Resident>> {
     let id = text(product, "id")?;
     let Some(label) = resident_label(product, home)? else {
         return Ok(None);
     };
     let candidate = placement(plan, id)?.source.as_path();
-    render(
+    let host = host_of(candidate, &label)?;
+    if let Some(observed) = not_serving(candidate, id, &host)? {
+        eprintln!(
+            "{id}: {label} on {host} serves none of its declared ports ({observed}); it is rendered \
+             through the installed release once that is placed, not restarted onto the release it runs now"
+        );
+        return Ok(Some(Resident { host, label, stalled: Some(observed) }));
+    }
+    render_on(
         candidate,
         id,
         &label,
+        &host,
         "converge the product unit to the candidate release command line",
+    )?;
+    Ok(Some(Resident { host, label, stalled: None }))
+}
+
+/// Render a resident unit that served nothing before the installation
+/// through `program`, the release now placed at the unit's installed path;
+/// its `service ensure` restarts the unit onto it. A unit that was migrated
+/// before placement is left to its own handover.
+pub fn render_placed(product: &Value, resident: &Resident, program: &Path) -> Result<()> {
+    if resident.stalled.is_none() {
+        return Ok(());
+    }
+    let id = text(product, "id")?;
+    render_on(
+        program,
+        id,
+        &resident.label,
+        &resident.host,
+        "start the product unit on the installed release; it served nothing on the release it replaced",
     )
-    .map(Some)
 }
 
 /// Render the resident unit again through `program`, the executable now at

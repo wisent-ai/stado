@@ -17,7 +17,8 @@ pub(in crate::install) struct Activation<'a> {
     pub id: &'a str,
     pub surface: &'a str,
     pub host: Option<&'a str>,
-    pub resident_host: Option<&'a str>,
+    /// The resident unit and the path its release is placed at.
+    pub resident: Option<(&'a super::Resident, &'a Path)>,
     pub recipe: &'a Value,
     pub lock: &'a Path,
 }
@@ -35,8 +36,8 @@ impl Activation<'_> {
         let writer = match after {
             Ok(writer) => writer,
             Err(cause) => {
-                return match self.resident_host {
-                    Some(host) => self.restore(host, cause, installed),
+                return match self.resident {
+                    Some((resident, _)) => self.restore(&resident.host, cause, installed),
                     None => Err(cause),
                 };
             }
@@ -49,10 +50,14 @@ impl Activation<'_> {
             installed.extra.insert("restarted".into(), restarted);
             installed.save(self.runtime)?;
         }
-        let Some(host) = self.resident_host else {
+        let Some((resident, placed)) = self.resident else {
             return Ok(writer);
         };
-        match self.await_serving(host) {
+        let host = resident.host.as_str();
+        // A unit that served nothing before this installation was left on the
+        // release it ran; it is started on the one just placed here.
+        let rendered = super::render_placed(self.product, resident, placed);
+        match rendered.and_then(|()| self.await_serving(host)) {
             Ok(observed) => {
                 installed
                     .extra

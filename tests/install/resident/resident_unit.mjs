@@ -113,9 +113,34 @@ try {
   assert.ok(Array.isArray(restoredServing) && restoredServing.length && restoredServing.every(row => row.serving === 'serving'),
     'the restored resident process does not own every declared port');
   report.cases.push({ case: 'rolled-back-and-rendered', rolled, serving: restoredServing });
-  succeeded(run(program, ['product', '--workspace', workspace, 'install', 'stado',
-    '--surface', 'cli', '--source-commit', commit]));
+  // A resident unit that serves nothing when an install begins: its process
+  // is stopped with SIGSTOP, so launchd or systemd still calls it running
+  // while no port answers. Restarting it before placement would start the
+  // release it already runs; the install must leave it, place the candidate,
+  // and only then start the unit on the placed release, which must serve.
+  const stalledUnit = JSON.parse(succeeded(run(program, ['service', 'unit', 'show',
+    'com.wisent.stado', '--host', host, '--json'])));
+  assert.ok(stalledUnit.pid, 'the resident unit runs no process to stall');
+  succeeded(run('kill', ['-STOP', String(stalledUnit.pid)]));
+  const stalledInstall = run(program, ['product', '--workspace', workspace, 'install', 'stado',
+    '--surface', 'cli', '--source-commit', commit]);
+  run('kill', ['-CONT', String(stalledUnit.pid)]);
+  succeeded(stalledInstall);
   assert.equal(digest(readFileSync(installed)), report.after_sha256, 'the second install did not place the candidate again');
+  const said = stalledInstall.stderr + stalledInstall.stdout;
+  assert.match(said, /serves none of its declared ports/,
+    'the install did not say it left a unit that served nothing');
+  assert.ok(said.includes(`rendered com.wisent.stado on ${host} through ${installed}`),
+    'the install did not start the unit through the placed release');
+  const restarted = JSON.parse(succeeded(run(program, ['service', 'unit', 'show',
+    'com.wisent.stado', '--host', host, '--json'])));
+  assert.notEqual(String(restarted.pid), String(stalledUnit.pid),
+    'the stalled process still runs the unit after the install');
+  const restartedServing = JSON.parse(succeeded(run(program, ['service', 'serving', 'stado', '--host', host, '--wait', '--json'])));
+  assert.ok(Array.isArray(restartedServing) && restartedServing.length && restartedServing.every(row => row.serving === 'serving'),
+    'the unit started on the placed release does not serve');
+  report.cases.push({ case: 'not-serving-unit-started-on-the-placed-release',
+    stalled_pid: stalledUnit.pid, pid: restarted.pid, serving: restartedServing });
 
   // A unit no install wrote: the retired option is put back into the unit
   // file by hand and the unit reloaded, so the installed executable is

@@ -2,7 +2,8 @@ mod activation;
 mod resident;
 pub(super) use activation::Activation;
 pub use resident::{
-    admit_units, installed_binary, migrate_host_unit, restore_host_unit, restored_after,
+    admit_units, installed_binary, migrate_host_unit, render_placed, restore_host_unit,
+    restored_after, Resident,
 };
 
 use crate::{
