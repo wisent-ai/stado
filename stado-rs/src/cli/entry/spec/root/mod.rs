@@ -6,6 +6,7 @@
 //! stands, so both the accepted command lines and the order they are listed
 //! in are the ones the single enum produced.
 
+pub mod capabilities;
 pub mod installation;
 pub mod planes;
 pub mod platform;

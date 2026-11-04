@@ -1,8 +1,7 @@
 //! Where the installation, account and local-upkeep verbs land.
 
-use crate::cli::entry::spec::root::installation::{
-    AttestationAction, CapabilityAction, InstallationCommands,
-};
+use crate::cli::entry::spec::root::capabilities::{AttestationAction, CapabilityAction};
+use crate::cli::entry::spec::root::installation::InstallationCommands;
 use crate::cli::setup::onboarding;
 use crate::cli::work::autonomy;
 use crate::cli::*;
@@ -20,6 +19,9 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
             action,
         } => match action {
             None => capabilities::run(capability.as_deref(), json),
+            Some(CapabilityAction::List { capability, json }) => {
+                capabilities::run(capability.as_deref(), json)
+            }
             Some(CapabilityAction::Resolve {
                 family,
                 consumer,

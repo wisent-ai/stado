@@ -10,8 +10,10 @@ import Foundation
 /// does not classify `config validate` as a read.
 enum NativeComputeProviderOperations {
     static let all: [NativeCapabilityOperation] = [
-        .init(id: "capabilities", title: "Read capability families and every provider's support",
-            path: ["capabilities"], hostPlacement: .none, mutates: false),
+        .init(id: "capabilities", title: "Read capability families and every provider's support, each family's order, proofs and what served whom",
+            path: ["capabilities", "list"], hostPlacement: .none, fields: [
+                .init(id: "family", label: "Family (blank: every family)"),
+            ], mutates: false),
         .init(id: "capabilities-resolve", title: "Resolve the alternative that answers a product's need (inference, secrets, browser-automation, mail, transcripts, image, search), naming every one that did not",
             path: ["capabilities", "resolve"], hostPlacement: .none, fields: [
                 .init(id: "family", label: "Family", required: true, choices: ["inference", "secrets", "browser-automation", "mail", "transcripts", "image", "search"], initial: "inference"),

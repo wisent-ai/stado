@@ -74,3 +74,8 @@ The version bump gathers them into the release's own file and removes this one.
   device alone, and the agent withdraws only that board from admission; GPU jobs stay eligible on
   the others. `stado inference blockers` prints each process's board. A deployment planned before
   boards were named still holds every board.
+- **`stado capabilities list [FAMILY] [--json]`:** the capability catalog had only its bare form,
+  so `stado capabilities list` was read as a family named `list` and refused with `unknown
+  capability "list"`. The listing now answers its own `list` verb beside `resolve`, `call`,
+  `select` and `attestation`, printing exactly what the bare command prints; a family the catalog
+  does not declare is refused under both forms naming every family, and nothing is written.

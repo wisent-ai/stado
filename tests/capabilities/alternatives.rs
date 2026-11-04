@@ -367,13 +367,18 @@ fn a_down_first_alternative_is_named_and_the_next_one_serves() {
     );
     assert!(!call(&home, &request).status.success());
 
-    // What is not a request is refused before any alternative is asked.
+    // What is not a request is refused before any alternative is asked,
+    // naming the family's request it is not.
     let malformed = home.run_with(
         &["capabilities", "call", "inference", "--consumer", CONSUMER],
         Some("not json"),
     );
     assert!(!malformed.status.success());
-    assert!(String::from_utf8_lossy(&malformed.stderr).contains("chat-completions request"));
+    assert!(
+        String::from_utf8_lossy(&malformed.stderr).contains("standard input is not one JSON inference request"),
+        "{}",
+        String::from_utf8_lossy(&malformed.stderr)
+    );
     let secrets = home.run_with(
         &["capabilities", "call", "secrets", "--consumer", CONSUMER],
         Some(&request.to_string()),

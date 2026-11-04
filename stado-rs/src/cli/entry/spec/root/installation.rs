@@ -3,6 +3,7 @@
 
 use clap::Subcommand;
 
+use super::capabilities::CapabilityAction;
 use crate::cli::work::autonomy;
 use crate::cli::*;
 
@@ -24,8 +25,9 @@ pub(crate) enum InstallationCommands {
         json: bool,
     },
 
-    /// List Stado capability families, variants, providers and active selections;
-    /// resolve the alternative that answers a product's need, or select a family's order.
+    /// List Stado capability families, variants, providers and active selections
+    /// (bare or `list`); resolve the alternative that answers a product's need,
+    /// or select a family's order.
     #[command(args_conflicts_with_subcommands = true)]
     Capabilities {
         /// Restrict output to one capability family.
@@ -96,107 +98,6 @@ pub(crate) enum InstallationCommands {
     /// what was published; `serve` is the public status page that reads it.
     #[command(name = "availability", subcommand)]
     PublicStatus(PublicStatusCommands),
-}
-
-/// What a product does with a family of alternatives: ask which one answers,
-/// hand it a request, choose the order they are tried in, or answer a
-/// request in place of a product.
-#[derive(Subcommand)]
-pub(crate) enum CapabilityAction {
-    /// The first alternative of FAMILY, in the selected order, proven to
-    /// answer CONSUMER, with every one before it that did not; exits with the
-    /// infra_down code and names each alternative's product, route and cause
-    /// when none answers. A proof stands for the refresh interval this host's
-    /// resolver declares; `--failed` proves the named alternative again now.
-    Resolve {
-        /// The family: inference, secrets, browser-automation, mail or transcripts.
-        family: String,
-        /// The product asking, as the service directory names its consumer.
-        #[arg(long)]
-        consumer: String,
-        /// An alternative that refused the caller after it was handed out;
-        /// proven again before it is handed out once more. Repeat for several.
-        #[arg(long = "failed")]
-        failed: Vec<String>,
-        /// Print the answer, or the refusal's details, as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Send the request on standard input to the first alternative of FAMILY
-    /// that answers it, and print that answer: for inference an OpenAI
-    /// chat-completions request; for image {"plan", "inputs", "output"}, an
-    /// Obraz edit plan; for search {"query", "count"}. The caller names no
-    /// gateway, key or alternative: an alternative that cannot answer this
-    /// request is named with its cause and the next one is asked; exits with
-    /// the infra_down code naming every one when none answers.
-    Call {
-        /// The family: inference, image or search.
-        family: String,
-        /// The product asking, as the service directory names its consumer.
-        #[arg(long)]
-        consumer: String,
-        /// Print the resolution beside the answer, and a refusal, as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Statements that answer one exact request in place of a product, for
-    /// the attestation alternative: the requests `call` kept, read, answered
-    /// and withdrawn.
-    #[command(subcommand)]
-    Attestation(AttestationAction),
-    /// Write FAMILY's order to `capabilities.<family>.order` in the config
-    /// file; each name must be one of the family's alternatives, once.
-    Select {
-        /// The family whose order is chosen.
-        family: String,
-        /// The alternatives in the order they are tried, comma-separated or repeated.
-        #[arg(long, value_delimiter = ',', required = true)]
-        order: Vec<String>,
-    },
-}
-
-/// The attestation alternative's requests and statements.
-#[derive(Subcommand)]
-pub(crate) enum AttestationAction {
-    /// Every request of CONSUMER kept for FAMILY, and whether a statement
-    /// answers it.
-    List {
-        family: String,
-        #[arg(long)]
-        consumer: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// The request as it was asked, and its statement when one is recorded.
-    Show {
-        family: String,
-        #[arg(long)]
-        consumer: String,
-        /// The request's SHA-256, or the first characters of exactly one.
-        request: String,
-    },
-    /// Record the answer on standard input as the statement answering the
-    /// request. For inference: for a request that makes the answer call one
-    /// function, the JSON object of its arguments; else the answer's text.
-    /// For image and search: the answer as the family's alternative gives it.
-    Record {
-        family: String,
-        #[arg(long)]
-        consumer: String,
-        /// The request's SHA-256, or the first characters of exactly one.
-        request: String,
-        /// What was checked to give this answer; recorded beside it.
-        #[arg(long)]
-        checked: String,
-    },
-    /// Withdraw the statement answering the request; the request is kept.
-    Revoke {
-        family: String,
-        #[arg(long)]
-        consumer: String,
-        /// The request's SHA-256, or the first characters of exactly one.
-        request: String,
-    },
 }
 
 /// The published component status: asked, read, and served as a page.
