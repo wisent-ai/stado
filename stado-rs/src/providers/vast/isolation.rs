@@ -28,6 +28,11 @@ const BRIDGE: &str = "docker0";
 /// NAT: the host's local networks and every machine on them.
 const PRIVATE_RANGES: [&str; 3] = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"];
 
+/// The iptables program by absolute path, so the sudoers line that grants
+/// reading the chain names exactly the program run (Debian and Ubuntu
+/// install it here).
+const IPTABLES: &str = "/usr/sbin/iptables";
+
 /// What a renter's container could reach on this host, and whether that
 /// refuses listing.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -178,8 +183,12 @@ pub fn measure() -> Isolation {
         )),
         Err(error) => isolation.unread.push(format!("ss could not run: {error}")),
     }
-    match std::process::Command::new("iptables")
-        .args(["-S", "DOCKER-USER"])
+    // The chain is root's to read and the agent is not root. It is read
+    // through passwordless sudo for this one fixed command, the way `stado
+    // host reboot` runs its one command: a host grants exactly that line and
+    // nothing wider. Without the grant the reading is unread, naming it.
+    match std::process::Command::new("sudo")
+        .args(["-n", IPTABLES, "-S", "DOCKER-USER"])
         .output()
     {
         Ok(output) if output.status.success() => {
@@ -187,14 +196,14 @@ pub fn measure() -> Isolation {
                 undropped_ranges(&String::from_utf8_lossy(&output.stdout));
         }
         Ok(output) => isolation.unread.push(format!(
-            "iptables -S DOCKER-USER exited {}: {} (it needs root; run the check as the user \
-             the marketplace daemon runs as)",
+            "sudo -n {IPTABLES} -S DOCKER-USER exited {}: {}; grant the agent's user exactly this \
+             command with the sudoers line `<user> ALL=(root) NOPASSWD: {IPTABLES} -S DOCKER-USER`",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         )),
         Err(error) => isolation
             .unread
-            .push(format!("iptables could not run: {error}")),
+            .push(format!("sudo could not run: {error}")),
     }
     isolation
 }
