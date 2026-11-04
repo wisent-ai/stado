@@ -20,7 +20,7 @@ fn process_rows(stdout: &str) -> Vec<Value> {
         .lines()
         .filter_map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
-            let [marker, identity, pid, start_ticks, used_mib, owner, command, cgroup] =
+            let [marker, identity, pid, start_ticks, used_mib, owner, command, cgroup, board] =
                 fields.as_slice()
             else {
                 return None;
@@ -36,6 +36,9 @@ fn process_rows(stdout: &str) -> Vec<Value> {
                 "owner": owner,
                 "command": command,
                 "cgroup": cgroup,
+                // The board the driver says the process runs on; null when
+                // the driver printed none for it.
+                "gpu_uuid": (!board.is_empty()).then_some(*board),
             }))
         })
         .collect()

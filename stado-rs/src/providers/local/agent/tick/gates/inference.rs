@@ -144,11 +144,50 @@ pub(crate) async fn before_admission(
             Value::String(reservation.gpu_mode.to_string()),
         );
         if reservation.gpu_mode == crate::inference::schema::GpuMode::Exclusive {
-            used_vram = total_vram_gb;
-            log_fn(&format!(
-                "exclusive inference reservation '{}': GPU claims disabled; CPU-only claims remain eligible",
-                reservation.deployment
-            ));
+            match reservation.gpu.as_deref() {
+                // A reservation that names its board withdraws that board
+                // alone: the driver's other boards stay admissible, so one
+                // engine no longer empties a host of every board it has.
+                Some(board) if cards.iter().any(|card| card.uuid == board) => {
+                    cards.retain(|card| card.uuid != board);
+                    agent_diag.insert("inference_gpu".into(), Value::from(board));
+                    log_fn(&format!(
+                        "exclusive inference reservation '{}' holds board {board}; GPU claims \
+                         stay eligible on the host's other {} board(s)",
+                        reservation.deployment,
+                        cards.len()
+                    ));
+                    if cards.is_empty() {
+                        used_vram = total_vram_gb;
+                    }
+                }
+                // A named board the driver does not report cannot be told
+                // apart from the others, so every board stays held, and why
+                // is published.
+                Some(board) => {
+                    used_vram = total_vram_gb;
+                    agent_diag.insert(
+                        "inference_gpu_error".into(),
+                        Value::from(format!(
+                            "the reservation names board {board}, which the driver does not \
+                             report; every board stays held"
+                        )),
+                    );
+                    log_fn(&format!(
+                        "exclusive inference reservation '{}' names board {board}, which the \
+                         driver does not report: GPU claims disabled",
+                        reservation.deployment
+                    ));
+                }
+                None => {
+                    used_vram = total_vram_gb;
+                    log_fn(&format!(
+                        "exclusive inference reservation '{}' names no board: GPU claims \
+                         disabled; CPU-only claims remain eligible",
+                        reservation.deployment
+                    ));
+                }
+            }
         } else {
             let queued_job = queued_gpu_job_for_inference(
                 store,

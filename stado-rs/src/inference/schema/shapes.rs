@@ -26,6 +26,12 @@ pub struct Resources {
     pub kv_cache_memory_gb: Option<u64>,
     #[serde(default)]
     pub cache_dir: Option<String>,
+    /// The board the engine runs on, by the driver's UUID (`GPU-…`), chosen
+    /// at plan time from the host's measured free boards. None for a
+    /// deployment planned before boards were named, which holds every board
+    /// of its host, as it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

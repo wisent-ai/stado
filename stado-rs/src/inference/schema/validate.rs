@@ -23,6 +23,7 @@ pub fn validate(document: &Value) -> Result<(), String> {
     let mut names = BTreeSet::new();
     let mut running_names = BTreeSet::new();
     let mut ports = BTreeSet::new();
+    let mut boards = BTreeSet::new();
     for deployment in &registry.deployments {
         let location = format!("registry.inference.deployments[{}]", names.len());
         if !identifier(&deployment.name) || !names.insert(deployment.name.as_str()) {
@@ -101,6 +102,29 @@ pub fn validate(document: &Value) -> Result<(), String> {
             return Err(format!(
                 "{location}.resources.cache_dir: must be a safe absolute path"
             ));
+        }
+        if let Some(gpu) = deployment.resources.gpu.as_deref() {
+            // The driver's own UUID form, `GPU-` and hex groups: it is
+            // passed to Docker's device request and matched against the
+            // driver's reading, so anything else could name no board.
+            let uuid = gpu.strip_prefix("GPU-").is_some_and(|rest| {
+                !rest.is_empty() && rest.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+            });
+            if !uuid {
+                return Err(format!(
+                    "{location}.resources.gpu: {gpu:?} is not a GPU UUID as nvidia-smi prints \
+                     it (GPU-<hex>)"
+                ));
+            }
+            if deployment.desired_state == STATE_RUNNING
+                && !boards.insert((deployment.target.as_str(), gpu))
+            {
+                return Err(format!(
+                    "{location}.resources.gpu: {gpu} on {} is already another running \
+                     deployment's board",
+                    deployment.target
+                ));
+            }
         }
         let endpoint = &deployment.endpoint;
         let visibility = Visibility::named(&endpoint.visibility).ok_or_else(|| {

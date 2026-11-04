@@ -3,10 +3,11 @@ if ! command -v nvidia-smi >/dev/null; then
   printf 'ERROR\tnvidia-smi missing\n'
   exit 1
 fi
-nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits |
-while IFS=, read -r raw_pid raw_used; do
+nvidia-smi --query-compute-apps=pid,used_memory,gpu_uuid --format=csv,noheader,nounits |
+while IFS=, read -r raw_pid raw_used raw_board; do
   pid="${raw_pid//[[:space:]]/}"
   used_mib="${raw_used//[[:space:]]/}"
+  board="${raw_board//[[:space:]]/}"
   case "$pid" in ''|*[!0-9]*) continue ;; esac
   [ -r "/proc/$pid/stat" ] || continue
   stat_tail=$(sed 's/^.*) //' "/proc/$pid/stat") || continue
@@ -17,6 +18,6 @@ while IFS=, read -r raw_pid raw_used; do
   command=$(tr '\000\t\r\n' '    ' < "/proc/$pid/cmdline" 2>/dev/null || true)
   [ -n "$command" ] || command=$(cat "/proc/$pid/comm" 2>/dev/null || printf unknown)
   cgroup=$(tr '\t\r\n' '   ' < "/proc/$pid/cgroup" 2>/dev/null || true)
-  printf 'PROCESS\t%s:%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$pid" "$start_ticks" "$pid" "$start_ticks" "$used_mib" "$owner" "$command" "$cgroup"
+  printf 'PROCESS\t%s:%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$pid" "$start_ticks" "$pid" "$start_ticks" "$used_mib" "$owner" "$command" "$cgroup" "$board"
 done

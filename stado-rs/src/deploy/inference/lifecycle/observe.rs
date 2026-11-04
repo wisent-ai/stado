@@ -25,6 +25,7 @@ printf 'RAM\t'; free -b | grep '^Mem:'
 if ! command -v ip >/dev/null; then printf 'ERROR\tip (iproute2) missing, so the host addresses cannot be read\n'; exit 1; fi
 printf 'ADDRESSES\t'; ip -4 -o addr show scope global up | while read -r _ _ _ cidr _; do printf '%s ' "${cidr%/*}"; done; printf '\n'
 printf 'PROCESSES\t'; nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader || true
+printf 'BOARDS\t'; nvidia-smi --query-gpu=uuid,memory.total,memory.free --format=csv,noheader,nounits | while IFS= read -r board; do printf '%s;' "$board"; done; printf '\n'
 if ! command -v docker >/dev/null; then printf 'ERROR\tdocker missing\n'; exit 1; fi
 printf 'DOCKER\t'; docker version --format '{{.Server.Version}}'
 runtimes=$(docker info --format '{{json .Runtimes}}')

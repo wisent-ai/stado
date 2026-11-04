@@ -39,7 +39,7 @@ pub async fn blockers(host: &str, json_output: bool) -> Result<(), CmdError> {
     // The identity is what `release` takes, so a row without one is refused
     // rather than printed as "unknown"; the other columns are display only
     // and say when they were not reported.
-    println!("IDENTITY\tVRAM_MIB\tOWNER\tCOMMAND");
+    println!("IDENTITY\tBOARD\tVRAM_MIB\tOWNER\tCOMMAND");
     for process in processes {
         let Some(identity) = process.get("identity").and_then(Value::as_str) else {
             return Err(CmdError::click(format!(
@@ -48,7 +48,8 @@ pub async fn blockers(host: &str, json_output: bool) -> Result<(), CmdError> {
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         };
         println!(
-            "{identity}\t{}\t{}\t{}",
+            "{identity}\t{}\t{}\t{}\t{}",
+            field(&process["gpu_uuid"]),
             field(&process["used_mib"]),
             field(&process["owner"]),
             field(&process["command"])

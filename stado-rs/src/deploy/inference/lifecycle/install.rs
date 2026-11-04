@@ -55,6 +55,15 @@ pub async fn install(
         revision: deployment.model.revision.clone(),
         endpoint_host: deployment.endpoint.host.clone(),
         port: deployment.endpoint.port,
+        gpu: deployment.resources.gpu.clone(),
+    };
+    // The engine sees only the board it was planned on; a deployment that
+    // names none sees every board, as it always did. Docker's device request
+    // takes the driver UUID verbatim (`device=GPU-…`), quoted for the shell
+    // because the value carries `=` and Docker's own `"` quoting.
+    let gpus = match deployment.resources.gpu.as_deref() {
+        Some(uuid) => shlex_quote(&format!("\"device={uuid}\"")),
+        None => "all".to_string(),
     };
     let reservation =
         shlex_quote(&STANDARD.encode(
@@ -123,7 +132,7 @@ systemctl --user disable --now "$unit" || true
 rm -f "$HOME/.config/systemd/user/$unit"
 systemctl --user daemon-reload || true
 docker rm -f "stado-inference-$name" || true
-container=$(docker run --detach --restart unless-stopped --name "stado-inference-$name" --gpus all --network host --ipc host --env-file "$root/runtime.env" -v {cache_mount} {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len}{kv_cache_argument} --enable-auto-tool-choice --tool-call-parser hermes)
+container=$(docker run --detach --restart unless-stopped --name "stado-inference-$name" --gpus {gpus} --network host --ipc host --env-file "$root/runtime.env" -v {cache_mount} {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len}{kv_cache_argument} --enable-auto-tool-choice --tool-call-parser hermes)
 printf 'CONTAINER\t%s\n' "$container"
 printf 'STATUS\tstarted\n'
 "#,
@@ -153,6 +162,7 @@ pub async fn update_reservation(
         revision: deployment.model.revision.clone(),
         endpoint_host: deployment.endpoint.host.clone(),
         port: deployment.endpoint.port,
+        gpu: deployment.resources.gpu.clone(),
     };
     let reservation =
         shlex_quote(&STANDARD.encode(

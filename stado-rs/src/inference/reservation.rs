@@ -12,6 +12,10 @@ pub struct Reservation {
     pub revision: String,
     pub endpoint_host: String,
     pub port: u16,
+    /// The board the engine holds, by driver UUID; None for a reservation
+    /// that names none, which holds every board of the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<String>,
 }
 
 /// `~/.stado/inference/reservation.json` under the home every Stado file is

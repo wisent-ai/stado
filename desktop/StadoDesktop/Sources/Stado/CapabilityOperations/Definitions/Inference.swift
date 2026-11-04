@@ -14,6 +14,7 @@ enum NativeInferenceOperations {
             .init(id: "revision", label: "Immutable model commit SHA", option: "--revision", required: true),
             .init(id: "port", label: "Endpoint port", option: "--port", required: true),
             .init(id: "visibility", label: "Network the endpoint binds on: lan needs no outside provider, tailscale binds the tailnet address", option: "--visibility", required: true, choices: ["lan", "tailscale"], initial: "lan"),
+            .init(id: "gpu", label: "GPU board UUID (GPU-…, as blockers prints it; blank takes the board with the most free memory)", option: "--gpu"),
             .init(id: "max-model-len", label: "Longest context served", option: "--max-model-len", required: true),
             .init(id: "gpu-mode", label: "GPU mode", option: "--gpu-mode", required: true, choices: ["exclusive", "yieldable"], initial: "exclusive"),
             .init(id: "kv-cache-memory-gb", label: "Fixed KV-cache GiB (blank uses the image policy)", option: "--kv-cache-memory-gb"),

@@ -37,6 +37,12 @@ pub enum InferenceCommands {
         /// the host's tailnet address.
         #[arg(long, value_enum, default_value_t = crate::inference::schema::Visibility::Lan)]
         visibility: crate::inference::schema::Visibility,
+        /// The GPU board the engine runs on, by the driver's UUID (`GPU-…`,
+        /// as `stado inference blockers` prints it); omit it to take the board
+        /// with the most free memory. The host's other boards stay admissible
+        /// for GPU jobs and rentals.
+        #[arg(long)]
+        gpu: Option<String>,
         /// Longest context the model is served with.
         #[arg(long)]
         max_model_len: u64,
@@ -215,6 +221,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
             gpu_mode,
             port,
             visibility,
+            gpu,
             max_model_len,
             kv_cache_memory_gb,
             cache_dir,
@@ -229,6 +236,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                 gpu_mode,
                 port,
                 visibility,
+                gpu,
                 max_model_len,
                 kv_cache_memory_gb,
                 cache_dir,

@@ -67,3 +67,10 @@ The version bump gathers them into the release's own file and removes this one.
   `last_changed`, the newest recorded registry write that changed the declaration (account, host,
   agent session, time), or say it was never recorded; Desktop's Public origin row shows it as
   Last changed by.
+- **An inference deployment holds one board, not the whole host:** a deployment named no board, its
+  container saw every GPU, and an exclusive reservation set the host's free memory to zero, so a
+  two-board host lost its second board to one engine. `stado inference plan` now names the board
+  (`--gpu GPU-<uuid>`, or the one with the most free memory), the container is started on that
+  device alone, and the agent withdraws only that board from admission; GPU jobs stay eligible on
+  the others. `stado inference blockers` prints each process's board. A deployment planned before
+  boards were named still holds every board.

@@ -90,6 +90,54 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
             options.host
         )));
     }
+    // The board the engine runs on, by the driver's UUID: the one --gpu
+    // names, else the board with the most free memory now. Naming it is
+    // what lets the host's other boards stay admissible for GPU jobs and
+    // rentals while the deployment holds this one.
+    let boards_line = field(&inventory, "BOARDS").ok_or_else(|| {
+        CmdError::click(format!(
+            "the inventory of {} printed no BOARDS line, so its GPU boards are unknown: {inventory}",
+            options.host
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let boards = crate::providers::local::helpers::gpu::inventory::parse_gpu_cards(
+        &boards_line.replace(';', "\n"),
+    )
+    .map_err(|cause| {
+        CmdError::click(format!(
+            "{}'s GPU boards cannot be read: {cause}",
+            options.host
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let board = match options.gpu.as_deref() {
+        Some(asked) => boards
+            .iter()
+            .find(|board| board.uuid == asked)
+            .ok_or_else(|| {
+                CmdError::refused(format!(
+                    "{} has no GPU board {asked}; its boards are {}",
+                    options.host,
+                    boards
+                        .iter()
+                        .map(|board| board.uuid.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })?,
+        None => boards
+            .iter()
+            .max_by_key(|board| board.free_vram_gb)
+            .ok_or_else(|| {
+                CmdError::refused(format!(
+                    "{} reports no GPU board, so no inference engine can be placed on it",
+                    options.host
+                ))
+            })?,
+    }
+    .uuid
+    .clone();
     let deployment = schema::Deployment {
         name: options.name,
         target: options.host,
@@ -107,6 +155,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
             max_model_len: options.max_model_len,
             kv_cache_memory_gb: options.kv_cache_memory_gb,
             cache_dir: options.cache_dir,
+            gpu: Some(board),
         },
         endpoint: schema::Endpoint {
             host: endpoint_host,
