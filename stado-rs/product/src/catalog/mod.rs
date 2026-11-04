@@ -14,7 +14,7 @@ pub use types::{
     list_field, DeclaredKeychain, Dependency, Family, RecipeKind, Visibility, FEATURES,
 };
 pub use validation::submit::{policy as submit_policy, Criticality, SubmitPolicy};
-pub use validation::validate;
+pub use validation::{validate, InvalidCatalog};
 
 /// The authority at the root of the Stado repository, compiled into the binary.
 pub const EMBEDDED: &str = include_str!("../../../../catalog/products.yml");

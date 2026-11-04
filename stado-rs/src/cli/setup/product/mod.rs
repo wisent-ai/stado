@@ -230,18 +230,23 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
 /// installation bound to another host, and a source commit no canonical
 /// branch carries, are the request refusing itself; a build of a committed
 /// manifest its own Cargo.lock does not cover, a repository with no canonical
-/// checkout, and a catalog an installation was given that its checkout has
-/// not committed, are the declared state refusing, which no retry
+/// checkout, a catalog an installation was given that its checkout has not
+/// committed, and a catalog whose declarations do not hold (a product lacking
+/// a field it must declare), are the declared state refusing, which no retry
 /// changes. A child (`stado credentials get` reading the signing credential
 /// from a Skarbiec that does not answer) that exited with the fleet's retry
 /// exit code said that what it needs is unreachable now. Otherwise the first
 /// IO or JSON cause decides; wording is never classified.
 fn product_failure_code(error: &anyhow::Error) -> crate::primitives::failure::FailureCode {
-    // An update policy that cannot be followed is attached as context, which
-    // anyhow finds through the error itself and never as a link of its chain.
+    // An update policy that cannot be followed, and a catalog whose
+    // declarations do not hold, are attached as context, which anyhow finds
+    // through the error itself and never as a link of its chain.
     if error
         .downcast_ref::<stado_product::InvalidPolicy>()
         .is_some()
+        || error
+            .downcast_ref::<stado_product::catalog::InvalidCatalog>()
+            .is_some()
     {
         return crate::primitives::failure::FailureCode::Config;
     }

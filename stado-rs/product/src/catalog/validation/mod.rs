@@ -22,7 +22,27 @@ fn choice<'a, T: Deserialize<'a>>(value: &'a Value, field: &str) -> Result<T> {
         .with_context(|| format!("{field}: {} is not one of its values", value[field]))
 }
 
+/// A catalog whose declarations do not hold: a product lacking a field it
+/// must declare, a value outside its choices, two products of one id. It is
+/// the declared state refusing, so a caller classes it `config` and no retry
+/// changes it; the cause chain says which product and field.
+#[derive(Debug)]
+pub struct InvalidCatalog;
+
+impl std::fmt::Display for InvalidCatalog {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the product catalog does not hold its declarations")
+    }
+}
+
+impl std::error::Error for InvalidCatalog {}
+
+/// [`declarations`], with a failure typed [`InvalidCatalog`].
 pub fn validate(document: &Value) -> Result<()> {
+    declarations(document).map_err(|cause| cause.context(InvalidCatalog))
+}
+
+fn declarations(document: &Value) -> Result<()> {
     let products = document["products"]
         .as_array()
         .context("products must be a list")?;
