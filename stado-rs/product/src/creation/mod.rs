@@ -195,6 +195,8 @@ fn registration(request: &Request) -> Result<Arguments> {
         request.product.family.to_string(),
         "--owner-repository".to_owned(),
         request.repositories[0].repository.clone(),
+        "--star-repository".to_owned(),
+        request.product.star_repository.clone(),
         "--evidence".to_owned(),
         marker(&request.request_id),
     ];

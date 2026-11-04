@@ -17,6 +17,10 @@ pub struct Product {
     pub description: String,
     pub family: Family,
     pub visibility: Visibility,
+    /// The public OWNER/REPO the product's GitHub star request links to: a
+    /// private product's own repositories answer strangers with a 404, so
+    /// the catalog requires one for every product.
+    pub star_repository: String,
 }
 
 /// The surface kinds a repository is provisioned for; each word is the
@@ -71,7 +75,14 @@ const REQUEST_FIELDS: &[&str] = &[
     "repositories",
     "evidence_refs",
 ];
-const PRODUCT_FIELDS: &[&str] = &["id", "name", "description", "family", "visibility"];
+const PRODUCT_FIELDS: &[&str] = &[
+    "id",
+    "name",
+    "description",
+    "family",
+    "visibility",
+    "star_repository",
+];
 const REPOSITORY_FIELDS: &[&str] = &["surface", "repository"];
 
 /// `field` names what is refused; `value` must be a creation identity.
@@ -165,6 +176,7 @@ impl Request {
                 description: field(product, "product.", "description")?,
                 family: field(product, "product.", "family")?,
                 visibility: field(product, "product.", "visibility")?,
+                star_repository: field(product, "product.", "star_repository")?,
             },
             repositories,
             evidence_refs: field(top, "", "evidence_refs")?,
@@ -193,6 +205,10 @@ impl Request {
         if self.product.name.trim().is_empty() {
             bail!("product.name: empty; a product needs its display name");
         }
+        // A public repository the star request links to; whether GitHub
+        // shows it to strangers is read by `stado product documentation
+        // star-repositories`, not here.
+        repository("product.star_repository", &self.product.star_repository)?;
         if self.product.description.trim().is_empty() {
             bail!("product.description: empty; a product needs what it does in one sentence");
         }
