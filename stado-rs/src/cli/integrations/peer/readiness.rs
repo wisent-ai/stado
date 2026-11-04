@@ -181,26 +181,26 @@ fn remedy(report: &Readiness) -> Vec<String> {
          --token-file <file> {}",
         report.channel.consumer()
     );
+    // `stado credentials item put` reads an item document on stdin whose
+    // kind is its --type; a bare bearer on stdin is refused, so the line
+    // carries the document with the bearer's place in it.
+    let put = format!(
+        "printf '%s' '{{\"schema\":\"skarbiec.item.v2\",\"kind\":\"token\",\
+         \"fields\":{{\"{TOKEN_FIELD}\":\"<bearer {peer} issued>\"}},\"context\":{{}}}}' | \
+         stado credentials item put --host {vault} --role {role} --type token"
+    );
     match report.verdict {
         Verdict::Ready => Vec::new(),
         Verdict::PeerRefused => vec![
             format!(
-                "ask the operator of {peer} for a bearer of namespace {} on {}, and store it \
-                 with `stado credentials item put --host {vault} --role {role} --type token` \
-                 (the bearer on stdin)",
+                "ask the operator of {peer} for a bearer of namespace {} on {}, and store it:",
                 report.peer_namespace, report.peer_origin
             ),
+            put,
             format!("stado market peer edit {peer} --origin URL   (when the origin moved)"),
             again,
         ],
-        Verdict::ItemAbsent => vec![
-            format!(
-                "stado credentials item put --host {vault} --role {role} --type token   \
-                 (the bearer {peer} issued, on stdin)"
-            ),
-            grant,
-            again,
-        ],
+        Verdict::ItemAbsent => vec![put, grant, again],
         Verdict::NotAuthorized => vec![grant, again],
         Verdict::NoChannel => vec![
             "run this on the host that lends, or install that host's agent grant file".to_string(),

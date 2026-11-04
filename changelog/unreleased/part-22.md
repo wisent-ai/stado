@@ -120,3 +120,8 @@ The version bump gathers them into the release's own file and removes this one.
   and its admission gate withholds that board alone. A reservation naming no board, or one that
   cannot be read, still drains it. The Vast loop still withdraws the whole machine, because Vast
   offers no way to keep one GPU of a listed machine from renters.
+- **`stado market readiness` prints a credential command that runs:** for a missing Vast item it
+  printed `stado credentials item put --host H --type api-key vast`, which the CLI refuses (the role
+  is `--role`, not a positional word), and for both Vast and a peer it named the stdin payload only
+  in words. Both now print the item document piped into `stado credentials item put --host H --role
+  R --type T`, with the key's or bearer's place marked.

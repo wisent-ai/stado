@@ -245,9 +245,13 @@ fn remedy(report: &Readiness, reading: &HostCredentialReading) -> Vec<String> {
             "stado market readiness --provider vast".to_string(),
         ],
         Verdict::ItemAbsent => vec![
+            // The command `stado credentials item put` takes: the role by
+            // --role, and on stdin the item document whose kind is --type.
+            // Printed with the role as a positional word, it was refused.
             format!(
-                "stado credentials item put --host {vault} --type api-key {ITEM}   \
-                 (payload on stdin: an api-key document carrying {FIELD})"
+                "printf '%s' '{{\"schema\":\"skarbiec.item.v2\",\"kind\":\"api-key\",\
+                 \"fields\":{{\"{FIELD}\":\"<key from console.vast.ai>\"}},\"context\":{{}}}}' | \
+                 stado credentials item put --host {vault} --role {ITEM} --type api-key"
             ),
             grant,
             "stado market readiness --provider vast".to_string(),
