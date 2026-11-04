@@ -18,9 +18,9 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
             json,
             action,
         } => match action {
-            None => capabilities::run(capability.as_deref(), json),
+            None => capabilities::run(capability.as_deref(), json).await,
             Some(CapabilityAction::List { capability, json }) => {
-                capabilities::run(capability.as_deref(), json)
+                capabilities::run(capability.as_deref(), json).await
             }
             Some(CapabilityAction::Resolve {
                 family,

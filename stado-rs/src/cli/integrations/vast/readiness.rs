@@ -311,6 +311,13 @@ fn remedy(report: &Readiness, reading: &HostCredentialReading) -> Vec<String> {
     }
 }
 
+/// This host's Vast readiness as `stado capabilities market` lists it:
+/// whether the fleet can earn on Vast from here, and the verdict's sentence.
+pub(crate) async fn verdict() -> (bool, String) {
+    let report = assess(None, true).await;
+    (report.earning_possible(), report.verdict.summary(&report))
+}
+
 /// Print the report and exit non-zero unless the fleet can earn.
 pub(super) async fn report(
     vault_host: Option<String>,

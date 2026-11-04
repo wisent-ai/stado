@@ -198,3 +198,7 @@ The version bump gathers them into the release's own file and removes this one.
   alone, so a host also paid in a token showed a smaller margin than it made. Payouts kept with
   `stado market payout record` now join the day they were paid, valued at their kept rate; a payout
   with no usable rate is named unpriced and leaves that day without a margin.
+- **`stado capabilities market` says which seller can sell from this host:** the family listed its
+  sellers' support with no word of whether one is usable here. It now asks each: Vast's readiness
+  verdict, each declared peer fleet's readiness, and a planned seller's note; one not ready is named
+  and the others are still read.

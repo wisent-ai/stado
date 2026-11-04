@@ -21,6 +21,7 @@ use crate::providers::peer::PeerError;
 use crate::queue::JobStorage;
 
 pub(crate) use declare::declare;
+pub(crate) use readiness::every_peer;
 
 /// A peer failure as the command reports it, with its class.
 pub(crate) fn cmd(error: PeerError) -> CmdError {

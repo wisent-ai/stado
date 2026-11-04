@@ -28,7 +28,64 @@ struct CatalogDocument<'a> {
     /// Each family a product resolves through Stado: its selected order,
     /// each alternative's last proof, and what served each consumer.
     alternatives: Vec<Value>,
+    /// With the market family selected, each seller's readiness on this
+    /// host; empty otherwise, since asking every marketplace is a network
+    /// read the bare catalog does not make.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sellers: Vec<Value>,
     control_config: &'static [crate::capabilities::ConfigField],
+}
+
+/// Each seller the market family declares, with whether this host can sell
+/// through it now and the seller's own sentence why: Vast's readiness, each
+/// declared peer fleet's, and for a seller Stado has no adapter for, its
+/// support level and the catalog's note. A seller that is not ready is
+/// named, never left out, and does not stop the others being read.
+async fn sellers(market: &ProductCapability) -> Vec<Value> {
+    use crate::capabilities::ProviderId;
+    use crate::cli::integrations::{peer, vast};
+    let mut rows = Vec::new();
+    for row in market.providers {
+        let provider = row.provider.as_str();
+        match row.provider {
+            ProviderId::Vast => {
+                let (ready, verdict) = vast::readiness_verdict().await;
+                rows.push(json!({"provider": provider, "ready": ready, "verdict": verdict}));
+            }
+            ProviderId::Stado => match peer::every_peer().await {
+                Ok(peers) if peers.is_empty() => rows.push(json!({
+                    "provider": provider,
+                    "ready": false,
+                    "verdict": "no peer fleet is declared; `stado market peer add` declares one",
+                })),
+                Ok(peers) => {
+                    for (name, ready, verdict) in peers {
+                        rows.push(json!({
+                            "provider": provider,
+                            "peer": name,
+                            "ready": ready,
+                            "verdict": verdict,
+                        }));
+                    }
+                }
+                Err(error) => rows.push(json!({
+                    "provider": provider,
+                    "ready": false,
+                    "verdict": format!("the declared peer fleets cannot be read: {error}"),
+                })),
+            },
+            _ => rows.push(json!({
+                "provider": provider,
+                "ready": false,
+                "verdict": format!(
+                    "{}: Stado carries no adapter ({})",
+                    row.support.as_str(),
+                    row.note
+                ),
+            })),
+        }
+    }
+    rows
 }
 
 /// The selected order, proofs and served consumers of every family among
@@ -60,7 +117,7 @@ fn families(selected: &[&ProductCapability]) -> Result<Vec<Value>, CmdError> {
     Ok(rows)
 }
 
-pub fn run(filter: Option<&str>, as_json: bool) -> Result<(), CmdError> {
+pub async fn run(filter: Option<&str>, as_json: bool) -> Result<(), CmdError> {
     let selected = match filter {
         Some(id) => vec![capabilities::product_capability(id).ok_or_else(|| {
             let choices = capabilities::product_capabilities()
@@ -73,12 +130,17 @@ pub fn run(filter: Option<&str>, as_json: bool) -> Result<(), CmdError> {
         None => capabilities::product_capabilities().iter().collect(),
     };
     let families = families(&selected)?;
+    let sellers = match selected.as_slice() {
+        [only] if only.id == capabilities::CapabilityKind::Market => sellers(only).await,
+        _ => Vec::new(),
+    };
 
     if as_json {
         let document = CatalogDocument {
             schema: "product-v1",
             capabilities: selected,
             alternatives: families,
+            sellers,
             control_config: capabilities::CONTROL_CONFIG,
         };
         println!("{}", serde_json::to_string_pretty(&document)?);
@@ -113,6 +175,25 @@ pub fn run(filter: Option<&str>, as_json: bool) -> Result<(), CmdError> {
         ],
         &rows,
     );
+    if !sellers.is_empty() {
+        println!();
+        println!("sellers on this host:");
+        for seller in &sellers {
+            let name = match seller["peer"].as_str() {
+                Some(peer) => format!("{} {peer}", seller["provider"].as_str().unwrap_or("?")),
+                None => seller["provider"].as_str().unwrap_or("?").to_string(),
+            };
+            let state = if seller["ready"].as_bool() == Some(true) {
+                "ready"
+            } else {
+                "not ready"
+            };
+            println!(
+                "  {name}: {state}: {}",
+                seller["verdict"].as_str().unwrap_or_default()
+            );
+        }
+    }
     for family in &families {
         let order: Vec<&str> = family["order"]
             .as_array()

@@ -62,6 +62,43 @@ pub(super) async fn report(
     ask_vault: bool,
     json: bool,
 ) -> Result<(), CmdError> {
+    let report = assess(peer, vault_host, ask_vault).await?;
+    if json {
+        crate::cli::print_answer(&serde_json::to_value(&report)?, true)?;
+    } else {
+        print_text(&report);
+    }
+    if report.verdict == Verdict::Ready {
+        return Ok(());
+    }
+    if json {
+        return Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE));
+    }
+    Err(CmdError::click(report.summary.clone()).stating(FailureCode::Config))
+}
+
+/// Every declared peer's readiness as `stado capabilities market` lists it:
+/// the peer, whether this host can lend to it, and the verdict's sentence.
+pub(crate) async fn every_peer() -> Result<Vec<(String, bool, String)>, CmdError> {
+    let store = our_store().await?;
+    let mut verdicts = Vec::new();
+    for declared in declaration::list(&store).await.map_err(cmd)? {
+        let report = assess(&declared.name, None, true).await?;
+        verdicts.push((
+            declared.name,
+            report.verdict == Verdict::Ready,
+            report.summary,
+        ));
+    }
+    Ok(verdicts)
+}
+
+/// Ask the three authorities about one peer and assemble the verdict.
+async fn assess(
+    peer: &str,
+    vault_host: Option<String>,
+    ask_vault: bool,
+) -> Result<Readiness, CmdError> {
     let store = our_store().await?;
     let declared = declaration::require(&store, peer).await.map_err(cmd)?;
     let reading = read_role_field(&declared.credential_role, TOKEN_FIELD).await;
@@ -115,18 +152,7 @@ pub(super) async fn report(
     }
     report.summary = summary(&report);
     report.remedy = remedy(&report);
-    if json {
-        crate::cli::print_answer(&serde_json::to_value(&report)?, true)?;
-    } else {
-        print_text(&report);
-    }
-    if report.verdict == Verdict::Ready {
-        return Ok(());
-    }
-    if json {
-        return Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE));
-    }
-    Err(CmdError::click(report.summary.clone()).stating(FailureCode::Config))
+    Ok(report)
 }
 
 fn vault_name(report: &Readiness) -> String {

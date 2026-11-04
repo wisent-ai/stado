@@ -18,7 +18,7 @@ mod readiness_text;
 mod serve_or_rent;
 mod sources;
 
-pub(crate) use readiness::read_vault;
+pub(crate) use readiness::{read_vault, verdict as readiness_verdict};
 
 use serde_json::json;
 
