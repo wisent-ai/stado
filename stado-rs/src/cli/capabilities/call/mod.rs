@@ -108,7 +108,8 @@ async fn brama(route: &str, consumer: &str, body: &str) -> Outcome {
         Ok(Some(bearer)) => bearer,
         Ok(None) => {
             return Outcome::Passed(format!(
-                "no item plays role {role}, which holds {consumer}'s Brama bearer in field token; store it with `stado credentials item put --host <vault owner> --role {role}`"
+                "no item plays role {role}, which holds {consumer}'s Brama bearer in field token; store it with `{}`",
+                crate::skarbiec::roles::put_command("<vault owner>", &role, "token", "token", "<bearer>")
             ))
         }
         Err(cause) => {

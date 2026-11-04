@@ -181,13 +181,12 @@ fn remedy(report: &Readiness) -> Vec<String> {
          --token-file <file> {}",
         report.channel.consumer()
     );
-    // `stado credentials item put` reads an item document on stdin whose
-    // kind is its --type; a bare bearer on stdin is refused, so the line
-    // carries the document with the bearer's place in it.
-    let put = format!(
-        "printf '%s' '{{\"schema\":\"skarbiec.item.v2\",\"kind\":\"token\",\
-         \"fields\":{{\"{TOKEN_FIELD}\":\"<bearer {peer} issued>\"}},\"context\":{{}}}}' | \
-         stado credentials item put --host {vault} --role {role} --type token"
+    let put = crate::skarbiec::roles::put_command(
+        &vault,
+        role,
+        "token",
+        TOKEN_FIELD,
+        &format!("<bearer {peer} issued>"),
     );
     match report.verdict {
         Verdict::Ready => Vec::new(),

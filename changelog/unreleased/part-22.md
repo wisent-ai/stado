@@ -125,3 +125,9 @@ The version bump gathers them into the release's own file and removes this one.
   is `--role`, not a positional word), and for both Vast and a peer it named the stdin payload only
   in words. Both now print the item document piped into `stado credentials item put --host H --role
   R --type T`, with the key's or bearer's place marked.
+- **Every "store this secret" step prints one command that runs:** the readiness reports, the
+  capability call refusals, the vault role refusal and the Weles role-holder check each wrote their
+  own `stado credentials item put` line, and three of them omitted the item document the command
+  reads on stdin. All of them now print the line `skarbiec::roles::put_command` builds: the item
+  document (kind equal to `--type`, the field and the secret's place) piped into `stado credentials
+  item put --host H --role R --type T`.

@@ -141,8 +141,9 @@ pub(super) async fn endpoint(route: &str, key_role: &crate::capabilities::Config
             Ok(Some(token)) => Some(token),
             Ok(None) => {
                 return Outcome::Passed(format!(
-                    "{} names role {role}, and no item plays it; store the endpoint's key with `stado credentials item put --host <vault owner> --role {role}`",
-                    key_role.path
+                    "{} names role {role}, and no item plays it; store the endpoint's key with `{}`",
+                    key_role.path,
+                    crate::skarbiec::roles::put_command("<vault owner>", role, "token", "token", "<endpoint key>")
                 ))
             }
             Err(cause) => return Outcome::Passed(format!("the search endpoint's key (role {role}): {cause}")),

@@ -15,6 +15,25 @@ pub fn role_tag(role: &str) -> String {
     format!("{ROLE_TAG_PREFIX}{role}")
 }
 
+/// The one command that stores the item playing `role` on `host`'s vault:
+/// the item document piped into `stado credentials item put`, which takes
+/// the role by `--role` and refuses a document whose `kind` is not its
+/// `--type`. Every refusal and readiness report that tells an operator to
+/// store a role's secret prints this, so the printed step is the one the
+/// command accepts; `value` marks where the secret goes.
+pub fn put_command(host: &str, role: &str, kind: &str, field: &str, value: &str) -> String {
+    let document = serde_json::json!({
+        "schema": "skarbiec.item.v2",
+        "kind": kind,
+        "fields": { field: value },
+        "context": {},
+    });
+    format!(
+        "printf '%s' '{document}' | stado credentials item put --host {host} --role {role} \
+         --type {kind}"
+    )
+}
+
 fn live(item: &ItemInfo) -> bool {
     !item.deleted
 }
@@ -48,8 +67,8 @@ pub fn item_for_role<'a>(items: &'a [ItemInfo], role: &str) -> Result<&'a ItemIn
     match holders(items, role).as_slice() {
         [one] => Ok(one),
         [] => Err(format!(
-            "no item visible here carries {tag}; store the secret for role {role} with \
-             `stado credentials item put --host <vault owner> --role {role}`"
+            "no item visible here carries {tag}; store the secret for role {role} with `{}`",
+            put_command("<vault owner>", role, "<kind>", "<field>", "<secret>")
         )),
         several => Err(format!(
             "{} items carry {tag}; exactly one item may play role {role}",

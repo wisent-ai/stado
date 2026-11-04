@@ -23,7 +23,7 @@ use crate::cli::host::machine::users::credentials::CredentialHost;
 use crate::cli::host::secrets::vault::item::change::retag::run_retag;
 use crate::cli::host::secrets::vault::mirror::read::remote_skarbiec_json_at;
 use crate::cli::CmdError;
-use crate::skarbiec::roles::{holders, role_tag, ROLE_TAG_PREFIX};
+use crate::skarbiec::roles::{holders, put_command, role_tag, ROLE_TAG_PREFIX};
 use crate::skarbiec::ItemInfo;
 
 /// The roles a catalog's rows name, each once, in catalog order. Rows that
@@ -148,7 +148,14 @@ pub(super) async fn settle_role_holders(
     for role in &unheld {
         eprintln!(
             "{name}: no item plays role {role}, so every read of role:{role} is refused; store it \
-             with `stado credentials item put --host {name} --role {role}`"
+             with `{}`",
+            put_command(
+                name,
+                role,
+                "<kind>",
+                "<field the catalog row reads>",
+                "<secret>"
+            )
         );
     }
     for role in &contested {
