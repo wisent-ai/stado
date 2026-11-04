@@ -141,13 +141,16 @@ json_string_field() {
 
 # curl, with the invitation code handed over on stdin as a config file so it
 # never appears in this machine's process list and never lands on its disk.
-# Prints the HTTP status; writes the response body to $1.
+# Prints the HTTP status; writes the response body to $1. No deadline is set:
+# the request ends when the control plane answers or the connection fails,
+# and curl's --show-error names that failure; a clock nobody stated would
+# turn a slow answer into a refusal that is not one.
 authenticated_curl() {
     body_path="$1"
     shift
     printf 'header = "Authorization: Bearer %s"\n' "$invite_token" |
         curl --silent --show-error --location --config - \
-            --max-time 30 --output "$body_path" --write-out '%{http_code}' "$@"
+            --output "$body_path" --write-out '%{http_code}' "$@"
 }
 
 refusal() {

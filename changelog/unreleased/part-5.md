@@ -7,6 +7,19 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- `stado workload status weles-activity` no longer calls a run `running` because its directory
+  changed in the last three minutes: a run with neither a result nor a completion is
+  `unfinished`, with `updated_at` beside it, and the walk counts artifacts at any depth instead of
+  stopping four directories down.
+
+- `join.sh` waits on its answers, not on clocks nobody stated: the invitation request's 30-second
+  curl deadline and the SSH probe's 3- and 5-second connect timeouts are gone. The request ends
+  when the control plane answers or the connection fails, which curl names; the probe dials this
+  machine's own loopback, which accepts or refuses at once.
+
+- A failed runner registration prints the runner's whole `_diag/Runner_*.log`, each under its
+  path, instead of its last 80 lines, and says when a log cannot be read instead of dropping it.
+
 - `stado_database::sync::Client` no longer panics with Tokio's `Cannot drop a runtime in a
   context where blocking is not allowed` when it is dropped, or refused while connecting, inside
   a product's own async runtime. A product that held it there answered an unreachable database

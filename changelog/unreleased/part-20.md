@@ -32,3 +32,12 @@ The version bump gathers them into the release's own file and removes this one.
   "codesign wants to use the <name> keychain" to the operator. Keeping now takes the keychain off
   the list (an entry an earlier release left is removed on the next installation); a signature
   lists it and unlocks it just before `codesign`, and the scope's close takes it off again.
+- **Every reader of the product catalog reads the committed one:** `stado product catalog`,
+  `status`, `dependencies`, `advisories`, `build-trees`, `documentation`, `registry check-claims`
+  and Stado's `change` and `quality hooks` read a catalog its checkout tracks at the committed
+  head (or `origin/main` when the head is behind), as installations already did. One session's
+  uncommitted edit of the shared checkout that does not validate no longer refuses every other
+  session's read: it is named on stderr with its error and not read. `catalog --json` names the
+  revision it read as `catalog_read`, and `registry add|set|rm` say under `uncommitted` that
+  readers see the edit once it is committed, with the command that commits it. A `--catalog`
+  file no checkout tracks is read as it stands.

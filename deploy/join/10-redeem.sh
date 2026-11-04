@@ -190,16 +190,20 @@ destination="$login_user@$address"
 # reachable in name only. Remote Login is the owner's decision and needs
 # administrator rights: diagnose it, print the exact way to turn it on, and
 # never turn it on silently.
+# The probe dials this machine's own loopback, which answers at once either
+# way: a listening sshd accepts, a closed port is refused by the kernel. No
+# connect timeout is given, because nothing on the path can be slow.
+# Port 22 is SSH's IANA assignment (RFC 4253 section 4.1).
 ssh_listening='unknown'
 if command -v nc >/dev/null 2>&1; then
-    if nc -z -w 3 127.0.0.1 22 >/dev/null 2>&1; then
+    if nc -z 127.0.0.1 22 >/dev/null 2>&1; then
         ssh_listening='yes'
     else
         ssh_listening='no'
     fi
 elif command -v ssh >/dev/null 2>&1; then
     ssh_probe="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
+        -o UserKnownHostsFile=/dev/null \
         127.0.0.1 true 2>&1 || true)"
     case "$ssh_probe" in
         *'Connection refused'*|*'onnection timed out'*|*'No route to host'*) ssh_listening='no' ;;
