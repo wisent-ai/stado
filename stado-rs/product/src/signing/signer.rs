@@ -1,6 +1,6 @@
 use super::{
     constants::APPLE_ISSUERS_PEM,
-    core::{absolute, command, compatible, inspect, native, validate_identifier},
+    core::{absolute, command, compatible, conventional, inspect, native},
     credentials::{environment, Choice, Credentials, Source},
     Policy,
 };
@@ -151,7 +151,7 @@ impl Signer {
         previous: Option<&Path>,
         policy: &Policy,
     ) -> Result<Value> {
-        validate_identifier(identifier)?;
+        conventional(identifier)?;
         let path = absolute(path)?.canonicalize()?;
         if path.is_dir() {
             return super::bundle::sign(self, &path, identifier, previous, policy);
@@ -161,9 +161,9 @@ impl Signer {
         }
         let before = self.previous(&path, previous)?;
         if crate::signing::SignatureState::is_stable(&before) {
-            if before["identifier"] != identifier
-                && before["identifier"].as_str().map(super::core::current).as_deref()
-                    != Some(identifier)
+            if !before["identifier"]
+                .as_str()
+                .is_some_and(|kept| super::core::continues(kept, identifier))
             {
                 bail!(
                     "code identifier would change: {} -> {identifier}",

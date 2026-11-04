@@ -106,6 +106,8 @@ fn restart(bundle: &Path, only_if_running: bool) -> Result<serde_json::Value> {
     }))
 }
 
+/// `stado product restart BUNDLE`: carry the bundle's data from its retired
+/// identifier, then restart it (or, with `--if-running`, only when it runs).
 pub fn run(bundle: &Path, only_if_running: bool, as_json: bool) -> Result<i32> {
     #[cfg(not(target_os = "macos"))]
     {
@@ -114,10 +116,19 @@ pub fn run(bundle: &Path, only_if_running: bool, as_json: bool) -> Result<i32> {
     }
     #[cfg(target_os = "macos")]
     {
-        let report = restart(bundle, only_if_running)?;
+        let report = placed(bundle, only_if_running)?;
         if as_json {
             println!("{}", serde_json::to_string_pretty(&report)?);
         } else {
+            for row in report["carried"].as_array().into_iter().flatten() {
+                if row["state"] == "carried" {
+                    println!(
+                        "carried {} to {}",
+                        row["from"].as_str().unwrap_or_default(),
+                        row["to"].as_str().unwrap_or_default()
+                    );
+                }
+            }
             println!(
                 "{} {} ({})",
                 report["state"]
@@ -133,7 +144,35 @@ pub fn run(bundle: &Path, only_if_running: bool, as_json: bool) -> Result<i32> {
     }
 }
 
-/// Restart, where it runs, every application bundle a desktop installation
+mod carried;
+
+/// Carry `bundle`'s data from its retired `ai.wisent.` identifier
+/// (`carried.rs`) before it next runs, then restart it; with
+/// `only_if_running` one that is not running stays stopped. The report
+/// holds what was carried under `carried`.
+#[cfg(target_os = "macos")]
+fn placed(bundle: &Path, only_if_running: bool) -> Result<serde_json::Value> {
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").context(
+        "HOME is not set, so the application's data under its retired identifier cannot be found",
+    )?);
+    let info = bundle.join("Contents/Info.plist");
+    if !info.is_file() {
+        bail!("application Info.plist not found: {}", info.display());
+    }
+    let bundle_id = answer(
+        Command::new("/usr/bin/plutil")
+            .args(["-extract", "CFBundleIdentifier", "raw", "-o", "-"])
+            .arg(&info),
+        &format!("reading CFBundleIdentifier from {}", info.display()),
+    )?;
+    let carried = carried::carry(&home, bundle_id.trim())?;
+    let mut report = restart(bundle, only_if_running)?;
+    report["carried"] = carried;
+    Ok(report)
+}
+
+/// Carry each placed application's data from its retired identifier, then
+/// restart, where it runs, every application bundle a desktop installation
 /// placed; a placed application that is not running stays stopped. Answers
 /// each bundle's report.
 pub fn restart_placed(paths: &[std::path::PathBuf]) -> Result<serde_json::Value> {
@@ -149,7 +188,7 @@ pub fn restart_placed(paths: &[std::path::PathBuf]) -> Result<serde_json::Value>
             .iter()
             .filter(|path| path.extension().is_some_and(|extension| extension == "app"))
         {
-            reports.push(restart(bundle, true)?);
+            reports.push(placed(bundle, true)?);
         }
         Ok(serde_json::Value::Array(reports))
     }

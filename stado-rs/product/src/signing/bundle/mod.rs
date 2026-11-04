@@ -1,5 +1,5 @@
 use super::{
-    core::{bundle, command, compatible, inspect, native, validate_identifier},
+    core::{bundle, command, compatible, conventional, inspect, native, validate_identifier},
     signer::Signer,
     Policy,
 };
@@ -81,7 +81,7 @@ pub fn sign(
     previous: Option<&Path>,
     policy: &Policy,
 ) -> Result<Value> {
-    validate_identifier(code_identifier)?;
+    conventional(code_identifier)?;
     if !bundle(path) {
         bail!(
             "signing target is not a supported application bundle: {}",
@@ -91,9 +91,9 @@ pub fn sign(
     let observed = inspect(path)?;
     let before = signer.previous(path, previous)?;
     if crate::signing::SignatureState::is_stable(&before)
-        && before["identifier"] != code_identifier
-        && before["identifier"].as_str().map(super::core::current).as_deref()
-            != Some(code_identifier)
+        && !before["identifier"]
+            .as_str()
+            .is_some_and(|kept| super::core::continues(kept, code_identifier))
     {
         bail!(
             "bundle identifier would change: {} -> {code_identifier}",

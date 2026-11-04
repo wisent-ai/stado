@@ -1,3 +1,4 @@
+mod conventional;
 pub mod notarize;
 pub mod stage;
 use super::{
@@ -23,6 +24,7 @@ use std::{
 #[serde(rename_all = "kebab-case")]
 enum Action {
     Residue,
+    Convention,
     Notarize,
     Stage,
     Inspect,
@@ -48,6 +50,16 @@ pub fn run(name: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i32>
         let failed = report.iter().any(|row| !row["recorded"].is_null());
         emit(&json!({"residue": report}))?;
         return Ok(i32::from(failed));
+    }
+    if action == Action::Convention {
+        let roots: Vec<PathBuf> = args.positional.iter().map(PathBuf::from).collect();
+        let write = args.has("--write");
+        let report = conventional::convention(&roots, write)?;
+        let left = !write && report["identifiers"].as_array().is_some_and(|rows| !rows.is_empty());
+        emit(&report)?;
+        // A read that still finds a retired identifier exits 1, so a
+        // release gate can refuse a product that has not been renamed.
+        return Ok(i32::from(left));
     }
     let reports = if action == Action::Notarize {
         notarize::notarize(
@@ -152,21 +164,31 @@ pub fn run(name: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i32>
             for target in &args.positional {
                 let path = Path::new(target);
                 let before = inspect(previous.filter(|p| p.exists()).unwrap_or(path))?;
-                let identifier = match code_id {
-                    Some(id) => id.to_owned(),
-                    None if crate::signing::SignatureState::is_stable(&before) => {
-                        super::core::current(
-                            before["identifier"]
-                                .as_str()
-                                .context("stable signature has no identifier")?,
-                        )
-                    }
-                    None => identifier(
+                let named = || {
+                    identifier(
                         product.context("missing product")?,
                         path.file_name()
                             .and_then(|s| s.to_str())
                             .context("missing target name")?,
-                    )?,
+                    )
+                };
+                let identifier = match code_id {
+                    Some(id) => id.to_owned(),
+                    // A program keeps its identifier, under its convention
+                    // name; one that named no owner takes the product's.
+                    None if crate::signing::SignatureState::is_stable(&before) => {
+                        let kept = super::core::current(
+                            before["identifier"]
+                                .as_str()
+                                .context("stable signature has no identifier")?,
+                        );
+                        if super::core::conventional(&kept).is_ok() {
+                            kept
+                        } else {
+                            named()?
+                        }
+                    }
+                    None => named()?,
                 };
                 reports.push(signer.sign(path, &identifier, previous, &policy)?);
             }

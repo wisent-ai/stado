@@ -41,3 +41,24 @@ The version bump gathers them into the release's own file and removes this one.
   revision it read as `catalog_read`, and `registry add|set|rm` say under `uncommitted` that
   readers see the edit once it is committed, with the command that commits it. A `--catalog`
   file no checkout tracks is read as it stands.
+
+- **A program moves once from its retired `ai.wisent.` identifier to `com.wisent.<product>`:**
+  signing a product's own program or app under any other spelling is refused, naming the
+  convention name. A replacement for an installed copy signed `ai.wisent.<product>.<name>` (or a
+  bare nested name such as `skarbiec`) is accepted under its convention name: its continuity is
+  checked against the installed designated requirement with the identifier clause renamed, so the
+  anchor, team and certificate still have to match. The shared identity's Keychain names
+  (`ai.wisent.identity`, `ai.wisent.identity.keychain-helper`) keep their spelling, since every
+  signed-in session's Keychain item trusts them by name.
+- **`stado product signing convention PATH… [--write] [--json]`:** lists each retired
+  `ai.wisent.` identifier in the tracked files under each PATH with its convention name, and with
+  `--write` renames them in place.
+- **A renamed desktop app keeps what it kept under its retired identifier:** `stado product
+  restart` and every desktop installation carry its Preferences (with its own `ai.wisent.` keys
+  renamed), Caches, HTTPStorages, Saved Application State and Application Support across once,
+  never over a place the new name already has, and report each as `carried`, `kept` or `absent`.
+
+### Fixed
+
+- **The product library compiles again:** the working tree's catalog notice called a `validate`
+  its module does not have; it calls the catalog's own.

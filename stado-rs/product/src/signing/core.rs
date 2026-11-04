@@ -127,21 +127,58 @@ pub fn identifier(product: &str, name: &str) -> Result<String> {
 const PREFIX: &str = "com.wisent.";
 const RETIRED: &str = "ai.wisent.";
 
+/// Names under `ai.wisent.` that are shared by every product rather than a
+/// product's app: the one Wisent identity every desktop app signs in with
+/// (its Keychain item, its helper, its access group). They keep their
+/// meaning under the convention: `com.wisent.identity`.
+const SHARED: [&str; 1] = ["identity"];
+
+/// Retired identifiers that keep their spelling. The shared identity's
+/// Keychain helper is the one program the signed-in session's Keychain item
+/// trusts, by its designated requirement, which names its identifier: every
+/// person's item was written by `ai.wisent.identity.keychain-helper`. Signed
+/// under another identifier, macOS asked each person for the Keychain
+/// password before any app could read the session, and a person who denied
+/// it was signed out of every app at once. So it is never renamed, by the
+/// signer or by `signing convention`.
+const KEPT: [&str; 1] = ["ai.wisent.identity.keychain-helper"];
+
 /// The identifier `kept` is named by now: one in the retired `ai.wisent.`
 /// spelling, which broke the `com.wisent.<product>` convention, read as
 /// the same program under the convention (`ai.wisent.oko.oko` is
-/// `com.wisent.oko`, `ai.wisent.lem.LemCLI` is `com.wisent.lem.LemCLI`);
-/// any other unchanged. A signature carrying the retired spelling moves to
-/// this one once, and is never refused as an identity change for it.
+/// `com.wisent.oko`, `ai.wisent.lem.LemCLI` is `com.wisent.lem.LemCLI`,
+/// `ai.wisent.brama.desktop` is `com.wisent.brama.desktop`). A bare
+/// `ai.wisent.<product>` was only ever a product's desktop app, so it is
+/// `com.wisent.<product>.desktop` (lower case, as products are named):
+/// `com.wisent.<product>` is the product's own program, and an app signed
+/// with the program's identifier would share its privacy decisions. A
+/// shared name (`SHARED`) keeps its own. Any other identifier is
+/// unchanged. A signature carrying the retired spelling moves to this one
+/// once, and is never refused as an identity change for it.
 pub fn current(kept: &str) -> String {
+    if KEPT.contains(&kept) {
+        return kept.to_string();
+    }
     match kept.strip_prefix(RETIRED) {
         Some(rest) => match rest.split_once('.') {
             Some((product, name)) if product == name => format!("{PREFIX}{product}"),
             Some((product, name)) => format!("{PREFIX}{product}.{name}"),
-            None => format!("{PREFIX}{rest}"),
+            None if SHARED.contains(&rest) => format!("{PREFIX}{rest}"),
+            None => format!("{PREFIX}{}.desktop", rest.to_ascii_lowercase()),
         },
         None => kept.to_string(),
     }
+}
+
+/// Whether a signature that carried `kept` may be replaced by one carrying
+/// `next`: the same identifier, the convention name of a retired `ai.wisent.`
+/// one (`current`), or a `com.wisent.` name for a nested program that had a
+/// bare one (`skarbiec`, `brama-runtime`, `libllama`), which named no owner
+/// at all. Any other change is an identity change and is refused.
+pub fn continues(kept: &str, next: &str) -> bool {
+    kept == next
+        || current(kept) == next
+        || (!kept.contains('.') && next.starts_with(PREFIX))
 }
 
 pub fn validate_identifier(identifier: &str) -> Result<()> {
@@ -152,6 +189,26 @@ pub fn validate_identifier(identifier: &str) -> Result<()> {
             .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
     {
         bail!("invalid code identifier: {identifier}");
+    }
+    Ok(())
+}
+
+/// Refuse a product's own identifier that is not a `com.wisent.` name: the
+/// convention is checked where a product's program or app is signed, so a
+/// product that declares another spelling is refused at its first
+/// signature instead of shipping it. Bundles nested in an app keep the
+/// identifiers their makers gave them and are not checked here.
+pub fn conventional(identifier: &str) -> Result<()> {
+    validate_identifier(identifier)?;
+    if !identifier.starts_with(PREFIX) && !KEPT.contains(&identifier) {
+        bail!(
+            "code identifier {identifier} is not a {PREFIX}<product> name; every Wisent program \
+             and app is signed {PREFIX}<product> or {PREFIX}<product>.<name>{}",
+            match identifier.starts_with(RETIRED) {
+                true => format!(" ({identifier} is {} now)", current(identifier)),
+                false => String::new(),
+            }
+        );
     }
     Ok(())
 }
@@ -288,19 +345,41 @@ pub fn compatible(path: &Path, previous: &Value) -> Result<()> {
     if SignatureState::of(previous)? != SignatureState::Stable {
         return Ok(());
     }
-    let requirement = format!(
-        "={}",
-        previous["requirement"]
-            .as_str()
-            .context("stable identity has no designated requirement")?
-    );
+    let kept = previous["requirement"]
+        .as_str()
+        .context("stable identity has no designated requirement")?;
+    // A move `continues` accepts (a retired `ai.wisent.` name to its
+    // convention name, a bare nested name to a `com.wisent.` one) keeps every
+    // other clause of the installed requirement — anchor, team, certificate
+    // — and names the candidate's identifier: the installed requirement
+    // names the old one, which no renamed candidate satisfies, so the move
+    // was refused as an identity change though the same signer made it.
+    let candidate = inspect(path)?;
+    let requirement = match (previous["identifier"].as_str(), candidate["identifier"].as_str()) {
+        (Some(old), Some(new)) if old != new && continues(old, new) => {
+            // codesign quotes an identifier holding a `.`; a bare one stands
+            // unquoted.
+            let Some(clause) = [format!("identifier \"{old}\""), format!("identifier {old} ")]
+                .into_iter()
+                .find(|clause| kept.contains(clause.as_str()))
+            else {
+                bail!("the installed requirement of {old} does not name it ({kept}), so the move to {new} cannot keep it");
+            };
+            let named = match clause.ends_with(' ') {
+                true => format!("identifier \"{new}\" "),
+                false => format!("identifier \"{new}\""),
+            };
+            kept.replacen(&clause, &named, 1)
+        }
+        _ => kept.to_string(),
+    };
     command(
         "/usr/bin/codesign",
         &[
             "--verify",
             "--strict",
             "-R",
-            &requirement,
+            &format!("={requirement}"),
             path.to_str().context("non-UTF8 signing target")?,
         ],
         true,

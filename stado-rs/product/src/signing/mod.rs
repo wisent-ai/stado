@@ -63,26 +63,27 @@ pub fn prepare(
     } else if native(source)? {
         let previous = inspect(destination)?;
         let candidate = inspect(source)?;
-        let id = if crate::signing::SignatureState::is_stable(&previous) {
-            current(
-                previous["identifier"]
-                    .as_str()
-                    .context("previous code has no identifier")?,
-            )
-        } else if crate::signing::SignatureState::is_stable(&candidate) {
-            current(
-                candidate["identifier"]
-                    .as_str()
-                    .context("candidate has no identifier")?,
-            )
-        } else {
+        let named = || {
             identifier(
                 product,
                 destination
                     .file_name()
                     .and_then(|s| s.to_str())
                     .context("destination filename is missing")?,
-            )?
+            )
+        };
+        // The installed program keeps its identifier under its convention
+        // name, else the candidate's; one that named no owner takes the
+        // product's.
+        let kept = [&previous, &candidate]
+            .into_iter()
+            .find(|report| crate::signing::SignatureState::is_stable(report))
+            .and_then(|report| report["identifier"].as_str())
+            .map(current)
+            .filter(|kept| core::conventional(kept).is_ok());
+        let id = match kept {
+            Some(kept) => kept,
+            None => named()?,
         };
         sign_with(choice, source, &id, Some(destination))?
     } else {

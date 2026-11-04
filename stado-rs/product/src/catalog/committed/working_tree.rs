@@ -88,7 +88,7 @@ pub fn report_working_tree(file: &Path, read: &Provenance, committed: &Value) {
     if &parsed == committed {
         return;
     }
-    match super::validate(&parsed) {
+    match super::super::validate(&parsed) {
         Ok(()) => eprintln!(
             "the working tree's catalog {} has an uncommitted edit; readers read it once it is \
              committed, and {at} was read",
