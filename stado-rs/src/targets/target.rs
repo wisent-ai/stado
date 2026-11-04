@@ -211,4 +211,25 @@ impl ComputeTarget {
             Err(_wider_than_validated) => None,
         }
     }
+
+    /// The electricity price this host's energy is charged at, as the
+    /// registry declares it; validation guarantees its fields.
+    pub fn power_tariff(&self) -> Option<PowerTariff> {
+        let tariff = self.extra.get("power_tariff")?;
+        Some(PowerTariff {
+            price_per_kwh: tariff.get("price_per_kwh")?.as_f64()?,
+            currency: tariff.get("currency")?.as_str()?.to_string(),
+            source: tariff.get("source")?.as_str()?.to_string(),
+        })
+    }
+}
+
+/// A host's declared electricity price, `targets[].power_tariff`. Kept in
+/// `extra` like the power cap, so an older Stado preserves it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct PowerTariff {
+    pub price_per_kwh: f64,
+    pub currency: String,
+    /// Where the price was read.
+    pub source: String,
 }

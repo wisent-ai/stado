@@ -79,3 +79,10 @@ The version bump gathers them into the release's own file and removes this one.
   capability "list"`. The listing now answers its own `list` verb beside `resolve`, `call`,
   `select` and `attestation`, printing exactly what the bare command prints; a family the catalog
   does not declare is refused under both forms naming every family, and nothing is written.
+- **`stado cost host`: what each hour of an owned host cost:** owned hardware had one hand-written
+  hourly figure for every host, and nothing measured a board's draw or use. Every host publishing
+  its beacon on a period now samples each board's utilization and power draw and its processor's
+  busy share once per period, keeps the last day of hours in the beacon, and `stado cost host
+  TARGET` prices each hour's energy at the tariff the registry declares (`targets[].power_tariff`,
+  refused without a source). An hour with no board sample is unpriced, never zero. Desktop's
+  Registry screen runs it.

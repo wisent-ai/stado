@@ -134,6 +134,11 @@ enum NativeRegistryOperations {
               path: ["registry", "history"], hostPlacement: .none, fields: [
                   .init(id: "path", label: "Dotted path, such as public_origins.release-object (empty: every write)", option: "--path"),
               ], mutates: false, jsonOutput: false),
+        .init(id: "cost-host", title: "What each hour of an owned host cost, at its declared power tariff",
+              path: ["cost", "host"], hostPlacement: .none, fields: [
+                  .init(id: "target", label: "Registry target", required: true),
+                  .init(id: "since-hours", label: "Hours back (the beacon keeps the last day)", option: "--since-hours", initial: "24"),
+              ], mutates: false, jsonOutput: false),
         .init(id: "registry-document-validate", title: "Validate a supplied registry document",
               path: ["registry", "validate"], hostPlacement: .none,
               payload: .file(option: nil, label: "Registry JSON document", initial: ""),

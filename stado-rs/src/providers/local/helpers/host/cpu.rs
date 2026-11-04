@@ -50,8 +50,10 @@ static CPU_SAMPLE: Mutex<Option<CpuSample>> = Mutex::new(None);
 /// whole clock ticks, so until one has passed since the baseline the last
 /// answer stands and the baseline is kept: two readings inside one tick say
 /// nothing, and no wait of a chosen length decides that. A counter that
-/// cannot be read drops the baseline and answers why.
-fn cpu_busy_fraction() -> Result<Option<f64>, String> {
+/// cannot be read drops the baseline and answers why. The host's hour
+/// measurement reads the same baseline the core count reads, so the two
+/// never disagree about the same interval.
+pub(crate) fn busy_fraction() -> Result<Option<f64>, String> {
     // The sample is replaced whole, so a panic while it was held leaves a
     // usable baseline; left poisoned, the host would report no CPU reading
     // for as long as the agent runs.
@@ -171,7 +173,7 @@ fn cpu_time() -> Result<CpuTime, String> {
 /// more than the host has leave it negative.
 pub fn available_cpu_cores(active_requested_cores: i64) -> Result<Option<i64>, String> {
     let total = total_cpu_cores()?;
-    let Some(busy) = cpu_busy_fraction()? else {
+    let Some(busy) = busy_fraction()? else {
         return Ok(None);
     };
     let observed_busy = (busy * total as f64).ceil() as i64;

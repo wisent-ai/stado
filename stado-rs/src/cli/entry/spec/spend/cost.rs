@@ -52,4 +52,21 @@ pub(crate) enum CostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// What each hour of an owned host cost: per board its busy share and the
+    /// energy it drew, the processor's busy share, priced at the tariff the
+    /// registry declares for the host (`targets[].power_tariff`).
+    ///
+    /// Read from the hours the host's own beacon measured (one sample of
+    /// every board's utilization and power draw per beacon period). An hour
+    /// with no board sample is unpriced, never zero; a host with no declared
+    /// tariff is refused naming the field to set.
+    Host {
+        /// Registry target.
+        target: String,
+        /// How many hours back to read; the beacon keeps the last day.
+        #[arg(long = "since-hours", default_value_t = 24)]
+        since_hours: u32,
+        #[arg(long)]
+        json: bool,
+    },
 }

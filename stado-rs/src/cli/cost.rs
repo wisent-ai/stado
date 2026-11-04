@@ -10,6 +10,9 @@ use crate::scheduler::cost;
 
 use super::{CmdError, CostCommands};
 
+#[path = "cost/host.rs"]
+mod host;
+
 impl From<crate::scheduler::cost::Projection> for Vec<String> {
     /// Python cli.py `cost_estimate` echo lines.
     fn from(proj: crate::scheduler::cost::Projection) -> Self {
@@ -126,6 +129,11 @@ pub(crate) async fn dispatch(sub: &CostCommands) -> Result<(), CmdError> {
         CostCommands::Savings { json } => {
             crate::cli::work::autonomy::show_report("savings", *json).await?;
         }
+        CostCommands::Host {
+            target,
+            since_hours,
+            json,
+        } => host::host(target, *since_hours, *json).await?,
     }
     Ok(())
 }

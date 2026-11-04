@@ -88,6 +88,7 @@ pub mod host_disk;
 pub mod host_exec;
 pub mod host_gates;
 pub mod host_gui_automation;
+pub mod host_hours;
 pub mod host_inventory;
 pub mod host_link;
 pub mod host_object_relocate;

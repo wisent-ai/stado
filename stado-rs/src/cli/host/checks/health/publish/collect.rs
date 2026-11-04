@@ -121,6 +121,10 @@ pub async fn collect_beacons_every(period: std::time::Duration) -> Result<(), Cm
         // Every collection runs to completion. A delayed pass skips obsolete
         // scheduled ticks instead of cancelling work or bursting repeated probes.
         let started = std::time::Instant::now();
+        // One sample of every board's utilization and draw and the
+        // processor's busy share into this hour, once per period: the hour's
+        // energy is each draw over the seconds since the previous sample.
+        crate::deploy::host_hours::sample().await;
         let collected = collect_document(Strays::End, Some(period)).await;
         // How long this collection took: the part of the next beacon's
         // promise the period alone does not cover, since the next one is

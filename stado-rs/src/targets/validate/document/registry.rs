@@ -99,6 +99,43 @@ pub(crate) fn validate_registry_body(
                 ));
             }
         }
+        if let Some(tariff) = target.get("power_tariff") {
+            let at = format!("{location}.power_tariff");
+            let object = tariff
+                .as_object()
+                .ok_or_else(|| verr(&at, "must be {price_per_kwh, currency, source}"))?;
+            let price = object.get("price_per_kwh").and_then(Value::as_f64);
+            if !price.is_some_and(|price| price.is_finite() && price >= 0.0) {
+                return Err(verr(
+                    &format!("{at}.price_per_kwh"),
+                    "must be a number at or above zero",
+                ));
+            }
+            for field in ["currency", "source"] {
+                if !object
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.trim().is_empty())
+                {
+                    return Err(verr(
+                        &format!("{at}.{field}"),
+                        if field == "source" {
+                            "must name where the price was read (the supplier's bill or \
+                             published tariff), so no host-hour is priced at a number nobody \
+                             stated"
+                        } else {
+                            "must be a non-empty currency code"
+                        },
+                    ));
+                }
+            }
+            if let Some(unknown) = object
+                .keys()
+                .find(|key| !["price_per_kwh", "currency", "source"].contains(&key.as_str()))
+            {
+                return Err(verr(&format!("{at}.{unknown}"), "is not a tariff field"));
+            }
+        }
         let platform_location = format!("{location}.release_platform");
         // The platform is one of the shipped names; a target that declares
         // none, or declares it in another shape, is refused the same way.

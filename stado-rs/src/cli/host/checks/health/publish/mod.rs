@@ -152,6 +152,13 @@ pub async fn deliver_document(
                 "the beacon's scans block could not be read: {error}"
             ))
         })?;
+        // Each kept hour's measured busy share per board and processor and
+        // the boards' energy, priced by `stado cost host`.
+        let hours = crate::deploy::host_hours::published().map_err(|error| {
+            CmdError::click(format!(
+                "the beacon's hours block could not be read: {error}"
+            ))
+        })?;
         if let Some(object) = document.as_object_mut() {
             let link = link.unwrap_or_else(|| {
                 crate::deploy::host_link::BeaconLink::pending(
@@ -160,6 +167,7 @@ pub async fn deliver_document(
             });
             object.insert("link".to_string(), serde_json::to_value(&link)?);
             object.insert("scans".to_string(), scans);
+            object.insert("hours".to_string(), hours);
         }
     }
     // The time by which this publisher will publish again, carried in the
