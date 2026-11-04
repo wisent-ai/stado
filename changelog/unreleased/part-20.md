@@ -25,3 +25,10 @@ The version bump gathers them into the release's own file and removes this one.
   shape, refused when it is not that shape. An answer an alternative gives in another shape is
   that alternative unable to answer, and the next one is asked. The orders are
   `capabilities.image.order` and `capabilities.search.order`.
+- **A recipe role's kept keychain is on the user's search list only while Stado signs with it:**
+  keeping a role's identity put `$HOME/.stado/signing/<name>.keychain-db` first on the search list
+  and left it there. After a restart the keychain stayed listed but locked, and a product's own
+  build script asking the list for a signing identity found the fleet's key there, so macOS showed
+  "codesign wants to use the <name> keychain" to the operator. Keeping now takes the keychain off
+  the list (an entry an earlier release left is removed on the next installation); a signature
+  lists it and unlocks it just before `codesign`, and the scope's close takes it off again.
