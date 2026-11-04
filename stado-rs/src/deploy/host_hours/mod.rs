@@ -30,6 +30,18 @@ pub struct BoardHour {
     /// Watt-seconds drawn: each sample's power.draw times the seconds since
     /// the previous sample of the same board, so the sum is the energy.
     pub watt_seconds: f64,
+    /// The part of `watt_seconds` drawn in samples whose utilization.gpu was
+    /// zero, and the seconds those samples cover: the board's idle draw,
+    /// which it spends whether or not anything runs, so a sale or job is
+    /// charged only what it drew above it.
+    #[serde(default)]
+    pub idle_watt_seconds: f64,
+    #[serde(default)]
+    pub idle_seconds: f64,
+    /// The seconds `watt_seconds` covers, so a reader charges the idle draw
+    /// over exactly the time the energy was measured.
+    #[serde(default)]
+    pub seconds: f64,
 }
 
 /// One hour of this host.
@@ -158,6 +170,11 @@ pub async fn sample() {
                 // seconds since the one before.
                 if let Some(seconds) = seconds.filter(|seconds| *seconds > 0.0) {
                     entry.watt_seconds += board.power_watts * seconds;
+                    entry.seconds += seconds;
+                    if board.utilization_percent <= 0.0 {
+                        entry.idle_watt_seconds += board.power_watts * seconds;
+                        entry.idle_seconds += seconds;
+                    }
                 }
             }
         }

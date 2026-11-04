@@ -10,22 +10,61 @@ use crate::primitives::failure::FailureCode;
 /// Joules in one kilowatt-hour: 1000 W for 3600 s (SI).
 const JOULES_PER_KWH: f64 = 3_600_000.0;
 
-/// One hour as the report prints it.
-fn priced(start: &str, hour: &Value, tariff: &crate::targets::PowerTariff) -> Value {
+/// Each board's idle draw in watts over every hour of `hours`: the energy of
+/// its zero-utilization samples over the seconds they cover. A board with no
+/// idle sample in the window has no measured idle draw and is left out.
+fn idle_watts(hours: &serde_json::Map<String, Value>) -> std::collections::BTreeMap<String, f64> {
+    let mut sums: std::collections::BTreeMap<String, (f64, f64)> = Default::default();
+    for hour in hours.values() {
+        if let Some(boards) = hour["boards"].as_object() {
+            for (uuid, board) in boards {
+                let sum = sums.entry(uuid.clone()).or_default();
+                sum.0 += board["idle_watt_seconds"].as_f64().unwrap_or(0.0);
+                sum.1 += board["idle_seconds"].as_f64().unwrap_or(0.0);
+            }
+        }
+    }
+    sums.into_iter()
+        .filter(|(_, (_, seconds))| *seconds > 0.0)
+        .map(|(uuid, (energy, seconds))| (uuid, energy / seconds))
+        .collect()
+}
+
+/// One hour as the report prints it. `idle` is each board's idle draw over
+/// the window: the energy above it is what work on the board added, and a
+/// board whose idle draw was never measured has that part unread.
+fn priced(
+    start: &str,
+    hour: &Value,
+    tariff: &crate::targets::PowerTariff,
+    idle: &std::collections::BTreeMap<String, f64>,
+) -> Value {
     let mut boards = serde_json::Map::new();
     let mut watt_seconds = 0.0;
+    let mut above_idle = Some(0.0);
     if let Some(measured) = hour["boards"].as_object() {
         for (uuid, board) in measured {
             let samples = board["samples"].as_u64().unwrap_or(0);
             let busy = board["busy_samples"].as_u64().unwrap_or(0);
             let energy = board["watt_seconds"].as_f64().unwrap_or(0.0);
+            let seconds = board["seconds"].as_f64();
             watt_seconds += energy;
+            // A beacon from before covered seconds were kept, or a board
+            // whose idle draw was never measured, leaves the energy above
+            // idle unread rather than charging the whole draw as work.
+            let above = match (idle.get(uuid), seconds) {
+                (Some(watts), Some(seconds)) => Some((energy - watts * seconds).max(0.0)),
+                _ => None,
+            };
+            above_idle = above_idle.zip(above).map(|(sum, above)| sum + above);
             boards.insert(
                 uuid.clone(),
                 json!({
                     "samples": samples,
                     "busy_fraction": (samples > 0).then(|| busy as f64 / samples as f64),
                     "kwh": energy / JOULES_PER_KWH,
+                    "idle_watts": idle.get(uuid),
+                    "kwh_above_idle": above.map(|above| above / JOULES_PER_KWH),
                 }),
             );
         }
@@ -37,12 +76,17 @@ fn priced(start: &str, hour: &Value, tariff: &crate::targets::PowerTariff) -> Va
     // A host whose boards were never sampled in this hour has no measured
     // energy: its cost is unknown, never zero.
     let measured = !boards.is_empty();
+    let above_kwh = above_idle
+        .filter(|_| measured)
+        .map(|above| above / JOULES_PER_KWH);
     json!({
         "hour": start,
         "boards": boards,
         "cpu_busy_fraction": cpu_busy,
         "kwh": measured.then_some(kwh),
         "cost": measured.then(|| kwh * tariff.price_per_kwh),
+        "kwh_above_idle": above_kwh,
+        "cost_above_idle": above_kwh.map(|above| above * tariff.price_per_kwh),
         "currency": tariff.currency,
         "unread": hour["unread"],
     })
@@ -92,12 +136,17 @@ pub(crate) async fn host(
         })?;
     let since = (chrono::Utc::now() - chrono::Duration::hours(i64::from(since_hours)))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let idle = idle_watts(hours);
     let rows: Vec<Value> = hours
         .iter()
         .filter(|(start, _)| start.as_str() >= since.as_str())
-        .map(|(start, hour)| priced(start, hour, &tariff))
+        .map(|(start, hour)| priced(start, hour, &tariff, &idle))
         .collect();
     let total: f64 = rows.iter().filter_map(|row| row["cost"].as_f64()).sum();
+    let total_above_idle: f64 = rows
+        .iter()
+        .filter_map(|row| row["cost_above_idle"].as_f64())
+        .sum();
     let unpriced: Vec<&str> = rows
         .iter()
         .filter(|row| row["cost"].is_null())
@@ -113,6 +162,7 @@ pub(crate) async fn host(
                 "since": since,
                 "hours": rows,
                 "total_cost": total,
+                "total_cost_above_idle": total_above_idle,
                 "unpriced_hours": unpriced,
             }))?
         );
@@ -130,18 +180,27 @@ pub(crate) async fn host(
                     .iter()
                     .map(|(uuid, board)| {
                         format!(
-                            "{uuid} busy {} {} kWh",
+                            "{uuid} busy {} {} kWh, {} above idle {} W",
                             share(&board["busy_fraction"]),
-                            number(&board["kwh"])
+                            number(&board["kwh"]),
+                            number(&board["kwh_above_idle"]),
+                            number(&board["idle_watts"])
                         )
                     })
                     .collect::<Vec<_>>()
                     .join("; ")
             })
             .unwrap_or_default();
-        let cost = match row["cost"].as_f64() {
-            Some(cost) => format!("{cost:.4} {}", tariff.currency),
-            None => "unpriced: no board was sampled".to_string(),
+        let cost = match (row["cost"].as_f64(), row["cost_above_idle"].as_f64()) {
+            (Some(cost), Some(above)) => format!(
+                "{cost:.4} {currency}, {above:.4} {currency} above idle",
+                currency = tariff.currency
+            ),
+            (Some(cost), None) => format!(
+                "{cost:.4} {}, above idle unread: a board's idle draw was never measured",
+                tariff.currency
+            ),
+            (None, _) => "unpriced: no board was sampled".to_string(),
         };
         println!(
             "{} cpu busy {}; {}; {cost}",
@@ -160,13 +219,14 @@ pub(crate) async fn host(
         }
     }
     println!(
-        "total {total:.4} {} over {} hour(s){}",
-        tariff.currency,
+        "total {total:.4} {currency}, {total_above_idle:.4} {currency} above idle, over {} \
+         hour(s){}",
         rows.len(),
         match unpriced.len() {
             0 => String::new(),
             n => format!(", {n} unpriced"),
-        }
+        },
+        currency = tariff.currency,
     );
     Ok(())
 }

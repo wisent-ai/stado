@@ -136,3 +136,8 @@ The version bump gathers them into the release's own file and removes this one.
   `plan` now reads the license the repository declares on the model hub at the planned revision,
   and each base model's, records them as `model.license`, prints them, and warns when any
   declares none; `stado inference list` prints them in a `LICENSE` column.
+- **`stado cost host` prints what work added above a board's idle draw:** an owned hour was charged
+  the board's whole draw, although a board draws power with nothing on it, so a job or rental was
+  charged what the board spends anyway. The beacon now keeps each board's zero-utilization energy
+  and seconds and the seconds its energy covers; `cost host` prints each board's idle draw in watts
+  over the window and the kWh and cost above it, and says when the idle draw was never measured.
