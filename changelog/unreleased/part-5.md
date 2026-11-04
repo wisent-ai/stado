@@ -7,6 +7,11 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- `stado workload status weles-activity` no longer calls a run `running` because its directory
+  changed in the last three minutes: a run with neither a result nor a completion is
+  `unfinished`, with `updated_at` beside it, and the walk counts artifacts at any depth instead of
+  stopping four directories down.
+
 - `join.sh` waits on its answers, not on clocks nobody stated: the invitation request's 30-second
   curl deadline and the SSH probe's 3- and 5-second connect timeouts are gone. The request ends
   when the control plane answers or the connection fails, which curl names; the probe dials this
