@@ -225,12 +225,58 @@ pub(super) async fn ensure_or_reinstate(
             CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown)
         );
     }
+    let outcome = match super::route::stuck(target, plan, &outcome) {
+        Some(stuck) => restart_stuck(target, name, plan, &outcome, &stuck, runner).await?,
+        None => outcome,
+    };
     if let Err(cause) = super::route::await_route(target, plan, &outcome, name) {
         let given_back = reinstate_after_failed_ensure(target, &plan.label, retired, runner).await;
         return Err(CmdError::unreachable(format!(
             "{}: {cause}{given_back}",
             target.name
         )));
+    }
+    Ok(outcome)
+}
+
+/// The unit's process stands in a start step past its due moment, so
+/// launchd calls it running while it never serves: `already_correct` left
+/// it so for seven hours and every reader of the registry refused. Its unit
+/// is restarted once, through the same restart `stado service restart`
+/// runs, and a second ensure pass reads the process that now runs it. A
+/// restart that fails, or a new process stuck again, is refused by the
+/// caller's wait with that process's own step.
+async fn restart_stuck(
+    target: &crate::targets::ComputeTarget,
+    name: &str,
+    plan: &service::DeployPlan,
+    found: &service::EnsureOutcome,
+    stuck: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<service::EnsureOutcome, CmdError> {
+    eprintln!("{}: {stuck}; restarting {name}'s unit {}", target.name, plan.label);
+    let unit = service::record_from_ensure(&target.name, name, found, "");
+    let restarted = service::restart_service(target, &unit, runner)
+        .await
+        .map_err(click)?;
+    if !restarted.succeeded("restarted") {
+        return Err(CmdError::click(format!(
+            "{}: {stuck}, and restarting its unit {} failed: {}",
+            target.name,
+            plan.label,
+            restarted.failure()
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    }
+    let outcome = service::ensure_service(target, plan, runner).await.map_err(click)?;
+    if !outcome.succeeded() {
+        return Err(CmdError::click(format!(
+            "{}: {stuck}; its unit {} was restarted, and the ensure after it failed: {}",
+            target.name,
+            plan.label,
+            outcome.report.failure()
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(outcome)
 }

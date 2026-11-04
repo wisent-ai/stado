@@ -67,7 +67,9 @@ The version bump gathers them into the release's own file and removes this one.
   `status --json`, and the serve waiting on it at its host-identity step never bound its API or
   resolver for hours while launchd called the unit running. It is run with
   `TAILSCALE_BE_CLI=true` and no input. `tests/network/tailnet_without_terminal.rs`.
-- **A wait for this host's resolver refuses a serve stuck at start:** `stado service ensure`,
-  and `stado product install stado` through it, waited for a resolver that would never publish;
-  once the serve stands in a start step past the longest that step took here, the wait ends
-  naming the step, how long past due, what it waits on and `stado service restart`.
+- **`stado service ensure` restarts this machine's serve stuck at start:** a unit whose process
+  stood in a start step for hours was answered `already_correct`, and `stado product install
+  stado` then waited without end for a resolver that would never publish. Once the process
+  stands in a `stado serve start:` step past the longest that step took here, ensure says the
+  step and what it waits on, restarts the unit once and ensures again; the wait for the
+  resolver refuses a new process stuck again with its own step.

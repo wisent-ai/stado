@@ -100,7 +100,7 @@ pub(crate) fn await_serving(pid: u32) -> Result<(), String> {
 /// publishes, and a wait for its publication held `stado product install
 /// stado` for as long as the hang lasted, which was hours. A register that
 /// cannot be read is no evidence of a hang.
-fn stuck_at_start(pid: u32) -> Option<String> {
+pub(crate) fn stuck_at_start(pid: u32) -> Option<String> {
     let listing = crate::wait::open::listed().ok()?;
     let now = chrono::Utc::now();
     let own: Vec<_> = listing.open.iter().filter(|wait| wait.pid == pid).collect();
@@ -116,7 +116,7 @@ fn stuck_at_start(pid: u32) -> Option<String> {
         .collect();
     Some(format!(
         "the resolver (pid {pid}) cannot publish that it serves: its start stands in \"{}\" {}s past the longest \
-         that step took here (since {}){}; restart its unit (`stado service restart`)",
+         that step took here (since {}){}",
         start.field("co").unwrap_or(&start.line),
         past.num_seconds(),
         start.field("od").unwrap_or("an unknown moment"),

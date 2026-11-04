@@ -52,3 +52,17 @@ pub(super) fn await_route(
         )
     })
 }
+
+/// Why the process the pass found running this machine's own resolver unit
+/// will never serve: it stands in a start step past that step's due moment
+/// ([`crate::cli::resolver::stuck_at_start`]). The wait register it is read
+/// from is this machine's, so only a unit on this machine is judged; `None`
+/// for any other, for a pass that reported no pid, and for a start within
+/// its due moment.
+pub(super) fn stuck(target: &ComputeTarget, plan: &DeployPlan, outcome: &EnsureOutcome) -> Option<String> {
+    if !carries_this_process_route(target, plan) {
+        return None;
+    }
+    let pid = outcome.pid.trim().parse::<u32>().ok()?;
+    crate::cli::resolver::stuck_at_start(pid)
+}

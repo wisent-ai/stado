@@ -21,7 +21,9 @@ pub use crate::cli::resolver::directory::document::canonical_document;
 pub use crate::cli::resolver::directory::document::canonical_document_or_last_good;
 pub use crate::cli::resolver::serve::serve;
 pub(crate) use report::follow::{follow_generation, follow_written};
-pub(crate) use report::serving::{await_serving, ensure_upstream_follows, follow_authority};
+pub(crate) use report::serving::{
+    await_serving, ensure_upstream_follows, follow_authority, stuck_at_start,
+};
 pub(crate) use takeover::{
     install as install_authority, own_command, promote as promote_authority, take_authority,
     Handover as AuthorityHandover, Installed as InstalledAuthority,
