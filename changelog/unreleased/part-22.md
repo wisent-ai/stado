@@ -377,3 +377,10 @@ The version bump gathers them into the release's own file and removes this one.
   `config` only for what the host must provision; the peer document carries `skarbiec_failure` too,
   shown on Stado Desktop's Peer fleets panel. The renter-isolation reads (`ip`, `ss`, the
   `DOCKER-USER` chain) are awaited child processes.
+- **Each source valued per board-hour, and a node runs only while its source pays most:** `stado
+  market sources --target HOST` prints what each source earned the host per board-hour over the
+  autonomy policy's `freshness.pricing_max_age_seconds` (kept payouts over the hours its nodes ran,
+  kept under `state/market/node-hours/`; Vast.ai's kept days over their hours) beside the best other
+  source, or why it has no value. `stado market node follow` stops a node while another source
+  with a value earns more. Desktop's Registry operation takes the host. Test
+  `tests/market/source_value.mjs`.

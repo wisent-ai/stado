@@ -510,6 +510,14 @@ async fn follow(
     // loop is stopped on the first poll that should not run it.
     let mut running: Option<bool> = None;
     let mut idle_since: Option<Instant> = None;
+    // When the current run began: kept as a segment when it stops, so the
+    // source's payouts can be divided by the hours its node ran. A run an
+    // earlier loop left going starts where that loop recorded it.
+    let mut started: Option<String> = node::load_run(store, name)
+        .await
+        .map_err(cmd)?
+        .filter(|run| run.running)
+        .and_then(|run| run.running_since);
     loop {
         cadence.tick().await;
         let current = node::require(store, name).await.map_err(cmd)?;
@@ -530,6 +538,8 @@ async fn follow(
             None => None,
         } {
             Some(cause)
+        } else if let Err(cause) = earns_most(store, &current).await? {
+            Some(cause)
         } else {
             None
         };
@@ -547,6 +557,20 @@ async fn follow(
                         .await?;
                         if let Some(lease) = held.take() {
                             lease.release().await.map_err(CmdError::from)?;
+                        }
+                        if let Some(from) = started.take() {
+                            node::save_segment(
+                                store,
+                                &node::NodeSegment {
+                                    node: name.to_string(),
+                                    source: current.source.clone(),
+                                    target: current.target.clone(),
+                                    from,
+                                    to: chrono::Utc::now().to_rfc3339(),
+                                },
+                            )
+                            .await
+                            .map_err(cmd)?;
                         }
                     }
                     running = Some(false);
@@ -638,6 +662,7 @@ async fn follow(
                                 )
                                 .await?;
                                 held = Some(lease);
+                                started = Some(since);
                                 running = Some(true);
                             }
                         }
@@ -649,4 +674,27 @@ async fn follow(
             return Ok(());
         }
     }
+}
+
+/// Whether the node's source still earns the host at least as much per
+/// board-hour as every other source with a read value. A source with no
+/// value yet (no hours run, no payout kept, or no pricing window declared)
+/// runs, said, since it can be valued only by running.
+async fn earns_most(
+    store: &JobStorage,
+    declared: &NodeDeclaration,
+) -> Result<Result<(), String>, CmdError> {
+    use crate::cli::integrations::vast::source_value;
+    let since = match source_value::window(store).await {
+        Ok((since, _)) => since,
+        Err(cause) => {
+            say(&format!(
+                "{} is not compared with other sources: {cause}",
+                declared.source
+            ));
+            return Ok(Ok(()));
+        }
+    };
+    let values = source_value::values(store, &declared.target, since).await?;
+    Ok(source_value::may_run(&values, &declared.source))
 }

@@ -158,10 +158,16 @@ pub(crate) enum MarketCommands {
     /// storage and bandwidth networks): what each pays for, its unit and
     /// currency, the page that says how a host joins, and whether Stado
     /// carries an adapter. --check asks each page whether it still answers
-    /// and exits non-zero naming each that does not.
+    /// and exits non-zero naming each that does not. --target HOST adds what
+    /// each source earned that host per board-hour over the autonomy
+    /// policy's freshness.pricing_max_age_seconds: kept payouts over the
+    /// hours its nodes ran, Vast.ai's kept days over their hours, beside the
+    /// best other source.
     Sources {
         #[arg(long)]
         check: bool,
+        #[arg(long)]
+        target: Option<String>,
         #[arg(long)]
         json: bool,
     },

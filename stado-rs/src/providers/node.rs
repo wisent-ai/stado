@@ -11,9 +11,11 @@
 //! runs, which the follow loop reserves through capacity like any workload.
 //!
 //! One JSON document per node under `state/market/nodes/<name>.json` in the
-//! fleet's own store, and the loop's last transition under
-//! `state/market/node-runs/<name>.json`, so every host and Stado Desktop read
-//! the same answer.
+//! fleet's own store, the loop's last transition under
+//! `state/market/node-runs/<name>.json`, and each finished run under
+//! `state/market/node-hours/<name>/<started>.json`, so every host and Stado
+//! Desktop read the same answer and a source's earnings can be divided by
+//! the hours its node ran.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +25,8 @@ use crate::queue::{JobStorage, Listing, StorageError};
 pub const NODES_PREFIX: &str = "state/market/nodes/";
 /// Where each node's last transition lives.
 pub const RUNS_PREFIX: &str = "state/market/node-runs/";
+/// Where each finished run of a node is kept.
+pub const HOURS_PREFIX: &str = "state/market/node-hours/";
 
 /// What a node operation can fail with, each with the sentence the operator
 /// reads.
@@ -260,6 +264,60 @@ pub async fn save_run(store: &JobStorage, run: &NodeRun) -> Result<(), NodeError
         .map_err(|error| NodeError::Usage(format!("the run record cannot be encoded: {error}")))?;
     store.upload_text(&run_path(&run.node), &body).await?;
     Ok(())
+}
+
+/// One finished run of a node: the source it earned from, the host, and
+/// when it ran.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeSegment {
+    pub node: String,
+    pub source: String,
+    pub target: String,
+    pub from: String,
+    pub to: String,
+}
+
+impl NodeSegment {
+    /// The hours of this run that fall at or after `since`.
+    pub fn hours_since(&self, since: chrono::DateTime<chrono::Utc>) -> Result<f64, String> {
+        let read = |at: &str| {
+            chrono::DateTime::parse_from_rfc3339(at)
+                .map(|at| at.with_timezone(&chrono::Utc))
+                .map_err(|error| {
+                    format!("node {} run time {at:?} is unreadable: {error}", self.node)
+                })
+        };
+        let from = read(&self.from)?.max(since);
+        let to = read(&self.to)?;
+        Ok(((to - from).num_seconds().max(0)) as f64 / 3600.0)
+    }
+}
+
+/// Keep one finished run.
+pub async fn save_segment(store: &JobStorage, segment: &NodeSegment) -> Result<(), NodeError> {
+    let body = serde_json::to_string(segment)
+        .map_err(|error| NodeError::Usage(format!("the run segment cannot be encoded: {error}")))?;
+    let key = format!(
+        "{HOURS_PREFIX}{}/{}.json",
+        segment.node,
+        segment.from.replace(':', "")
+    );
+    store.upload_text(&key, &body).await?;
+    Ok(())
+}
+
+/// Every kept run of every node.
+pub async fn segments(store: &JobStorage) -> Result<Vec<NodeSegment>, NodeError> {
+    let mut found = Vec::new();
+    for key in store.list_paths(HOURS_PREFIX, Listing::Every).await? {
+        let Some(text) = store.download_text(&key).await? else {
+            continue;
+        };
+        found.push(serde_json::from_str(&text).map_err(|error| {
+            NodeError::NotFound(format!("{key} does not hold a node run segment: {error}"))
+        })?);
+    }
+    Ok(found)
 }
 
 /// The role lock one follow loop of `node` holds for its life.

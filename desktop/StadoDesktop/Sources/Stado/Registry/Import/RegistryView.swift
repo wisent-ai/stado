@@ -252,6 +252,7 @@ enum NativeRegistryOperations {
         .init(id: "market-sources", title: "Every place a fleet host can earn, and which Stado can join",
               path: ["market", "sources"], hostPlacement: .none, fields: [
                   .init(id: "check", label: "Ask each source's page whether it still answers", option: "--check", flag: true),
+                  .init(id: "target", label: "Registry target: each source's earnings per board-hour on it", option: "--target"),
               ], mutates: false, jsonOutput: false),
         .init(id: "market-measure", title: "What Vast renters pay for a board model now",
               path: ["market", "measure"], hostPlacement: .none, fields: [
