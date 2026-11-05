@@ -282,3 +282,7 @@ The version bump gathers them into the release's own file and removes this one.
   share from the declared privileged helper `host.power_helper` (one `powermetrics` plist sample),
   kept as the board `macos-package`, so `stado cost host` prices a Mac at its tariff; an undeclared
   or failing helper is named in each hour's `unread`.
+- **`stado inference route prefer-fleet ALIAS`:** applies the route audit's fix for one alias — the
+  running deployment that serves the model becomes the primary, the outside provider the first
+  fallback, its other fallbacks kept — through `route set` with the alias's current destination as
+  the condition. Stado Desktop's Inference screen runs it.

@@ -262,6 +262,17 @@ pub enum RouteCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Route ALIAS to the running deployment that serves the model it pays
+    /// an outside provider for, with that provider as the first fallback and
+    /// its other fallbacks kept: the fix `audit` prints, applied through
+    /// `route set` with the alias's current destination as the condition.
+    /// Refused when the audit finds nothing for ALIAS or the deployment is
+    /// not ready.
+    PreferFleet {
+        alias: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
@@ -341,6 +352,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                 json,
             } => routes::show(repair, probe_bearer_role.as_deref(), json).await,
             RouteCommands::Audit { json } => routes::audit(json).await,
+            RouteCommands::PreferFleet { alias, json } => routes::prefer_fleet(&alias, json).await,
         },
         InferenceCommands::Blockers { host, json } => process::blockers(&host, json).await,
         InferenceCommands::Release {

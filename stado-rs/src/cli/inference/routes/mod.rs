@@ -211,7 +211,7 @@ mod audit;
 mod commit;
 mod show;
 
-pub use audit::audit;
+pub use audit::{audit, prefer_fleet};
 pub use show::show;
 
 use commit::{commit_routes, RouteChange};

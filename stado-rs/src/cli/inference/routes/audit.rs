@@ -51,6 +51,8 @@ fn finding(
         "host": deployment.target,
         "repository": deployment.model.repository,
         "revision": deployment.model.revision,
+        "expected": primary.unwrap_or(super::ABSENT),
+        "fallbacks": fallbacks,
         "fix": format!(
             "stado inference route set {alias} --to {} --expected {}{fallback_words}",
             deployment.name,
@@ -99,6 +101,43 @@ pub(crate) fn findings(registry: &schema::Registry) -> Vec<Value> {
         }
     }
     found
+}
+
+/// `stado inference route prefer-fleet ALIAS`: route ALIAS to the running
+/// deployment that serves the model it pays outside for, keeping the
+/// outside destination as the first fallback and every fallback it already
+/// had after it, through `route set` with the alias's current destination
+/// as the condition. Refused when the audit finds nothing for ALIAS, naming
+/// why; `route set` refuses a deployment that is not ready.
+pub async fn prefer_fleet(alias: &str, json_output: bool) -> Result<(), CmdError> {
+    let document = crate::cli::registry::fetch_document().await?;
+    let registry = schema::parse(&document).map_err(CmdError::declaration)?;
+    let found: Vec<Value> = findings(&registry)
+        .into_iter()
+        .filter(|row| row["alias"].as_str() == Some(alias))
+        .collect();
+    let Some(row) = found.first() else {
+        let why = match registry.routes.get(alias) {
+            None => format!("route '{alias}' is not declared; `stado inference route show` names the routes"),
+            Some(destination) => format!(
+                "route '{alias}' goes to '{destination}', and neither it nor a fallback pays an outside \
+                 provider for a model a running deployment serves"
+            ),
+        };
+        return Err(CmdError::refused(why));
+    };
+    // The finding states the destination, the condition and the fallback
+    // order its printed fix carries; this runs exactly that.
+    let to = field(&row["deployment"]).to_string();
+    let expected = field(&row["expected"]).to_string();
+    let fallbacks: Vec<String> = row["fallbacks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    super::set(alias, &to, &expected, None, &fallbacks, json_output).await
 }
 
 pub async fn audit(json_output: bool) -> Result<(), CmdError> {

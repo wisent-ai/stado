@@ -27,5 +27,9 @@ enum NativeInferenceOperations {
         ]),
         .init(id: "inference-route-audit", title: "Routes that pay an outside provider for a model a running deployment serves",
               path: ["inference", "route", "audit"], hostPlacement: .none, mutates: false, jsonOutput: false),
+        .init(id: "inference-route-prefer-fleet", title: "Route an alias to the fleet deployment that serves its model, keeping the outside provider as fallback",
+              path: ["inference", "route", "prefer-fleet"], hostPlacement: .none, fields: [
+                  .init(id: "alias", label: "Route alias", required: true),
+              ], jsonOutput: false),
     ]
 }
