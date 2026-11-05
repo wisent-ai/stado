@@ -5,7 +5,7 @@
 //! `registries`, `identities` and `hosts`.
 
 use crate::cli::entry::spec::root::platform::PlatformCommands;
-use crate::cli::integrations::{egress, vast};
+use crate::cli::integrations::{egress, market};
 use crate::cli::reporting::alerts;
 use crate::cli::setup::{bootstrap, product, profiles};
 use crate::cli::work::{queue, schedule};
@@ -89,7 +89,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
         PlatformCommands::Cost(sub) => cost::dispatch(&sub).await,
         PlatformCommands::Data(sub) => crate::cli::data::dispatch(&sub).await,
         PlatformCommands::Demand(sub) => crate::cli::demand::dispatch(&sub).await,
-        PlatformCommands::Market(sub) => vast::dispatch(&sub).await,
+        PlatformCommands::Market(sub) => market::dispatch(&sub).await,
         PlatformCommands::Quota { json, sub } => quota::dispatch(json, &sub).await,
         PlatformCommands::Registry(sub) => registries::dispatch(sub).await,
         PlatformCommands::Fleet(sub) => fleet::run(sub).await,

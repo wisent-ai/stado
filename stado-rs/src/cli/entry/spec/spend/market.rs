@@ -49,16 +49,28 @@ impl std::str::FromStr for MarketProvider {
             .iter()
             .find(|row| row.provider == provider)
             .ok_or("the market family lost its own row")?;
-        match (provider, row.support) {
-            (ProviderId::Vast, CapabilitySupport::Implemented) => Ok(Self::Vast),
-            (ProviderId::Stado, CapabilitySupport::Implemented) => Ok(Self::Stado),
-            (_, support) => Err(format!(
+        Self::of(row).ok_or_else(|| {
+            format!(
                 "{} is declared {} in the market family ({}); Stado carries no adapter for it yet, \
                  see `stado capabilities market`",
                 provider.as_str(),
-                support.as_str(),
+                row.support.as_str(),
                 row.note
-            )),
+            )
+        })
+    }
+}
+
+impl MarketProvider {
+    /// The adapter a market family row is implemented by; `None` for a
+    /// seller Stado carries no adapter for. The one place a catalog seller
+    /// becomes an adapter, for `--provider` and `stado capabilities market`.
+    pub(crate) fn of(row: &crate::capabilities::ProviderCapability) -> Option<Self> {
+        use crate::capabilities::{CapabilitySupport, ProviderId};
+        match (row.provider, row.support) {
+            (ProviderId::Vast, CapabilitySupport::Implemented) => Some(Self::Vast),
+            (ProviderId::Stado, CapabilitySupport::Implemented) => Some(Self::Stado),
+            _ => None,
         }
     }
 }

@@ -15,7 +15,10 @@ mod offers;
 mod readiness;
 mod run;
 
-use crate::cli::{CmdError, MarketCommands};
+use serde_json::{json, Value};
+
+use super::market::{Follow, ListOffer, MarketAdapter, ServeOrRent};
+use crate::cli::CmdError;
 use crate::primitives::failure::FailureCode;
 use crate::providers::peer::PeerError;
 use crate::queue::JobStorage;
@@ -40,121 +43,135 @@ pub(crate) async fn our_store() -> Result<JobStorage, CmdError> {
     JobStorage::new().await.map_err(CmdError::from)
 }
 
-/// The `--peer` a provider-stado subcommand needs, refused when absent.
-fn required_peer(peer: &Option<String>, verb: &str) -> Result<String, CmdError> {
-    match peer {
-        Some(peer) => Ok(peer.clone()),
-        None => Err(CmdError::usage(format!(
-            "stado market {verb} --provider stado needs --peer NAME, the declared peer fleet; \
-             `stado market peer list` names them"
-        ))),
+/// Another Stado fleet, named by `--peer`: while our queue is idle this host
+/// runs a Stado worker against the peer's queue.
+pub(crate) struct PeerAdapter {
+    pub peer: Option<String>,
+}
+
+impl PeerAdapter {
+    /// The `--peer` a verb needs, refused when absent.
+    fn required(&self, verb: &str) -> Result<String, CmdError> {
+        match &self.peer {
+            Some(peer) => Ok(peer.clone()),
+            None => Err(CmdError::usage(format!(
+                "stado market {verb} --provider stado needs --peer NAME, the declared peer fleet; \
+                 `stado market peer list` names them"
+            ))),
+        }
     }
 }
 
-/// Dispatch one provider-stado subcommand.
-pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
-    match command {
-        MarketCommands::List {
-            peer,
-            price_gpu,
-            price_disk,
-            price_min_bid,
-            json,
-            ..
-        } => {
-            if price_disk.is_some() || price_min_bid.is_some() {
-                return Err(CmdError::usage(
-                    "--price-disk and --price-min-bid are Vast.ai's prices; a peer fleet is \
-                     offered at --price-gpu alone",
-                ));
-            }
-            offers::list(&required_peer(peer, "list")?, *price_gpu, *json).await
+#[async_trait::async_trait]
+impl MarketAdapter for PeerAdapter {
+    async fn list(&self, offer: ListOffer, json: bool) -> Result<(), CmdError> {
+        if offer.price_disk.is_some() || offer.price_min_bid.is_some() {
+            return Err(CmdError::usage(
+                "--price-disk and --price-min-bid are Vast.ai's prices; a peer fleet is offered \
+                 at --price-gpu alone",
+            ));
         }
-        MarketCommands::Unlist { peer, json, .. } => {
-            offers::unlist(&required_peer(peer, "unlist")?, *json).await
-        }
-        MarketCommands::Status { peer, json, .. } => offers::status(peer.as_deref(), *json).await,
-        // A peer fleet states no income of its own: what this host lent it is
-        // what `market status --provider stado` computes from the sessions.
-        // Refused, not answered with an empty ledger.
-        MarketCommands::Earnings { .. } => Err(CmdError::refused(
+        offers::list(&self.required("list")?, offer.price_gpu, json).await
+    }
+
+    async fn unlist(&self, json: bool) -> Result<(), CmdError> {
+        offers::unlist(&self.required("unlist")?, json).await
+    }
+
+    async fn status(&self, json: bool) -> Result<(), CmdError> {
+        offers::status(self.peer.as_deref(), json).await
+    }
+
+    // A peer fleet states no income of its own: what this host lent it is
+    // what `market status --provider stado` computes from the sessions.
+    // Refused, not answered with an empty ledger.
+    async fn earnings(&self, _: &str, _: u32, _: bool) -> Result<(), CmdError> {
+        Err(CmdError::refused(
             "stado market earnings reads a marketplace's own statement of income, and a Stado \
              peer fleet states none; what this host lent a peer is read with `stado market \
              status --provider stado --peer <peer>`",
-        )),
-        // A peer fleet's worker drains; there is no renter to tell.
-        MarketCommands::Maintenance { .. } => Err(CmdError::refused(
+        ))
+    }
+
+    // A peer fleet's worker drains; there is no renter to tell.
+    async fn maintenance(&self, _: u32, _: f64, _: &str, _: bool) -> Result<(), CmdError> {
+        Err(CmdError::refused(
             "a Stado peer fleet holds no renter to notify: the lending worker drains when the \
              host stops lending, so take the host out with `stado market unlist --provider stado \
              --peer <peer>` instead",
-        )),
-        MarketCommands::Measure { .. } => Err(CmdError::refused(
+        ))
+    }
+
+    async fn measure(&self, _: &str, _: bool) -> Result<(), CmdError> {
+        Err(CmdError::refused(
             "a Stado peer fleet publishes no market of prices; the price a peer is lent at is the \
              one `stado market follow --provider stado --price-gpu` offers",
-        )),
-        MarketCommands::ServeOrRent { .. } => Err(CmdError::refused(
+        ))
+    }
+
+    async fn serve_or_rent(&self, _: ServeOrRent<'_>, _: bool) -> Result<(), CmdError> {
+        Err(CmdError::refused(
             "serve-or-rent compares with a marketplace's rental price, and a Stado peer fleet \
              publishes none; run it with --provider vast",
-        )),
-        MarketCommands::Readiness {
-            peer,
+        ))
+    }
+
+    async fn readiness(
+        &self,
+        vault_host: Option<String>,
+        no_vault_check: bool,
+        json: bool,
+    ) -> Result<(), CmdError> {
+        readiness::report(
+            &self.required("readiness")?,
             vault_host,
-            no_vault_check,
+            !no_vault_check,
             json,
-            ..
-        } => {
-            readiness::report(
-                &required_peer(peer, "readiness")?,
-                vault_host.clone(),
-                !*no_vault_check,
-                *json,
-            )
-            .await
+        )
+        .await
+    }
+
+    async fn verdicts(&self) -> Vec<Value> {
+        match every_peer().await {
+            Ok(peers) if peers.is_empty() => vec![json!({
+                "provider": "stado",
+                "ready": false,
+                "verdict": "no peer fleet is declared; `stado market peer add` declares one",
+            })],
+            Ok(peers) => peers
+                .into_iter()
+                .filter(|(name, _, _)| self.peer.as_ref().is_none_or(|peer| peer == name))
+                .map(|(name, ready, verdict)| {
+                    json!({"provider": "stado", "peer": name, "ready": ready, "verdict": verdict})
+                })
+                .collect(),
+            Err(error) => vec![json!({
+                "provider": "stado",
+                "ready": false,
+                "verdict": format!("the declared peer fleets cannot be read: {error}"),
+            })],
         }
-        MarketCommands::Monitor {
-            peer, bucket, json, ..
-        } => {
-            let bucket = match bucket.as_deref() {
-                Some(named) => named,
-                None => crate::config::bucket(),
-            };
-            offers::monitor(&required_peer(peer, "monitor")?, bucket, *json).await
+    }
+
+    async fn monitor(&self, bucket: &str, json: bool) -> Result<(), CmdError> {
+        offers::monitor(&self.required("monitor")?, bucket, json).await
+    }
+
+    async fn follow(&self, follow: Follow) -> Result<(), CmdError> {
+        if follow.price_disk.is_some() {
+            return Err(CmdError::usage(
+                "--price-disk is Vast.ai's price; a peer fleet is offered at --price-gpu alone",
+            ));
         }
-        MarketCommands::Follow {
-            peer,
-            idle_window_s,
-            poll_interval_s,
-            price_gpu,
-            price_disk,
-            max_duration_s,
-            dry_run,
-            once,
-            ..
-        } => {
-            if price_disk.is_some() {
-                return Err(CmdError::usage(
-                    "--price-disk is Vast.ai's price; a peer fleet is offered at --price-gpu alone",
-                ));
-            }
-            run::auto_list(run::Params {
-                peer: required_peer(peer, "follow")?,
-                idle_window_s: *idle_window_s,
-                poll_interval_s: *poll_interval_s,
-                price_gpu: *price_gpu,
-                max_duration_s: *max_duration_s,
-                dry_run: *dry_run,
-                once: *once,
-            })
-            .await
-        }
-        MarketCommands::Peer(peer) => declare(peer).await,
-        // Answered by the market dispatch before any provider is chosen.
-        MarketCommands::Sources { .. }
-        | MarketCommands::Payout(_)
-        | MarketCommands::Node(_)
-        | MarketCommands::Compare { .. } => Err(CmdError::usage(
-            "stado market sources, payout, node and compare name no provider; run them without \
-             --provider",
-        )),
+        run::auto_list(run::Params {
+            peer: self.required("follow")?,
+            idle_window_s: follow.idle_window_s,
+            poll_interval_s: follow.poll_interval_s,
+            price_gpu: follow.price_gpu,
+            max_duration_s: follow.max_duration_s,
+            dry_run: follow.dry_run,
+            once: follow.once,
+        })
+        .await
     }
 }

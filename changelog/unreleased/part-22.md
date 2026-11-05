@@ -274,3 +274,7 @@ The version bump gathers them into the release's own file and removes this one.
   verification endpoint; none is built in). The gateway answers a request without a key `402` with
   a quote, `POST /v1/pay` verifies the payment and answers a key good for one call, and the call is
   settled with what was paid, its cost and the refund due. Earnings and `market compare` count it.
+- **Every marketplace is one adapter:** `stado market`'s provider verbs dispatch through one
+  `MarketAdapter` interface (list, unlist, status, earnings, maintenance, measure, serve-or-rent,
+  readiness, monitor, follow, and the readiness rows of `stado capabilities market`), with Vast.ai
+  and Stado peer fleets ported to it. A new marketplace is a catalog row and one adapter.

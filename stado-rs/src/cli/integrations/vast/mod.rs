@@ -1,13 +1,12 @@
-//! `stado market`: the dispatch by `--provider`, and the Vast.ai adapter
-//! behind `--provider vast`.
+//! The Vast.ai adapter behind `--provider vast`, and the provider-less
+//! market verbs (`sources`, `payout`, `compare`).
 //!
 //! `list`, `unlist`, `status`, `monitor`, the `follow` loop and the
 //! `readiness` verdict, each against Vast.ai's host API. Monitor and
 //! follow read the queue through [`JobStorage`], which honors
 //! `WC_STORAGE_BACKEND`. A dry run builds no client: `--dry-run` promises the
 //! toggle decisions without calling the marketplace, so it needs no
-//! credential. `--provider stado` and `stado market peer` are answered by
-//! [`super::peer`].
+//! credential. The dispatch by `--provider` is [`super::market`].
 
 mod compare;
 #[path = "earnings.rs"]
@@ -19,202 +18,142 @@ mod readiness_text;
 mod serve_or_rent;
 mod sources;
 
-pub(crate) use readiness::{read_vault, verdict as readiness_verdict};
+pub(crate) use readiness::read_vault;
 pub(crate) use sources::source_ids;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
-use crate::cli::{CmdError, MarketCommands, MarketProvider, PayoutCommands};
+use super::market::{Follow, ListOffer, MarketAdapter, ServeOrRent};
+use crate::cli::{CmdError, MarketCommands, PayoutCommands};
 use crate::providers::vast::{self, AutoListParams, ListMachineParams, VastClient, VastError};
 use crate::queue::JobStorage;
 
-/// Dispatch one `market` subcommand to the marketplace it names.
-pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
-    if let MarketCommands::Peer(peer) = command {
-        return super::peer::declare(peer).await;
-    }
-    if let MarketCommands::Node(node) = command {
-        return super::node::dispatch(node).await;
-    }
-    // The source list and payouts span every marketplace, so no provider is
-    // named.
-    if let MarketCommands::Sources { check, json } = command {
-        return sources::sources(*check, *json).await;
-    }
-    if let MarketCommands::Compare {
-        target,
-        since_days,
-        json,
-    } = command
-    {
-        return compare::compare(target, *since_days, *json).await;
-    }
-    if let MarketCommands::Payout(payout) = command {
-        return match payout {
-            PayoutCommands::Record {
+/// The verbs that name no marketplace, answered before any adapter is
+/// chosen; `None` for every verb that names one.
+pub(crate) async fn provider_less(command: &MarketCommands) -> Option<Result<(), CmdError>> {
+    Some(match command {
+        MarketCommands::Sources { check, json } => sources::sources(*check, *json).await,
+        MarketCommands::Compare {
+            target,
+            since_days,
+            json,
+        } => compare::compare(target, *since_days, *json).await,
+        MarketCommands::Payout(PayoutCommands::Record {
+            source,
+            host,
+            paid_at,
+            token,
+            amount,
+            usd_per_unit,
+            as_of,
+            rate_source,
+            json,
+        }) => {
+            payout::record(
                 source,
                 host,
                 paid_at,
                 token,
-                amount,
-                usd_per_unit,
-                as_of,
-                rate_source,
-                json,
-            } => {
-                payout::record(
-                    source,
-                    host,
-                    paid_at,
-                    token,
-                    *amount,
-                    *usd_per_unit,
-                    as_of.as_deref(),
-                    rate_source.as_deref(),
-                    *json,
-                )
-                .await
-            }
-            PayoutCommands::List { host, json } => payout::list(host.as_deref(), *json).await,
-        };
-    }
-    if provider(command) == Some(MarketProvider::Stado) {
-        return super::peer::dispatch(command).await;
-    }
-    if peer_named(command) {
-        return Err(CmdError::usage(
-            "--peer names a Stado fleet and is taken only with --provider stado",
-        ));
-    }
-    match command {
-        MarketCommands::List {
-            price_gpu,
-            price_disk,
-            price_min_bid,
-            json,
-            ..
-        } => {
-            let Some(price_disk) = price_disk else {
-                return Err(CmdError::usage(
-                    "listing on Vast.ai needs --price-disk, the per-GB-month disk price in USD",
-                ));
-            };
-            list(*price_gpu, *price_disk, *price_min_bid, *json).await
-        }
-        MarketCommands::Unlist { json, .. } => unlist(*json).await,
-        MarketCommands::Earnings {
-            target,
-            since_days,
-            json,
-            ..
-        } => earnings::earnings(target, *since_days, *json).await,
-        MarketCommands::Measure { gpu, json, .. } => measure::measure(gpu, *json).await,
-        MarketCommands::ServeOrRent {
-            target,
-            outside_model,
-            gpu,
-            since_hours,
-            json,
-            ..
-        } => serve_or_rent::serve_or_rent(target, outside_model, gpu, *since_hours, *json).await,
-        MarketCommands::Maintenance {
-            in_minutes,
-            hours,
-            category,
-            json,
-            ..
-        } => maintenance(*in_minutes, *hours, category, *json).await,
-        MarketCommands::Status { json, .. } => status(*json).await,
-        MarketCommands::Readiness {
-            vault_host,
-            no_vault_check,
-            json,
-            ..
-        } => readiness::report(vault_host.clone(), *no_vault_check, *json).await,
-        MarketCommands::Monitor { bucket, json, .. } => {
-            // `--bucket` names the store when given; else it is the one the
-            // configuration selects.
-            let bucket = match bucket.as_deref() {
-                Some(named) => named,
-                None => crate::config::bucket(),
-            };
-            monitor(bucket, *json).await
-        }
-        MarketCommands::Follow {
-            idle_window_s,
-            poll_interval_s,
-            price_gpu,
-            price_disk,
-            max_duration_s,
-            dry_run,
-            once,
-            ..
-        } => {
-            let Some(price_disk) = price_disk else {
-                return Err(CmdError::usage(
-                    "following the queue on Vast.ai needs --price-disk, the per-GB-month disk price in USD",
-                ));
-            };
-            auto_list(
-                *idle_window_s,
-                *poll_interval_s,
-                (*price_gpu, *price_disk),
-                *max_duration_s,
-                *dry_run,
-                *once,
+                *amount,
+                *usd_per_unit,
+                as_of.as_deref(),
+                rate_source.as_deref(),
+                *json,
             )
             .await
         }
-        MarketCommands::Peer(_) => unreachable!("peer declarations were answered above"),
-        MarketCommands::Node(_) => unreachable!("network nodes were answered above"),
-        MarketCommands::Sources { .. }
-        | MarketCommands::Payout(_)
-        | MarketCommands::Compare { .. } => {
-            unreachable!("the source list, payouts and the comparison were answered above")
+        MarketCommands::Payout(PayoutCommands::List { host, json }) => {
+            payout::list(host.as_deref(), *json).await
         }
-    }
+        _ => return None,
+    })
 }
 
-/// The marketplace a provider-bearing subcommand names; `None` for the
-/// source list, which spans every marketplace.
-pub(crate) fn provider(command: &MarketCommands) -> Option<MarketProvider> {
-    match command {
-        MarketCommands::List { provider, .. }
-        | MarketCommands::Unlist { provider, .. }
-        | MarketCommands::Status { provider, .. }
-        | MarketCommands::Earnings { provider, .. }
-        | MarketCommands::Maintenance { provider, .. }
-        | MarketCommands::Measure { provider, .. }
-        | MarketCommands::ServeOrRent { provider, .. }
-        | MarketCommands::Readiness { provider, .. }
-        | MarketCommands::Monitor { provider, .. }
-        | MarketCommands::Follow { provider, .. } => Some(*provider),
-        MarketCommands::Peer(_) => Some(MarketProvider::Stado),
-        MarketCommands::Sources { .. }
-        | MarketCommands::Payout(_)
-        | MarketCommands::Node(_)
-        | MarketCommands::Compare { .. } => None,
-    }
-}
+/// Vast.ai: the host is listed through its host API with the key in the
+/// Skarbiec item `vast`, field `api_key`.
+pub(crate) struct VastAdapter;
 
-/// Whether the subcommand carries `--peer`.
-fn peer_named(command: &MarketCommands) -> bool {
-    match command {
-        MarketCommands::List { peer, .. }
-        | MarketCommands::Unlist { peer, .. }
-        | MarketCommands::Status { peer, .. }
-        | MarketCommands::Earnings { peer, .. }
-        | MarketCommands::Maintenance { peer, .. }
-        | MarketCommands::Measure { peer, .. }
-        | MarketCommands::ServeOrRent { peer, .. }
-        | MarketCommands::Readiness { peer, .. }
-        | MarketCommands::Monitor { peer, .. }
-        | MarketCommands::Follow { peer, .. } => peer.is_some(),
-        MarketCommands::Peer(_)
-        | MarketCommands::Sources { .. }
-        | MarketCommands::Payout(_)
-        | MarketCommands::Node(_)
-        | MarketCommands::Compare { .. } => false,
+#[async_trait::async_trait]
+impl MarketAdapter for VastAdapter {
+    async fn list(&self, offer: ListOffer, json: bool) -> Result<(), CmdError> {
+        let Some(price_disk) = offer.price_disk else {
+            return Err(CmdError::usage(
+                "listing on Vast.ai needs --price-disk, the per-GB-month disk price in USD",
+            ));
+        };
+        list(offer.price_gpu, price_disk, offer.price_min_bid, json).await
+    }
+
+    async fn unlist(&self, json: bool) -> Result<(), CmdError> {
+        unlist(json).await
+    }
+
+    async fn status(&self, json: bool) -> Result<(), CmdError> {
+        status(json).await
+    }
+
+    async fn earnings(&self, target: &str, since_days: u32, json: bool) -> Result<(), CmdError> {
+        earnings::earnings(target, since_days, json).await
+    }
+
+    async fn maintenance(
+        &self,
+        in_minutes: u32,
+        hours: f64,
+        category: &str,
+        json: bool,
+    ) -> Result<(), CmdError> {
+        maintenance(in_minutes, hours, category, json).await
+    }
+
+    async fn measure(&self, gpu: &str, json: bool) -> Result<(), CmdError> {
+        measure::measure(gpu, json).await
+    }
+
+    async fn serve_or_rent(&self, compared: ServeOrRent<'_>, json: bool) -> Result<(), CmdError> {
+        serve_or_rent::serve_or_rent(
+            compared.target,
+            compared.outside_model,
+            compared.gpu,
+            compared.since_hours,
+            json,
+        )
+        .await
+    }
+
+    async fn readiness(
+        &self,
+        vault_host: Option<String>,
+        no_vault_check: bool,
+        json: bool,
+    ) -> Result<(), CmdError> {
+        readiness::report(vault_host, no_vault_check, json).await
+    }
+
+    async fn verdicts(&self) -> Vec<Value> {
+        let (ready, verdict) = readiness::verdict().await;
+        vec![json!({"provider": "vast", "ready": ready, "verdict": verdict})]
+    }
+
+    async fn monitor(&self, bucket: &str, json: bool) -> Result<(), CmdError> {
+        monitor(bucket, json).await
+    }
+
+    async fn follow(&self, follow: Follow) -> Result<(), CmdError> {
+        let Some(price_disk) = follow.price_disk else {
+            return Err(CmdError::usage(
+                "following the queue on Vast.ai needs --price-disk, the per-GB-month disk price in USD",
+            ));
+        };
+        auto_list(
+            follow.idle_window_s,
+            follow.poll_interval_s,
+            (follow.price_gpu, price_disk),
+            follow.max_duration_s,
+            follow.dry_run,
+            follow.once,
+        )
+        .await
     }
 }
 

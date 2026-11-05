@@ -37,13 +37,12 @@ struct CatalogDocument<'a> {
 }
 
 /// Each seller the market family declares, with whether this host can sell
-/// through it now and the seller's own sentence why: Vast's readiness, each
-/// declared peer fleet's, and for a seller Stado has no adapter for, its
-/// support level and the catalog's note. A seller that is not ready is
-/// named, never left out, and does not stop the others being read.
+/// through it now and the seller's own sentence why, as the seller's adapter
+/// answers it (each declared peer fleet is its own row), and for a seller
+/// Stado has no adapter for, its support level and the catalog's note. A
+/// seller that is not ready is named, never left out, and does not stop the
+/// others being read.
 async fn sellers(market: &ProductCapability) -> Vec<Value> {
-    use crate::capabilities::ProviderId;
-    use crate::cli::integrations::{peer, vast};
     let mut rows = Vec::new();
     // The selected order first, then every seller it does not name, in the
     // catalog's order; an order that cannot be read is said and the
@@ -60,36 +59,17 @@ async fn sellers(market: &ProductCapability) -> Vec<Value> {
         }
     };
     for row in ordered {
-        let provider = row.provider.as_str();
-        match row.provider {
-            ProviderId::Vast => {
-                let (ready, verdict) = vast::readiness_verdict().await;
-                rows.push(json!({"provider": provider, "ready": ready, "verdict": verdict}));
-            }
-            ProviderId::Stado => match peer::every_peer().await {
-                Ok(peers) if peers.is_empty() => rows.push(json!({
-                    "provider": provider,
-                    "ready": false,
-                    "verdict": "no peer fleet is declared; `stado market peer add` declares one",
-                })),
-                Ok(peers) => {
-                    for (name, ready, verdict) in peers {
-                        rows.push(json!({
-                            "provider": provider,
-                            "peer": name,
-                            "ready": ready,
-                            "verdict": verdict,
-                        }));
-                    }
-                }
-                Err(error) => rows.push(json!({
-                    "provider": provider,
-                    "ready": false,
-                    "verdict": format!("the declared peer fleets cannot be read: {error}"),
-                })),
-            },
-            _ => rows.push(json!({
-                "provider": provider,
+        let adapter = crate::cli::MarketProvider::of(row)
+            .map(|provider| crate::cli::integrations::market::adapter(provider, None));
+        match adapter {
+            Some(Ok(adapter)) => rows.extend(adapter.verdicts().await),
+            Some(Err(error)) => rows.push(json!({
+                "provider": row.provider.as_str(),
+                "ready": false,
+                "verdict": error.to_string(),
+            })),
+            None => rows.push(json!({
+                "provider": row.provider.as_str(),
                 "ready": false,
                 "verdict": format!(
                     "{}: Stado carries no adapter ({})",
