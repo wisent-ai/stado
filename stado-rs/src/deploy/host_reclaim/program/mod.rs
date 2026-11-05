@@ -13,7 +13,7 @@ use crate::deploy::host_recovery::WC_CANDIDATES;
 use crate::deploy::products;
 use crate::deploy::service::{LAUNCHD_UNIT_DIRECTORIES, SYSTEMD_UNIT_DIRECTORIES};
 use crate::deploy::shlex_quote;
-use crate::providers::local::space_reclaim::chromium_clones;
+use crate::providers::local::space_reclaim::{bin_backups, chromium_clones};
 
 use super::{BUILD_WORK_ROOT, CONTAINER_PREFIX, LOCAL_EVIDENCE_ROOT};
 
@@ -41,6 +41,7 @@ const LOCAL_EVIDENCE_ROOT_MARK: &str = "@LOCAL_EVIDENCE_ROOT@";
 const BUILD_CACHE_ROOTS_MARK: &str = "@BUILD_CACHE_ROOTS@";
 const UNIT_DIRECTORIES_MARK: &str = "@UNIT_DIRECTORIES@";
 const DECLARED_PATHS_MARK: &str = "@DECLARED_PATHS@";
+const BACKUP_SHAPES_MARK: &str = "@BACKUP_SHAPES@";
 
 /// The fixed remote program.
 ///
@@ -208,6 +209,7 @@ pub(super) fn remote_script_with_stado(
         .replace(CLONE_PREFIX_MARK, chromium_clones::CLONE_ENTRY_PREFIX)
         .replace(SUPERSEDED_ROOTS_MARK, &superseded)
         .replace(UNIT_DIRECTORIES_MARK, &unit_directory_words())
+        .replace(BACKUP_SHAPES_MARK, &bin_backups::backup_case_patterns())
         .replace(
             DECLARED_PATHS_MARK,
             &declared_paths

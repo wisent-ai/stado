@@ -26,19 +26,38 @@ pub const CLEANER: &str = "bin_backups";
 /// Where installed binaries live, relative to `$HOME`.
 pub const BIN_ROOT: &str = ".stado/bin";
 
-/// Whether `suffix` (what follows `<binary>.`) is a backup name: the shapes
-/// the installers write, as `delivery_leftovers` reads them.
+/// The backup names installs give the copy they replace, as what follows
+/// `<binary>.`: one list, read by [`backup_shape`] here and spliced into the
+/// `delivery_leftovers` shell stage as its `case` patterns, so the janitor
+/// and the hand-run stage never disagree about what a backup is. Each is a
+/// literal prefix followed by at least one character.
+pub const BACKUP_PREFIXES: &[&str] = &["release-backup-", "bak-", "pre-"];
+/// The one shape with a version in front: `<x.y.z>-backup-<anything>`, each
+/// of x, y and z starting in a digit.
+pub const VERSIONED_BACKUP_INFIX: &str = "-backup-";
+
+/// The same shapes as shell `case` patterns, `|`-joined, for the stage.
+pub fn backup_case_patterns() -> String {
+    BACKUP_PREFIXES
+        .iter()
+        .map(|prefix| format!("{prefix}?*"))
+        .chain(std::iter::once(format!(
+            "[0-9]*.[0-9]*.[0-9]*{VERSIONED_BACKUP_INFIX}?*"
+        )))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Whether `suffix` (what follows `<binary>.`) is a backup name.
 pub fn backup_shape(suffix: &str) -> bool {
-    let after = |prefix: &str| {
+    if BACKUP_PREFIXES.iter().any(|prefix| {
         suffix
             .strip_prefix(prefix)
             .is_some_and(|rest| !rest.is_empty())
-    };
-    if after("release-backup-") || after("bak-") || after("pre-") {
+    }) {
         return true;
     }
-    // <x.y.z>-backup-<anything>, with x, y and z starting in a digit.
-    let Some((version, rest)) = suffix.split_once("-backup-") else {
+    let Some((version, rest)) = suffix.split_once(VERSIONED_BACKUP_INFIX) else {
         return false;
     };
     let parts: Vec<&str> = version.splitn(3, '.').collect();

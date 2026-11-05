@@ -238,11 +238,11 @@ if [ -d "$releases" ]; then
   done
 fi
 # Keep the newest recognised copy by modification time, as for deliveries.
-# The independent .previous rollback target is never a sweep candidate.
+# The independent .previous rollback target is never a sweep candidate. The
+# shapes are the janitor's own list (space_reclaim::bin_backups).
 backup_shape() {
   case "$1" in
-    release-backup-?*|bak-?*|pre-?*) return 0 ;;
-    [0-9]*.[0-9]*.[0-9]*-backup-?*) return 0 ;;
+    @BACKUP_SHAPES@) return 0 ;;
     *) return 1 ;;
   esac
 }
