@@ -384,3 +384,7 @@ The version bump gathers them into the release's own file and removes this one.
   source, or why it has no value. `stado market node follow` stops a node while another source
   with a value earns more. Desktop's Registry operation takes the host. Test
   `tests/market/source_value.mjs`.
+- **`stado inference apply` refuses a sold deployment whose model declares no license:** before
+  touching the host, a deployment with a priced unrevoked caller, a pay-per-call offer or a listed
+  network node serving it is refused while its model license is unread or its chain declares
+  none, naming each sale and what the license lacks. Test `tests/inference/sale_license.mjs`.
