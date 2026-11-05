@@ -393,3 +393,8 @@ The version bump gathers them into the release's own file and removes this one.
   `budgets.internal_usd_per_gpu_hour`) against the offer's `--price-gpu` before unlisting; the
   offer stays listed when worth at least as much, the decision kept for `stado market decisions`.
   A job running here, or one whose value cannot be read, still takes the host, said in the log.
+- **Peer lending drains only when our queued work is worth more:** `stado market follow
+  --provider stado` keeps an active session while our work is only queued and the peer pays at
+  least what that work is worth per GPU-hour; the weighing is one function
+  (`allocate::offer_or_queue`) shared with the Vast loop, each decision kept for `stado market
+  decisions`.
