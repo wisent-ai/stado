@@ -112,8 +112,27 @@ try {
   assert.ok(Object.values(before).some(Boolean), 'The source fixture must hold rows');
   report.before = before;
 
+  // `registry doctor` names a declared postgres database whose copy this
+  // machine could not restore: no declared period, no complete backup, a
+  // backup older than the period. Its rows about this database are read
+  // before and after a backup under a declared period of one hour.
+  const doctorRows = () => {
+    const answer = run(stado, ['registry', 'doctor', '--json']);
+    const findings = JSON.parse(answer.stdout || '{}').findings ?? [];
+    return findings.filter(finding => finding.subject === name && String(finding.finding).startsWith('database-backup'));
+  };
+  const declared = configuration();
+  declared.database_api.databases[name].backup_every_hours = 1;
+  writeFileSync(config, JSON.stringify(declared, null, 2));
+  declaration.backup_every_hours = 1;
+  const noneYet = doctorRows();
+  assert.ok(noneYet.some(finding => finding.finding === 'database-backup-missing'),
+    `doctor must name a declared database with no complete backup: ${JSON.stringify(noneYet)}`);
   refused(run(stado, ['database', 'backup', `${name}-undeclared`, '--json']), 'is not declared');
   const rows = JSON.parse(success(run(stado, ['database', 'backup', name, '--json'])));
+  const fresh = doctorRows();
+  assert.deepEqual(fresh, [], `a backup younger than its period must leave no doctor finding: ${JSON.stringify(fresh)}`);
+  report.doctor = { before: noneYet, after: fresh };
   const kept = rows.find(row => row.database === name);
   assert.ok(kept?.backup, `backup answered no directory: ${JSON.stringify(rows)}`);
   const manifest = JSON.parse(readFileSync(join(kept.backup, 'manifest.json'), 'utf8'));

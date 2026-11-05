@@ -81,6 +81,12 @@ pub struct DatabaseApiDatabase {
     engine: String,
     scopes: Vec<String>,
     consumers: Vec<String>,
+    /// How old, in hours, this database's newest complete backup on the
+    /// machine that keeps them may be (`backup_every_hours`); none when the
+    /// declaration states no period. `stado registry doctor` names a backup
+    /// older than it, and a database that states none, so a database whose
+    /// host stops answering is never found with no copy to restore.
+    backup_every_hours: Option<std::num::NonZeroU32>,
 }
 
 impl DatabaseApiDatabase {
@@ -98,6 +104,10 @@ impl DatabaseApiDatabase {
 
     pub fn consumers(&self) -> &[String] {
         &self.consumers
+    }
+
+    pub fn backup_every_hours(&self) -> Option<std::num::NonZeroU32> {
+        self.backup_every_hours
     }
 
     pub fn allows_consumer(&self, consumer: &str) -> bool {
@@ -141,12 +151,25 @@ pub(crate) fn parse_database_api_databases(
             engine: Option<serde::de::IgnoredAny>,
             scopes: Option<serde::de::IgnoredAny>,
             consumers: Option<serde::de::IgnoredAny>,
+            backup_every_hours: Option<serde::de::IgnoredAny>,
         }
         crate::config::boundaries::declared_fields::<Fields>(
             raw,
             &format!("database_api.databases.{name}"),
             &mut problems,
         );
+        let backup_every_hours = match entry.get("backup_every_hours") {
+            None | Some(Value::Null) => None,
+            Some(hours) => match hours.as_u64().and_then(|hours| u32::try_from(hours).ok()).and_then(std::num::NonZeroU32::new) {
+                Some(hours) => Some(hours),
+                None => {
+                    problems.push(format!(
+                        "database_api.databases.{name}.backup_every_hours must be a whole number of hours above zero, got {hours}"
+                    ));
+                    None
+                }
+            },
+        };
         let expected_item = format!("{name}-database");
         // The credential item is implied by the database's name; a declared
         // one must be that same item.
@@ -239,6 +262,7 @@ pub(crate) fn parse_database_api_databases(
                     engine,
                     scopes,
                     consumers,
+                    backup_every_hours,
                 },
             );
         }

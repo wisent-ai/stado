@@ -98,6 +98,31 @@ fn kept(name: &str) -> Result<Vec<Kept>, CmdError> {
         .collect())
 }
 
+/// When the newest complete backup of `name` this machine keeps was taken,
+/// as its manifest records it, or `None` when it keeps none complete; read
+/// by `stado registry doctor` against the declared backup period.
+pub(crate) fn newest_complete(name: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>, CmdError> {
+    for (directory, manifest) in kept(name)? {
+        let Ok(manifest) = manifest else { continue };
+        let taken = manifest["created_at"].as_str().ok_or_else(|| {
+            CmdError::click(format!(
+                "{} records no created_at, so its age cannot be told",
+                directory.join(super::MANIFEST).display()
+            ))
+            .stating(FailureCode::Config)
+        })?;
+        let taken = chrono::DateTime::parse_from_rfc3339(taken).map_err(|error| {
+            CmdError::click(format!(
+                "{} records created_at {taken:?}, which is no RFC 3339 time: {error}",
+                directory.join(super::MANIFEST).display()
+            ))
+            .stating(FailureCode::Config)
+        })?;
+        return Ok(Some(taken.with_timezone(&chrono::Utc)));
+    }
+    Ok(None)
+}
+
 /// Remove the complete backups of `name` beyond the newest `keep`, after a
 /// backup succeeded; incomplete ones are left for the operator to read.
 /// Returns the directories removed.

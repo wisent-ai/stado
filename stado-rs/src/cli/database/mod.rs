@@ -233,6 +233,12 @@ pub(in crate::cli) fn declared_databases(
     })
 }
 
+/// When the newest complete backup of declared database `name` this machine
+/// keeps was taken, or `None` when it keeps none (`stado database backups`).
+pub(in crate::cli) fn newest_backup(name: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>, CmdError> {
+    dump::files::newest_complete(name)
+}
+
 async fn registry_document() -> Result<Value, CmdError> {
     let store = RegistryStore::open().await?;
     let (bootstrap, _) = read_local_document(&store).await?;
