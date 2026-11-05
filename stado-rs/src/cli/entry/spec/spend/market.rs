@@ -136,6 +136,19 @@ pub(crate) enum MarketCommands {
     /// declared rate is kept and printed as unpriced, never at a guess.
     #[command(subcommand)]
     Payout(PayoutCommands),
+    /// Each of a host's uses per day beside the day's energy cost: Vast
+    /// rentals kept by `market earnings`, inference sold to outside callers,
+    /// and token payouts by source, each priced only from its own statement,
+    /// with each use's margin. Names no provider; asks no marketplace.
+    Compare {
+        /// The registry host to compare.
+        #[arg(long)]
+        target: String,
+        #[arg(long = "since-days", default_value_t = 7)]
+        since_days: u32,
+        #[arg(long)]
+        json: bool,
+    },
     /// Whether a host's inference deployment is worth more than renting its
     /// board: the tokens it served per measured hour, priced at an outside
     /// model's per-token prices, beside the median hourly price renters pay

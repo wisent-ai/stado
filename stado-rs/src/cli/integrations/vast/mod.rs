@@ -9,6 +9,7 @@
 //! credential. `--provider stado` and `stado market peer` are answered by
 //! [`super::peer`].
 
+mod compare;
 #[path = "earnings.rs"]
 mod earnings;
 mod measure;
@@ -39,6 +40,14 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
     // named.
     if let MarketCommands::Sources { check, json } = command {
         return sources::sources(*check, *json).await;
+    }
+    if let MarketCommands::Compare {
+        target,
+        since_days,
+        json,
+    } = command
+    {
+        return compare::compare(target, *since_days, *json).await;
     }
     if let MarketCommands::Payout(payout) = command {
         return match payout {
@@ -158,8 +167,10 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
         }
         MarketCommands::Peer(_) => unreachable!("peer declarations were answered above"),
         MarketCommands::Node(_) => unreachable!("network nodes were answered above"),
-        MarketCommands::Sources { .. } | MarketCommands::Payout(_) => {
-            unreachable!("the source list and payouts were answered above")
+        MarketCommands::Sources { .. }
+        | MarketCommands::Payout(_)
+        | MarketCommands::Compare { .. } => {
+            unreachable!("the source list, payouts and the comparison were answered above")
         }
     }
 }
@@ -179,9 +190,10 @@ pub(crate) fn provider(command: &MarketCommands) -> Option<MarketProvider> {
         | MarketCommands::Monitor { provider, .. }
         | MarketCommands::Follow { provider, .. } => Some(*provider),
         MarketCommands::Peer(_) => Some(MarketProvider::Stado),
-        MarketCommands::Sources { .. } | MarketCommands::Payout(_) | MarketCommands::Node(_) => {
-            None
-        }
+        MarketCommands::Sources { .. }
+        | MarketCommands::Payout(_)
+        | MarketCommands::Node(_)
+        | MarketCommands::Compare { .. } => None,
     }
 }
 
@@ -201,7 +213,8 @@ fn peer_named(command: &MarketCommands) -> bool {
         MarketCommands::Peer(_)
         | MarketCommands::Sources { .. }
         | MarketCommands::Payout(_)
-        | MarketCommands::Node(_) => false,
+        | MarketCommands::Node(_)
+        | MarketCommands::Compare { .. } => false,
     }
 }
 

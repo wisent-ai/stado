@@ -264,3 +264,8 @@ The version bump gathers them into the release's own file and removes this one.
   product's `service.public.reason` now states why a service is public (only the release channel
   does); `stado web origin declare` and `converge` refuse any other service's origin naming it, and
   `list` prints each origin's justification or `NOT JUSTIFIED`.
+- **`stado market compare`:** each of a host's uses per day beside the day's energy cost and the
+  margin each would clear: Vast rentals kept by `market earnings`, inference sold to outside
+  callers, and token payouts per source (a proving network, a mining pool, a node's network), each
+  priced only from its own statement; unpriced stays unpriced. Stado Desktop's Registry screen runs
+  it.

@@ -9,12 +9,12 @@ use crate::primitives::failure::FailureCode;
 use crate::providers::vast::{EarnedDay, VastClient, SECONDS_PER_DAY};
 
 /// Where one stated day is kept.
-fn ledger_key(host: &str, day: i64) -> String {
+pub(super) fn ledger_key(host: &str, day: i64) -> String {
     format!("market/earnings/vast/{host}/{day}.json")
 }
 
 /// The UTC date of a day number.
-fn date_of(day: i64) -> String {
+pub(super) fn date_of(day: i64) -> String {
     chrono::DateTime::from_timestamp(day * SECONDS_PER_DAY, 0)
         .map(|at| at.date_naive().to_string())
         .unwrap_or_else(|| format!("day {day}"))
@@ -25,7 +25,7 @@ fn date_of(day: i64) -> String {
 /// the tariff in US dollars, as `stado cost host` and the scheduler charge
 /// it. Every hour must be measured and every board's idle draw known, else
 /// the reason it is not.
-fn day_cost(
+pub(super) fn day_cost(
     hours: Option<&serde_json::Map<String, Value>>,
     tariff: &Option<crate::targets::PowerTariff>,
     day: i64,
@@ -257,7 +257,7 @@ pub(crate) async fn earnings(
 /// Per UTC day: the US dollars outside callers were charged for every
 /// inference deployment declared on `host`, and every caller whose hours
 /// that day carry tokens but who has no declared price.
-async fn sold_by_day(
+pub(super) async fn sold_by_day(
     store: &crate::queue::JobStorage,
     document: &Value,
     host: &str,

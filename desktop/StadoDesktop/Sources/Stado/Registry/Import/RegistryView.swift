@@ -201,6 +201,11 @@ enum NativeRegistryOperations {
                   .init(id: "target", label: "Registry target", option: "--target", required: true),
                   .init(id: "since-days", label: "Days back", option: "--since-days", initial: "7"),
               ], fixedArguments: ["--provider", "vast"], mutates: false, jsonOutput: false),
+        .init(id: "market-compare", title: "Each of a host's uses per day beside its energy cost and margin",
+              path: ["market", "compare"], hostPlacement: .none, fields: [
+                  .init(id: "target", label: "Registry target", option: "--target", required: true),
+                  .init(id: "since-days", label: "Days back", option: "--since-days", initial: "7"),
+              ], mutates: false, jsonOutput: false),
         .init(id: "market-sources", title: "Every place a fleet host can earn, and which Stado can join",
               path: ["market", "sources"], hostPlacement: .none, fields: [
                   .init(id: "check", label: "Ask each source's page whether it still answers", option: "--check", flag: true),
