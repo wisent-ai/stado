@@ -60,7 +60,7 @@ async fn sellers(market: &ProductCapability) -> Vec<Value> {
     };
     for row in ordered {
         let adapter = crate::cli::MarketProvider::of(row)
-            .map(|provider| crate::cli::integrations::market::adapter(provider, None));
+            .map(|provider| crate::cli::integrations::market::adapter(provider, None, None));
         match adapter {
             Some(Ok(adapter)) => rows.extend(adapter.verdicts().await),
             Some(Err(error)) => rows.push(json!({

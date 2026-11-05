@@ -338,7 +338,7 @@ define_capabilities! {
             ProviderId::IoNet => (Planned, "", "io.net worker; no Stado adapter"),
             ProviderId::Chutes => (Planned, "", "Chutes miner on Bittensor subnet 64; no Stado adapter"),
             ProviderId::Darkbloom => (Planned, "", "Darkbloom provider agent on an Apple silicon Mac; no Stado adapter"),
-            ProviderId::HandToHuman => (Planned, "", "Fleet compute and egress as HandToHuman offers; no Stado adapter"),
+            ProviderId::HandToHuman => (Implemented, "cli::integrations::handtohuman", "Offers a host's compute (per GPU-hour) or residential egress (per gigabyte) through HandToHuman's own CLI, withdraws it, and reads what its accepted orders paid"),
         ]
     },
     BackupRecovery => {

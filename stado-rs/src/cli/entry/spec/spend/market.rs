@@ -20,6 +20,9 @@ pub(crate) enum MarketProvider {
     /// host runs a Stado worker against the peer's queue, reached with the
     /// bearer in the item playing the peer's declared credential role.
     Stado,
+    /// HandToHuman: a host's compute or egress offered there through
+    /// HandToHuman's own CLI, named by `--resource`.
+    HandToHuman,
 }
 
 impl std::str::FromStr for MarketProvider {
@@ -70,6 +73,7 @@ impl MarketProvider {
         match (row.provider, row.support) {
             (ProviderId::Vast, CapabilitySupport::Implemented) => Some(Self::Vast),
             (ProviderId::Stado, CapabilitySupport::Implemented) => Some(Self::Stado),
+            (ProviderId::HandToHuman, CapabilitySupport::Implemented) => Some(Self::HandToHuman),
             _ => None,
         }
     }
@@ -88,6 +92,10 @@ pub(crate) enum MarketCommands {
         /// refused with any other provider.
         #[arg(long)]
         peer: Option<String>,
+        /// What a HandToHuman offer sells (gpu, egress); required with
+        /// --provider handtohuman and refused with any other provider.
+        #[arg(long, value_enum)]
+        resource: Option<crate::cli::integrations::handtohuman::Resource>,
         /// Per-GPU-hour rental price in USD.
         #[arg(long)]
         price_gpu: f64,
@@ -97,6 +105,10 @@ pub(crate) enum MarketCommands {
         /// Optional minimum interruptible-bid price floor (--provider vast).
         #[arg(long)]
         price_min_bid: Option<f64>,
+        /// How many units the offer sells: GPU-hours or gigabytes
+        /// (--provider handtohuman, which requires it).
+        #[arg(long)]
+        units: Option<i64>,
         /// Print the marketplace's answer as JSON instead of text.
         #[arg(long)]
         json: bool,
@@ -111,6 +123,9 @@ pub(crate) enum MarketCommands {
         /// The declared peer fleet; required with --provider stado.
         #[arg(long)]
         peer: Option<String>,
+        /// The HandToHuman offer's resource (--provider handtohuman).
+        #[arg(long, value_enum)]
+        resource: Option<crate::cli::integrations::handtohuman::Resource>,
         /// Print the marketplace's answer as JSON instead of text.
         #[arg(long)]
         json: bool,
@@ -126,6 +141,9 @@ pub(crate) enum MarketCommands {
         /// The declared peer fleet (--provider stado).
         #[arg(long)]
         peer: Option<String>,
+        /// The HandToHuman offer's resource (--provider handtohuman).
+        #[arg(long, value_enum)]
+        resource: Option<crate::cli::integrations::handtohuman::Resource>,
         /// Print the marketplace's answer as JSON instead of text.
         #[arg(long)]
         json: bool,
@@ -262,6 +280,10 @@ pub(crate) enum MarketCommands {
         /// Taken only with --provider stado, which is refused.
         #[arg(long)]
         peer: Option<String>,
+        /// The HandToHuman offer's resource (--provider handtohuman): what its
+        /// accepted orders paid.
+        #[arg(long, value_enum)]
+        resource: Option<crate::cli::integrations::handtohuman::Resource>,
         /// The registry host whose machine is read.
         #[arg(long)]
         target: String,

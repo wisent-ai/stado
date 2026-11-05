@@ -234,6 +234,21 @@ enum NativeRegistryOperations {
                   .init(id: "target", label: "Worker name", option: "--target", required: true),
                   .init(id: "since-hours", label: "Hours back", option: "--since-hours", initial: "24"),
               ], mutates: false, jsonOutput: false),
+        .init(id: "market-handtohuman-list", title: "Offer this host's compute or egress on HandToHuman",
+              path: ["market", "list"], hostPlacement: .none, fields: [
+                  .init(id: "resource", label: "What is offered", option: "--resource", required: true, choices: ["gpu", "egress"]),
+                  .init(id: "price-gpu", label: "USD per GPU-hour or gigabyte", option: "--price-gpu", required: true),
+                  .init(id: "units", label: "GPU-hours or gigabytes offered", option: "--units", required: true),
+              ], fixedArguments: ["--provider", "handtohuman"], jsonOutput: false),
+        .init(id: "market-handtohuman-unlist", title: "Withdraw this host's HandToHuman offer",
+              path: ["market", "unlist"], hostPlacement: .none, fields: [
+                  .init(id: "resource", label: "What was offered", option: "--resource", required: true, choices: ["gpu", "egress"]),
+              ], fixedArguments: ["--provider", "handtohuman"], jsonOutput: false),
+        .init(id: "market-handtohuman-earnings", title: "What this host's HandToHuman offer sold and was paid",
+              path: ["market", "earnings"], hostPlacement: .none, fields: [
+                  .init(id: "resource", label: "What was offered", option: "--resource", required: true, choices: ["gpu", "egress"]),
+                  .init(id: "target", label: "Registry target", option: "--target", required: true),
+              ], fixedArguments: ["--provider", "handtohuman"], mutates: false, jsonOutput: false),
         .init(id: "market-sources", title: "Every place a fleet host can earn, and which Stado can join",
               path: ["market", "sources"], hostPlacement: .none, fields: [
                   .init(id: "check", label: "Ask each source's page whether it still answers", option: "--check", flag: true),

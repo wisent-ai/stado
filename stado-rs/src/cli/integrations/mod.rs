@@ -4,6 +4,7 @@
 //! and the networks whose own node a host runs.
 
 pub mod egress;
+pub(crate) mod handtohuman;
 pub(crate) mod market;
 pub(crate) mod node;
 pub(crate) mod peer;

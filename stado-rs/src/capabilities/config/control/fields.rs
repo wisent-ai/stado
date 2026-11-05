@@ -155,6 +155,15 @@ pub const HOST_POWER_HELPER_CONFIG: ConfigField = ConfigField::list(
     "host.power_helper",
 );
 
+/// The HandToHuman seller account this host offers its capacity under: an
+/// account HandToHuman's own CLI created with a worker role. Without it the
+/// host offers nothing there.
+pub const HANDTOHUMAN_SELLER_CONFIG: ConfigField = ConfigField::scalar(
+    "handtohuman-seller",
+    "STADO_HANDTOHUMAN_SELLER",
+    "market.handtohuman.seller",
+);
+
 /// The endpoints this host measures its bandwidth against, a document
 /// `{"download_url", "upload_url", "bytes"}`: the host downloads `bytes`
 /// from one and uploads as many to the other. No measurement service is

@@ -21,6 +21,9 @@ pub(crate) struct ListOffer {
     pub price_disk: Option<f64>,
     /// Interruptible-bid floor, for a marketplace that takes bids.
     pub price_min_bid: Option<f64>,
+    /// How many units the offer sells, for a marketplace that sells a
+    /// counted amount (HandToHuman).
+    pub units: Option<i64>,
 }
 
 /// What `follow` holds the host's listing to.
@@ -84,22 +87,31 @@ pub(crate) trait MarketAdapter: Send + Sync {
 }
 
 /// The adapter of `provider`; `peer` is the declared Stado fleet a
-/// `--provider stado` verb names, refused for every other marketplace.
+/// `--provider stado` verb names and `resource` what a `--provider
+/// handtohuman` verb offers, each refused for every other marketplace.
 pub(crate) fn adapter(
     provider: MarketProvider,
     peer: Option<&str>,
+    resource: Option<super::handtohuman::Resource>,
 ) -> Result<Box<dyn MarketAdapter>, CmdError> {
+    if peer.is_some() && provider != MarketProvider::Stado {
+        return Err(CmdError::usage(
+            "--peer names a Stado fleet and is taken only with --provider stado",
+        ));
+    }
+    if resource.is_some() && provider != MarketProvider::HandToHuman {
+        return Err(CmdError::usage(
+            "--resource names what a HandToHuman offer sells and is taken only with --provider \
+             handtohuman; Vast.ai and a peer fleet are offered whole boards",
+        ));
+    }
     match provider {
-        MarketProvider::Vast => {
-            if peer.is_some() {
-                return Err(CmdError::usage(
-                    "--peer names a Stado fleet and is taken only with --provider stado",
-                ));
-            }
-            Ok(Box::new(super::vast::VastAdapter))
-        }
+        MarketProvider::Vast => Ok(Box::new(super::vast::VastAdapter)),
         MarketProvider::Stado => Ok(Box::new(super::peer::PeerAdapter {
             peer: peer.map(str::to_string),
+        })),
+        MarketProvider::HandToHuman => Ok(Box::new(super::handtohuman::HandToHumanAdapter {
+            resource,
         })),
     }
 }
@@ -121,38 +133,52 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
         MarketCommands::List {
             provider,
             peer,
+            resource,
             price_gpu,
             price_disk,
             price_min_bid,
+            units,
             json,
         } => {
             let offer = ListOffer {
                 price_gpu: *price_gpu,
                 price_disk: *price_disk,
                 price_min_bid: *price_min_bid,
+                units: *units,
             };
-            adapter(*provider, peer.as_deref())?
+            adapter(*provider, peer.as_deref(), *resource)?
                 .list(offer, *json)
                 .await
         }
         MarketCommands::Unlist {
             provider,
             peer,
+            resource,
             json,
-        } => adapter(*provider, peer.as_deref())?.unlist(*json).await,
+        } => {
+            adapter(*provider, peer.as_deref(), *resource)?
+                .unlist(*json)
+                .await
+        }
         MarketCommands::Status {
             provider,
             peer,
+            resource,
             json,
-        } => adapter(*provider, peer.as_deref())?.status(*json).await,
+        } => {
+            adapter(*provider, peer.as_deref(), *resource)?
+                .status(*json)
+                .await
+        }
         MarketCommands::Earnings {
             provider,
             peer,
+            resource,
             target,
             since_days,
             json,
         } => {
-            adapter(*provider, peer.as_deref())?
+            adapter(*provider, peer.as_deref(), *resource)?
                 .earnings(target, *since_days, *json)
                 .await
         }
@@ -164,7 +190,7 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             category,
             json,
         } => {
-            adapter(*provider, peer.as_deref())?
+            adapter(*provider, peer.as_deref(), None)?
                 .maintenance(*in_minutes, *hours, category, *json)
                 .await
         }
@@ -174,7 +200,7 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             gpu,
             json,
         } => {
-            adapter(*provider, peer.as_deref())?
+            adapter(*provider, peer.as_deref(), None)?
                 .measure(gpu, *json)
                 .await
         }
@@ -193,7 +219,7 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
                 gpu,
                 since_hours: *since_hours,
             };
-            adapter(*provider, peer.as_deref())?
+            adapter(*provider, peer.as_deref(), None)?
                 .serve_or_rent(compared, *json)
                 .await
         }
@@ -204,7 +230,7 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             no_vault_check,
             json,
         } => {
-            adapter(*provider, peer.as_deref())?
+            adapter(*provider, peer.as_deref(), None)?
                 .readiness(vault_host.clone(), *no_vault_check, *json)
                 .await
         }
@@ -220,7 +246,7 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
                 Some(named) => named,
                 None => crate::config::bucket(),
             };
-            adapter(*provider, peer.as_deref())?
+            adapter(*provider, peer.as_deref(), None)?
                 .monitor(bucket, *json)
                 .await
         }
@@ -244,7 +270,9 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
                 dry_run: *dry_run,
                 once: *once,
             };
-            adapter(*provider, peer.as_deref())?.follow(follow).await
+            adapter(*provider, peer.as_deref(), None)?
+                .follow(follow)
+                .await
         }
         MarketCommands::Peer(_)
         | MarketCommands::Node(_)

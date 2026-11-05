@@ -297,3 +297,8 @@ The version bump gathers them into the release's own file and removes this one.
   `host.bandwidth_interval_seconds`, and the beacon carries each direction's rate and time;
   `stado market readiness --provider vast` answers `no_bandwidth` while there is no current
   measurement, and the Earning screen says why.
+- **A host's compute or egress is offered on HandToHuman:** `stado market list|unlist|status|earnings
+  --provider handtohuman --resource gpu|egress` offers the host through HandToHuman's own CLI under
+  the declared seller (`market.handtohuman.seller`), pins compute orders back to the host, and
+  sums what its accepted orders paid; `cpu` and `disk` are refused since HandToHuman sells no such
+  kind. Desktop's Registry screen runs list, unlist and earnings.
