@@ -136,6 +136,7 @@ pub async fn run(
     vast_price_disk: Option<f64>,
     vast_max_duration_s: Option<i64>,
     vast_idle_window_s: Option<i64>,
+    vast_contract_hours: Option<u32>,
     poll_seconds: Option<u64>,
 ) -> Result<AgentEnd, CmdError> {
     let poll = std::time::Duration::from_secs(poll_seconds.ok_or_else(|| {
@@ -242,12 +243,19 @@ pub async fn run(
                  0 for open-ended",
             )
         })?;
+        let contract_hours = vast_contract_hours.ok_or_else(|| {
+            CmdError::usage(
+                "the Vast bridge needs --vast-contract-hours: how many hours ahead the offer \
+                 ends, moved forward while the host stays idle",
+            )
+        })?;
         let params = vast::AutoListParams {
             idle_window_s,
             poll: Some(poll),
             price_gpu,
             price_disk,
             duration_s: max_duration_s.is_positive().then_some(max_duration_s),
+            contract_hours,
             dry_run: false,
             once: false,
         };

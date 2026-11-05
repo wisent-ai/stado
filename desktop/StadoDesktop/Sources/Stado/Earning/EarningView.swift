@@ -16,6 +16,7 @@ struct EarningView: View {
     @State private var priceGPU = EarningConstants.defaultPriceGPU
     @State private var priceDisk = EarningConstants.defaultPriceDisk
     @State private var idleWindowSeconds = EarningConstants.defaultIdleWindowSeconds
+    @State private var contractHours = EarningConstants.defaultContractHours
     @State private var pendingListing = false
     @State private var pendingRemoval = false
     @State private var showingPrices = false
@@ -157,7 +158,7 @@ struct EarningView: View {
                     Task {
                         await store.previewDecision(
                             idleWindowSeconds: idleWindowSeconds, priceGPU: priceGPU,
-                            priceDisk: priceDisk
+                            priceDisk: priceDisk, contractHours: contractHours
                         )
                     }
                 }
@@ -182,6 +183,11 @@ struct EarningView: View {
                     .frame(width: EarningConstants.priceFieldWidth)
                 TextField("Price per GB-month", value: $priceDisk, format: .number)
                     .frame(width: EarningConstants.priceFieldWidth)
+                Stepper(
+                    "Offer ends in \(contractHours) h",
+                    value: $contractHours,
+                    in: EarningConstants.contractHoursRange
+                )
                 Button("List…") { pendingListing = true }
                     .disabled(store.isWorking)
                 Button("Unlist…", role: .destructive) { pendingRemoval = true }
@@ -200,17 +206,17 @@ struct EarningView: View {
             tone: .warning,
             title: "List this machine at $\(priceGPU)/h and $\(priceDisk)/GB-month?",
             lines: [
-                "Renters can take the GPU until the offer is removed. Work this fleet queues will wait for a rental already running."
+                "Renters can take the GPU until the offer is removed or ends in \(contractHours) h. Work this fleet queues will wait for a rental already running."
             ],
             listing: [
-                "command: " + StadoCLI.commandLine(VastStore.listArguments(priceGPU: priceGPU, priceDisk: priceDisk))
+                "command: " + StadoCLI.commandLine(VastStore.listArguments(priceGPU: priceGPU, priceDisk: priceDisk, contractHours: contractHours))
             ],
             footnote: "Runs the same command a terminal would.",
             actions: [
                 WisentAction("Cancel", kind: .secondary) { pendingListing = false },
                 WisentAction("List", symbol: "dollarsign.circle", kind: .primary) {
                     pendingListing = false
-                    Task { await store.list(priceGPU: priceGPU, priceDisk: priceDisk) }
+                    Task { await store.list(priceGPU: priceGPU, priceDisk: priceDisk, contractHours: contractHours) }
                 },
             ]
         )

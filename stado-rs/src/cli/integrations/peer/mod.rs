@@ -65,10 +65,13 @@ impl PeerAdapter {
 #[async_trait::async_trait]
 impl MarketAdapter for PeerAdapter {
     async fn list(&self, offer: ListOffer, json: bool) -> Result<(), CmdError> {
-        if offer.price_disk.is_some() || offer.price_min_bid.is_some() {
+        if offer.price_disk.is_some()
+            || offer.price_min_bid.is_some()
+            || offer.contract_hours.is_some()
+        {
             return Err(CmdError::usage(
-                "--price-disk and --price-min-bid are Vast.ai's prices; a peer fleet is offered \
-                 at --price-gpu alone",
+                "--price-disk, --price-min-bid and --contract-hours are Vast.ai's terms; a peer \
+                 fleet is offered at --price-gpu alone",
             ));
         }
         offers::list(&self.required("list")?, offer.price_gpu, json).await
@@ -158,9 +161,10 @@ impl MarketAdapter for PeerAdapter {
     }
 
     async fn follow(&self, follow: Follow) -> Result<(), CmdError> {
-        if follow.price_disk.is_some() {
+        if follow.price_disk.is_some() || follow.contract_hours.is_some() {
             return Err(CmdError::usage(
-                "--price-disk is Vast.ai's price; a peer fleet is offered at --price-gpu alone",
+                "--price-disk and --contract-hours are Vast.ai's terms; a peer fleet is offered \
+                 at --price-gpu alone",
             ));
         }
         run::auto_list(run::Params {

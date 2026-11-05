@@ -106,6 +106,10 @@ pub(crate) struct AgentOptions {
     /// Required when the bridge runs.
     #[arg(long)]
     pub vast_idle_window_s: Option<i64>,
+    /// Hours ahead the Vast offer's end date is set, moved forward while
+    /// the host stays idle. Required when the bridge runs.
+    #[arg(long)]
+    pub vast_contract_hours: Option<u32>,
     /// Seconds between queue polls when a poll started nothing. Required to
     /// run the worker; nothing in Stado chooses it.
     #[arg(long)]

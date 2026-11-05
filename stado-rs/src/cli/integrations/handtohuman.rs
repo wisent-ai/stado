@@ -173,10 +173,13 @@ impl MarketAdapter for HandToHumanAdapter {
     async fn list(&self, offer: ListOffer, json: bool) -> Result<(), CmdError> {
         let resource = self.resource("list")?;
         let (kind, unit) = resource.kind()?;
-        if offer.price_disk.is_some() || offer.price_min_bid.is_some() {
+        if offer.price_disk.is_some()
+            || offer.price_min_bid.is_some()
+            || offer.contract_hours.is_some()
+        {
             return Err(CmdError::usage(
-                "--price-disk and --price-min-bid are Vast.ai's prices; a HandToHuman offer is \
-                 priced by --price-gpu, in USD per unit of its resource",
+                "--price-disk, --price-min-bid and --contract-hours are Vast.ai's terms; a \
+                 HandToHuman offer is priced by --price-gpu, in USD per unit of its resource",
             ));
         }
         if !(offer.price_gpu.is_finite() && offer.price_gpu > 0.0) {

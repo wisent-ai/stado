@@ -13,6 +13,11 @@ enum EarningConstants {
     /// `--max-duration-s` the preview evaluates with: the longest single
     /// rental an offer allows.
     static let maxRentalSeconds: Int = 3600
+    /// Starting `--contract-hours`: how far ahead an offer ends, moved
+    /// forward while the host stays idle.
+    static let defaultContractHours: Int = 24
+    /// The windows the contract-hours stepper offers, an hour to a week.
+    static let contractHoursRange: ClosedRange<Int> = 1...168
     /// The idle windows the preview stepper offers: from listing the moment
     /// the queue empties up to an hour, which is also the default cap on a
     /// single rental.

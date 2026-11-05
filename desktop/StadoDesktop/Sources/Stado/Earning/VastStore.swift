@@ -212,20 +212,22 @@ final class VastStore: ObservableObject {
     }
 
     nonisolated static func previewArguments(
-        idleWindowSeconds: Int, priceGPU: Double, priceDisk: Double
+        idleWindowSeconds: Int, priceGPU: Double, priceDisk: Double, contractHours: Int
     ) -> [String] {
         [
             "market", "follow", "--provider", "vast", "--dry-run", "--once",
             "--idle-window-s", String(idleWindowSeconds),
             "--price-gpu", String(priceGPU), "--price-disk", String(priceDisk),
             "--max-duration-s", String(EarningConstants.maxRentalSeconds),
+            "--contract-hours", String(contractHours),
         ]
     }
 
-    nonisolated static func listArguments(priceGPU: Double, priceDisk: Double) -> [String] {
+    nonisolated static func listArguments(priceGPU: Double, priceDisk: Double, contractHours: Int) -> [String] {
         [
             "market", "list", "--provider", "vast",
-            "--price-gpu", String(priceGPU), "--price-disk", String(priceDisk), "--json",
+            "--price-gpu", String(priceGPU), "--price-disk", String(priceDisk),
+            "--contract-hours", String(contractHours), "--json",
         ]
     }
 
@@ -262,14 +264,15 @@ final class VastStore: ObservableObject {
 
     /// One bounded evaluation of the bridge: what it would decide right now,
     /// without calling Vast.ai and without a credential.
-    func previewDecision(idleWindowSeconds: Int, priceGPU: Double, priceDisk: Double) async {
+    func previewDecision(idleWindowSeconds: Int, priceGPU: Double, priceDisk: Double, contractHours: Int) async {
         guard !isWorking else { return }
         isWorking = true
         defer { isWorking = false }
         do {
             preview = try await cli.text(
                 arguments: Self.previewArguments(
-                    idleWindowSeconds: idleWindowSeconds, priceGPU: priceGPU, priceDisk: priceDisk
+                    idleWindowSeconds: idleWindowSeconds, priceGPU: priceGPU, priceDisk: priceDisk,
+                    contractHours: contractHours
                 )
             )
         } catch {
@@ -278,10 +281,10 @@ final class VastStore: ObservableObject {
         }
     }
 
-    func list(priceGPU: Double, priceDisk: Double) async {
+    func list(priceGPU: Double, priceDisk: Double, contractHours: Int) async {
         await mutate(
-            Self.listArguments(priceGPU: priceGPU, priceDisk: priceDisk),
-            what: "Listed at $\(priceGPU)/h and $\(priceDisk)/GB-month"
+            Self.listArguments(priceGPU: priceGPU, priceDisk: priceDisk, contractHours: contractHours),
+            what: "Listed at $\(priceGPU)/h and $\(priceDisk)/GB-month, ending in \(contractHours) h"
         )
     }
 

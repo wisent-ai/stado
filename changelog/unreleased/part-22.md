@@ -364,3 +364,10 @@ The version bump gathers them into the release's own file and removes this one.
   reads `vars.STADO_API_URL`) asks the serving origin and not a name written into a workflow;
   refused without `--apply`, for a malformed name or a repository outside the organization. Stado
   Desktop's Converge review takes the variables.
+- **Every Vast.ai offer ends when Stado says:** `stado market list|follow --provider vast` and the
+  worker's bridge (`--vast-contract-hours`) require `--contract-hours`, send it as the offer's
+  `end_date`, and the follow loop moves it a whole window ahead while the host stays idle once less
+  than half is left, so a renter cannot hold the host past the window the fleet spares; zero is
+  refused, as are a peer fleet's and HandToHuman's listings with it. A Vast.ai follow without a key
+  now refuses with the class the vault answered. Stado Desktop's Earning screen takes the hours.
+  Test: `tests/market/offer_end_date.mjs`.

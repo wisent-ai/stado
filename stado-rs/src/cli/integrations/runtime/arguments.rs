@@ -203,6 +203,9 @@ impl ServeArgs {
         if let Some(seconds) = self.worker.vast_idle_window_s {
             args.push(format!("--vast-idle-window-s={seconds}"));
         }
+        if let Some(hours) = self.worker.vast_contract_hours {
+            args.push(format!("--vast-contract-hours={hours}"));
+        }
         if self.resolver {
             args.push("--resolver".to_string());
         }

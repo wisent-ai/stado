@@ -141,7 +141,15 @@ impl MarketAdapter for VastAdapter {
                 "listing on Vast.ai needs --price-disk, the per-GB-month disk price in USD",
             ));
         };
-        list(offer.price_gpu, price_disk, offer.price_min_bid, json).await
+        let contract_hours = required_contract_hours(offer.contract_hours, "listing")?;
+        list(
+            offer.price_gpu,
+            price_disk,
+            offer.price_min_bid,
+            contract_hours,
+            json,
+        )
+        .await
     }
 
     async fn unlist(&self, json: bool) -> Result<(), CmdError> {
@@ -205,16 +213,28 @@ impl MarketAdapter for VastAdapter {
                 "following the queue on Vast.ai needs --price-disk, the per-GB-month disk price in USD",
             ));
         };
+        let contract_hours = required_contract_hours(follow.contract_hours, "following")?;
         auto_list(
             follow.idle_window_s,
             follow.poll_interval_s,
             (follow.price_gpu, price_disk),
             follow.max_duration_s,
+            contract_hours,
             follow.dry_run,
             follow.once,
         )
         .await
     }
+}
+
+/// The offer's contract window, which a Vast.ai offer always states.
+fn required_contract_hours(hours: Option<u32>, verb: &str) -> Result<u32, CmdError> {
+    hours.ok_or_else(|| {
+        CmdError::usage(format!(
+            "{verb} on Vast.ai needs --contract-hours: how many hours ahead the offer ends, so a \
+             renter cannot hold the host past the window the fleet spares"
+        ))
+    })
 }
 
 /// A marketplace failure as the command reports it, with its class: a
@@ -234,8 +254,15 @@ async fn list(
     price_gpu: f64,
     price_disk: f64,
     price_min_bid: Option<f64>,
+    contract_hours: u32,
     json_output: bool,
 ) -> Result<(), CmdError> {
+    if contract_hours == 0 {
+        return Err(CmdError::usage(
+            "--contract-hours is zero: the offer would end the moment it is listed; state how \
+             many hours ahead it ends",
+        ));
+    }
     // Vast lists the machine whole, so it is listed only when a renter's
     // container would reach nothing of the host's and no board is held.
     if let Some(refusal) = vast::isolation::measure().refusal() {
@@ -251,6 +278,7 @@ async fn list(
             price_disk,
             price_min_bid,
             duration: None,
+            end_date: ListMachineParams::end_in_hours(contract_hours),
         })
         .await
         .map_err(cmd_err)?;
@@ -351,6 +379,7 @@ async fn auto_list(
     poll_interval_s: Option<u64>,
     (price_gpu, price_disk): (f64, f64),
     max_duration_s: i64,
+    contract_hours: u32,
     dry_run: bool,
     once: bool,
 ) -> Result<(), CmdError> {
@@ -358,8 +387,9 @@ async fn auto_list(
     let client = reading.key.clone().map(VastClient::new);
     if client.is_none() {
         if !dry_run {
-            return Err(CmdError::click(vast::vast_refusal(&reading))
-                .stating(crate::primitives::failure::FailureCode::Config));
+            return Err(
+                CmdError::click(vast::vast_refusal(&reading)).stating(reading.failure_code())
+            );
         }
         eprintln!("[vast] {}", vast::vast_refusal(&reading));
     }
@@ -376,6 +406,7 @@ async fn auto_list(
         dry_run,
         once,
         duration_s: max_duration_s.is_positive().then_some(max_duration_s),
+        contract_hours,
     };
     vast::auto_list_loop(client.as_ref(), &store, &hostname, params, |m| {
         println!("{m}")

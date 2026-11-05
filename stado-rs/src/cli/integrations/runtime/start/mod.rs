@@ -232,6 +232,7 @@ pub(super) async fn start_roles(
                 args.worker.vast_price_disk,
                 args.worker.vast_max_duration_s,
                 args.worker.vast_idle_window_s,
+                args.worker.vast_contract_hours,
                 args.worker.poll_seconds,
             )
             .await

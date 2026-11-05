@@ -23,6 +23,17 @@ pub struct ListMachineParams {
     pub price_min_bid: Option<f64>,
     /// The longest rental in seconds; `None` leaves the offer open-ended.
     pub duration: Option<i64>,
+    /// When the offer expires, in Unix seconds: Vast.ai's `end_date`, after
+    /// which no rental of this offer runs. Stado always states one, so a
+    /// renter never holds the board past the window the operator offered.
+    pub end_date: i64,
+}
+
+impl ListMachineParams {
+    /// The end date `hours` from now, in Unix seconds.
+    pub fn end_in_hours(hours: u32) -> i64 {
+        chrono::Utc::now().timestamp() + i64::from(hours) * 3600
+    }
 }
 
 impl VastClient {
@@ -52,6 +63,7 @@ impl VastClient {
         if let Some(duration) = params.duration {
             body["duration"] = json!(duration);
         }
+        body["end_date"] = json!(params.end_date);
         self.request("PUT", "/machines/create_asks/", Some(&body))
             .await
     }

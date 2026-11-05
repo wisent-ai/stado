@@ -53,6 +53,12 @@ pub async fn auto_list_loop(
              a positive number",
         ));
     }
+    if params.contract_hours == 0 {
+        return Err(VastError::config(
+            "the offer's contract window is zero hours: an offer would end the moment it is \
+             listed; state how many hours ahead it ends with --contract-hours",
+        ));
+    }
     if client.is_none() && !params.dry_run {
         return Err(VastError::config(
             "auto-list without --dry-run needs a Vast.ai API key; run it with \
@@ -77,9 +83,13 @@ pub async fn auto_list_loop(
     let mut idle_since: Option<std::time::Instant> = None;
     // Startup sync: take over any pre-existing listing (manual host-UI
     // placement or an earlier bridge run) so the loop can unlist it when
-    // wisent-compute work arrives. Normalize price + duration to the
-    // bridge's configured values.
+    // wisent-compute work arrives. Normalize price, duration and end date to
+    // the bridge's configured values: a listing found here carries an end
+    // date nobody in this loop chose, so it is listed again with one.
     let mut listed = false;
+    // When the offer this loop placed ends (Unix seconds); `None` while no
+    // offer of the loop's own is up.
+    let mut ends_at: Option<i64> = None;
     match client {
         None => log("startup: no Vast.ai credential; printing decisions only"),
         Some(client) => match client.machine_status().await {
@@ -96,9 +106,8 @@ pub async fn auto_list_loop(
                         py_float(current),
                         shown(status.get("id"))
                     ));
-                    // Any listed price other than the configured one is
-                    // normalized; the configured price is what Vast is sent.
-                    if current != params.price_gpu && !params.dry_run {
+                    if !params.dry_run {
+                        let end_date = ListMachineParams::end_in_hours(params.contract_hours);
                         let normalize = async {
                             client.unlist_machine().await?;
                             client
@@ -107,15 +116,20 @@ pub async fn auto_list_loop(
                                     price_disk: params.price_disk,
                                     price_min_bid: None,
                                     duration: duration_s,
+                                    end_date,
                                 })
                                 .await
                         };
                         match normalize.await {
-                            Ok(_) => log(&format!(
-                                "normalized ${}/h -> ${}/h",
-                                py_float(current),
-                                py_float(params.price_gpu)
-                            )),
+                            Ok(_) => {
+                                ends_at = Some(end_date);
+                                log(&format!(
+                                    "normalized ${}/h -> ${}/h, ending {}",
+                                    py_float(current),
+                                    py_float(params.price_gpu),
+                                    end_text(end_date)
+                                ))
+                            }
                             Err(exc) => log(&format!("normalize failed: {exc}")),
                         }
                     }
@@ -152,6 +166,7 @@ pub async fn auto_list_loop(
                             match client.unlist_machine().await {
                                 Ok(_) => {
                                     listed = false;
+                                    ends_at = None;
                                     log(&format!("unlisted: this host is failing: {cause}"));
                                 }
                                 Err(exc) => log(&format!(
@@ -251,6 +266,7 @@ pub async fn auto_list_loop(
                     match client.unlist_machine().await {
                         Ok(_) => {
                             listed = false;
+                            ends_at = None;
                             log(&format!("unlisted for {held}"));
                         }
                         Err(exc) => log(&format!("unlist for {held} failed: {exc}")),
@@ -308,35 +324,83 @@ pub async fn auto_list_loop(
                         // or job holds would be offered while it is held.
                         log(&format!("not listed: {refusal}"));
                     } else if let Some(client) = client {
+                        let end_date = ListMachineParams::end_in_hours(params.contract_hours);
                         match client
                             .list_machine(&ListMachineParams {
                                 price_gpu: params.price_gpu,
                                 price_disk: params.price_disk,
                                 price_min_bid: None,
                                 duration: duration_s,
+                                end_date,
                             })
                             .await
                         {
                             Ok(_) => {
                                 listed = true;
+                                ends_at = Some(end_date);
                                 let duration = match duration_s {
                                     Some(seconds) => format!("{seconds}s"),
                                     None => "open-ended".to_string(),
                                 };
                                 log(&format!(
-                                    "LISTED ({idle_dur_s}s idle, ${}/h, dur={duration})",
+                                    "LISTED ({idle_dur_s}s idle, ${}/h, dur={duration}, ending {})",
                                     py_float(params.price_gpu),
+                                    end_text(end_date)
                                 ));
                             }
                             Err(exc) => log(&format!("list failed: {exc}")),
                         }
                     }
                 }
-                AutoListAction::IdleCountdown { idle_dur_s } => log(&format!(
-                    "idle {idle_dur_s}s/{}s (listed={})",
-                    params.idle_window_s,
-                    if listed { "True" } else { "False" }
-                )),
+                AutoListAction::IdleCountdown { idle_dur_s } => {
+                    // A listed host that stays idle keeps its offer open:
+                    // once less than half the contract window is left, the
+                    // end date moves a whole window ahead (create_asks
+                    // updates the ask in place and extends the contracts
+                    // already running on it). A listing whose end date this
+                    // loop did not set (its startup normalization failed)
+                    // is given one at once.
+                    let half = i64::from(params.contract_hours) * 1800;
+                    let renew = listed
+                        && match ends_at {
+                            Some(end) => end - chrono::Utc::now().timestamp() < half,
+                            None => true,
+                        };
+                    match client {
+                        Some(client) if renew && !params.dry_run => {
+                            let end_date = ListMachineParams::end_in_hours(params.contract_hours);
+                            match client
+                                .list_machine(&ListMachineParams {
+                                    price_gpu: params.price_gpu,
+                                    price_disk: params.price_disk,
+                                    price_min_bid: None,
+                                    duration: duration_s,
+                                    end_date,
+                                })
+                                .await
+                            {
+                                Ok(_) => {
+                                    ends_at = Some(end_date);
+                                    log(&format!(
+                                        "offer renewed while idle, ending {}",
+                                        end_text(end_date)
+                                    ));
+                                }
+                                Err(exc) => log(&format!(
+                                    "renewing the offer's end date failed: {exc}; it ends {}",
+                                    ends_at.map(end_text).unwrap_or_default()
+                                )),
+                            }
+                        }
+                        _ if renew => log("DRY-RUN would renew the offer's end date"),
+                        _ => {}
+                    }
+                    log(&format!(
+                        "idle {idle_dur_s}s/{}s (listed={})",
+                        params.idle_window_s,
+                        if listed { "True" } else { "False" }
+                    ))
+                }
                 _ => unreachable!("idle state only yields List/IdleCountdown"),
             }
         } else {
@@ -350,6 +414,7 @@ pub async fn auto_list_loop(
                     match client.unlist_machine().await {
                         Ok(_) => {
                             listed = false;
+                            ends_at = None;
                             log(&format!("UNLISTED ({})", counts()));
                         }
                         Err(exc) => log(&format!("unlist failed: {exc}")),
@@ -394,5 +459,13 @@ pub async fn auto_list_loop(
         if params.once {
             return Ok(());
         }
+    }
+}
+
+/// An end date as the log prints it: UTC, to the minute.
+fn end_text(end_date: i64) -> String {
+    match chrono::DateTime::<chrono::Utc>::from_timestamp(end_date, 0) {
+        Some(at) => at.format("%Y-%m-%dT%H:%MZ").to_string(),
+        None => format!("{end_date} (not a representable time)"),
     }
 }

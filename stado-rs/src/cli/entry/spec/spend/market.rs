@@ -109,6 +109,11 @@ pub(crate) enum MarketCommands {
         /// (--provider handtohuman, which requires it).
         #[arg(long)]
         units: Option<i64>,
+        /// Hours ahead the offer ends, sent as Vast.ai's end date, so a
+        /// renter cannot hold the host past the window the fleet spares;
+        /// required with --provider vast and refused with any other.
+        #[arg(long)]
+        contract_hours: Option<u32>,
         /// Print the marketplace's answer as JSON instead of text.
         #[arg(long)]
         json: bool,
@@ -359,6 +364,11 @@ pub(crate) enum MarketCommands {
         /// runs); 0 leaves it open-ended.
         #[arg(long)]
         max_duration_s: i64,
+        /// Hours ahead the offer ends; while the host stays idle the end
+        /// date moves a whole window ahead once less than half is left.
+        /// Required with --provider vast and refused with any other.
+        #[arg(long)]
+        contract_hours: Option<u32>,
         /// Print the toggle decisions without calling the marketplace. Needs
         /// no credential: the decisions come from the queue.
         #[arg(long)]

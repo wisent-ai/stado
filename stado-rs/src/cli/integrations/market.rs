@@ -24,6 +24,9 @@ pub(crate) struct ListOffer {
     /// How many units the offer sells, for a marketplace that sells a
     /// counted amount (HandToHuman).
     pub units: Option<i64>,
+    /// Hours ahead the offer ends, for a marketplace whose offers carry an
+    /// end date (Vast.ai).
+    pub contract_hours: Option<u32>,
 }
 
 /// What `follow` holds the host's listing to.
@@ -33,6 +36,9 @@ pub(crate) struct Follow {
     pub price_gpu: f64,
     pub price_disk: Option<f64>,
     pub max_duration_s: i64,
+    /// Hours ahead the offer ends, moved forward while the host stays idle
+    /// (Vast.ai).
+    pub contract_hours: Option<u32>,
     pub dry_run: bool,
     pub once: bool,
 }
@@ -138,6 +144,7 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             price_disk,
             price_min_bid,
             units,
+            contract_hours,
             json,
         } => {
             let offer = ListOffer {
@@ -145,6 +152,7 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
                 price_disk: *price_disk,
                 price_min_bid: *price_min_bid,
                 units: *units,
+                contract_hours: *contract_hours,
             };
             adapter(*provider, peer.as_deref(), *resource)?
                 .list(offer, *json)
@@ -258,6 +266,7 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             price_gpu,
             price_disk,
             max_duration_s,
+            contract_hours,
             dry_run,
             once,
         } => {
@@ -267,6 +276,7 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
                 price_gpu: *price_gpu,
                 price_disk: *price_disk,
                 max_duration_s: *max_duration_s,
+                contract_hours: *contract_hours,
                 dry_run: *dry_run,
                 once: *once,
             };

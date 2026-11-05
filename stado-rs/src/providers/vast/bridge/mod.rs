@@ -82,6 +82,11 @@ pub struct AutoListParams {
     /// wisent-compute job behind an active Vast rental is one hour; None
     /// leaves the offer open-ended.
     pub duration_s: Option<i64>,
+    /// How far ahead the offer's end date is set, in hours: the operator's
+    /// `--contract-hours`. The loop moves the end date forward by this while
+    /// the host stays idle, once less than half of it is left, so an offer
+    /// never outlives the window the fleet can spare.
+    pub contract_hours: u32,
     /// Print the toggle decisions without calling the Vast API.
     pub dry_run: bool,
     /// Evaluate one poll and return, instead of looping forever. The
