@@ -265,7 +265,7 @@ async fn list(
     }
     // Vast lists the machine whole, so it is listed only when a renter's
     // container would reach nothing of the host's and no board is held.
-    if let Some(refusal) = vast::isolation::measure().refusal() {
+    if let Some(refusal) = vast::isolation::measure().await.refusal() {
         return Err(CmdError::refused(format!("not listed: {refusal}")));
     }
     if let Some(refusal) = vast::held::refusal().await {

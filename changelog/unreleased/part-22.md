@@ -371,3 +371,9 @@ The version bump gathers them into the release's own file and removes this one.
   refused, as are a peer fleet's and HandToHuman's listings with it. A Vast.ai follow without a key
   now refuses with the class the vault answered. Stado Desktop's Earning screen takes the hours.
   Test: `tests/market/offer_end_date.mjs`.
+- **Market readiness exits with each verdict's own class, and the isolation check no longer holds a
+  runtime thread:** `stado market readiness --provider vast|stado` without `--json` exits `refused`
+  for a marketplace or peer that refused, with the credential channel's class for `unknown`, and
+  `config` only for what the host must provision; the peer document carries `skarbiec_failure` too,
+  shown on Stado Desktop's Peer fleets panel. The renter-isolation reads (`ip`, `ss`, the
+  `DOCKER-USER` chain) are awaited child processes.

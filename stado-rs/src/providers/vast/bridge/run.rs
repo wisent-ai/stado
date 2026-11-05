@@ -313,7 +313,7 @@ pub async fn auto_list_loop(
                         listed = true;
                         log(&format!("DRY-RUN would list (idle {idle_dur_s}s)"));
                     } else if let Some(refusal) =
-                        crate::providers::vast::isolation::measure().refusal()
+                        crate::providers::vast::isolation::measure().await.refusal()
                     {
                         // Read before each listing: a service started or a
                         // rule removed since the last one would hand the next
