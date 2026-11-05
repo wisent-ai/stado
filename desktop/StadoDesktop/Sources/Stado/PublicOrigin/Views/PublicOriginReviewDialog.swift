@@ -54,24 +54,50 @@ struct PublicOriginReviewRequest: Identifiable {
 struct PublicOriginReviewDialog: View {
     let request: PublicOriginReviewRequest
     let cancel: () -> Void
-    let confirm: () -> Void
+    /// Called with the Actions variables to write the serving origin to.
+    let confirm: ([String]) -> Void
+
+    /// One `<repository>/<NAME>` per line; blank writes none.
+    @State private var variables = ""
+
+    private var githubVariables: [String] {
+        variables
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
 
     var body: some View {
-        WisentDecisionDialog(
-            tone: .danger,
-            title: "Converge the public origin \(request.plan.name) on \(request.plan.target)?",
-            lines: request.reviewLines,
-            reasonCode: request.plan.status.word,
-            listing: [
-                StadoCLI.commandLine(
-                    PublicOriginStore.convergeArguments(name: request.plan.name, apply: true)
-                ),
-            ] + request.handlerLines,
-            footnote: "Planned by \(PublicOriginConvergeReceipt.schemaName) for \(request.reachableName).",
-            actions: [
-                WisentAction("Leave the publication unchanged", kind: .secondary) { cancel() },
-                WisentAction("Converge this origin", kind: .destructive) { confirm() },
-            ]
-        )
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+            WisentDecisionDialog(
+                tone: .danger,
+                title: "Converge the public origin \(request.plan.name) on \(request.plan.target)?",
+                lines: request.reviewLines,
+                reasonCode: request.plan.status.word,
+                listing: [
+                    StadoCLI.commandLine(
+                        PublicOriginStore.convergeArguments(
+                            name: request.plan.name,
+                            apply: true,
+                            githubVariables: githubVariables
+                        )
+                    ),
+                ] + request.handlerLines,
+                footnote: "Planned by \(PublicOriginConvergeReceipt.schemaName) for \(request.reachableName).",
+                actions: [
+                    WisentAction("Leave the publication unchanged", kind: .secondary) { cancel() },
+                    WisentAction("Converge this origin", kind: .destructive) { confirm(githubVariables) },
+                ]
+            )
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
+                Text("GitHub Actions variables to set to this origin once it serves (repository/NAME, one per line)")
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(WisentDesign.muted)
+                TextEditor(text: $variables)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 48)
+            }
+            .padding(.horizontal, WisentDesign.Space.x4)
+        }
     }
 }

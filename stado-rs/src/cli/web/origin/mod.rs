@@ -156,6 +156,11 @@ pub(crate) enum OriginCommands {
         /// Send the publication changes the plan names.
         #[arg(long)]
         apply: bool,
+        /// With --apply, once the origin serves: write it to this GitHub
+        /// Actions variable, `<repository>/<NAME>`, so a workflow reading
+        /// `vars.<NAME>` asks the origin that serves (repeatable).
+        #[arg(long = "github-variable")]
+        github_variables: Vec<String>,
         /// Emit machine-readable output.
         #[arg(long)]
         json: bool,
@@ -201,9 +206,12 @@ pub(crate) async fn dispatch(command: OriginCommands) -> Result<(), CmdError> {
         }
         OriginCommands::Remove { name, json } => declare::remove(&name, json).await,
         OriginCommands::Withdraw { target, json } => withdraw::withdraw(&target, json).await,
-        OriginCommands::Converge { name, apply, json } => {
-            converge::converge(&name, apply, json).await
-        }
+        OriginCommands::Converge {
+            name,
+            apply,
+            github_variables,
+            json,
+        } => converge::converge(&name, apply, &github_variables, json).await,
         OriginCommands::Url { path, query } => report::url(&path, &query).await,
     }
 }

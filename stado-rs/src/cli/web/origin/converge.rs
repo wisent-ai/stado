@@ -20,7 +20,13 @@ use serde_json::{json, Value};
 use crate::cli::CmdError;
 use crate::public_origin::{self, funnel, PublicOrigin, ResolutionState, WEB_EDGE};
 
-pub(crate) async fn converge(name: &str, apply: bool, json_output: bool) -> Result<(), CmdError> {
+pub(crate) async fn converge(
+    name: &str,
+    apply: bool,
+    github_variables: &[String],
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let variables = parse_variables(github_variables, apply)?;
     let document = crate::cli::registry::fetch_document().await?;
     let origin = public_origin::declaration(&document, name).ok_or_else(|| {
         CmdError::usage(format!(
@@ -30,18 +36,89 @@ pub(crate) async fn converge(name: &str, apply: bool, json_output: bool) -> Resu
     // An origin declared before the catalog said which services may be
     // public is held to the same rule before it is published again.
     super::declare::refuse_unless_public(&origin).await?;
-    if origin.publication == WEB_EDGE {
-        return converge_web_edge(&origin, apply, json_output).await;
+    let converged = if origin.publication == WEB_EDGE {
+        converge_web_edge(&origin, apply, json_output).await
+    } else {
+        converge_funnel(&origin, apply, json_output).await
+    };
+    converged?;
+    publish_variables(&origin, &variables).await
+}
+
+/// Each `--github-variable REPOSITORY/NAME`, refused when malformed or given
+/// without --apply (a plan writes nothing).
+fn parse_variables(given: &[String], apply: bool) -> Result<Vec<(String, String)>, CmdError> {
+    if !given.is_empty() && !apply {
+        return Err(CmdError::usage(
+            "--github-variable writes the origin once it serves, which only --apply converges; \
+             add --apply, or leave the variable out to see the plan",
+        ));
     }
+    given
+        .iter()
+        .map(|entry| match entry.split_once('/') {
+            Some((repository, name))
+                if !repository.is_empty()
+                    && !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') =>
+            {
+                Ok((repository.to_string(), name.to_string()))
+            }
+            _ => Err(CmdError::usage(format!(
+                "--github-variable {entry:?} must be <repository>/<NAME>, a repository of the \
+                 organization and a variable name of letters, digits and underscores"
+            ))),
+        })
+        .collect()
+}
+
+/// Write the origin that now serves to each named Actions variable.
+async fn publish_variables(
+    origin: &PublicOrigin,
+    variables: &[(String, String)],
+) -> Result<(), CmdError> {
+    if variables.is_empty() {
+        return Ok(());
+    }
+    let token = crate::deploy::host_precheck_runner::github_credential()
+        .await
+        .map_err(CmdError::from)?;
+    for (repository, name) in variables {
+        crate::deploy::host_precheck_runner::repository_name(repository).map_err(CmdError::from)?;
+        crate::deploy::host_precheck_runner::set_repository_variable(
+            repository,
+            name,
+            &origin.origin(),
+            &token,
+        )
+        .map_err(CmdError::from)?;
+        println!(
+            "{repository} vars.{name} = {} (the origin {} serves)",
+            origin.origin(),
+            origin.name
+        );
+    }
+    Ok(())
+}
+
+/// The Funnel publication: converge the node's handler table, then read back
+/// what actually happened.
+async fn converge_funnel(
+    origin: &PublicOrigin,
+    apply: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let target = crate::cli::canonical_host(&origin.target).await?;
-    let (publication, changes) = funnel::converge(&origin, &target, &runner, apply)
+    let (publication, changes) = funnel::converge(origin, &target, &runner, apply)
         .await
         .map_err(CmdError::from)?;
     let resolution = public_origin::resolve(&origin.hostname).await;
-    let readback = read_back(&origin, resolution.state).await;
+    let readback = read_back(origin, resolution.state).await;
 
-    let refusal = refusal_for(&origin, &publication, &resolution, &readback);
+    let refusal = refusal_for(origin, &publication, &resolution, &readback);
     let status = if refusal.is_some() {
         "refused"
     } else if changes.iter().any(|change| change.change == "added") {

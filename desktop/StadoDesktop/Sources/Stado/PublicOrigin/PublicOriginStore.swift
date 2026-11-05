@@ -93,10 +93,13 @@ final class PublicOriginStore: ObservableObject {
 
     static func statusArguments() -> [String] { ["web", "origin", "status", "--json"] }
 
-    static func convergeArguments(name: String, apply: Bool) -> [String] {
-        apply
-            ? ["web", "origin", "converge", name, "--apply", "--json"]
-            : ["web", "origin", "converge", name, "--json"]
+    /// `githubVariables` are `<repository>/<NAME>` Actions variables the
+    /// command writes the origin to once it serves; only an apply takes them.
+    static func convergeArguments(name: String, apply: Bool, githubVariables: [String] = []) -> [String] {
+        guard apply else { return ["web", "origin", "converge", name, "--json"] }
+        return ["web", "origin", "converge", name, "--apply"]
+            + githubVariables.flatMap { ["--github-variable", $0] }
+            + ["--json"]
     }
 
     // MARK: Read
@@ -168,7 +171,7 @@ final class PublicOriginStore: ObservableObject {
 
     /// `web origin converge NAME --apply --json`. The receipt is retained
     /// even when the command refuses: the refusal sentence is the answer.
-    func converge(name: String) async {
+    func converge(name: String, githubVariables: [String] = []) async {
         guard !mutation.isWorking else { return }
         guard let address else {
             mutation = .failed(Self.unconfigured)
@@ -177,7 +180,7 @@ final class PublicOriginStore: ObservableObject {
         mutation = .working("Converging the public origin \(name).")
         do {
             let invocation = try await run(
-                Self.convergeArguments(name: name, apply: true),
+                Self.convergeArguments(name: name, apply: true, githubVariables: githubVariables),
                 confirmsMutation: true,
                 at: address
             )

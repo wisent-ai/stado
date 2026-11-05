@@ -207,3 +207,30 @@ pub(crate) fn set_repository_secret(
     }
     Ok(())
 }
+
+/// Set the Actions variable `name` of `repository` to `value`: what a
+/// workflow reads as `vars.<name>`, such as the release origin a gate asks.
+/// A variable is not a secret, so its value goes on the command line.
+pub(crate) fn set_repository_variable(
+    repository: &str,
+    name: &str,
+    value: &str,
+    github_token: &str,
+) -> Result<(), DeployError> {
+    let output = crate::wait::output(
+        Command::new("gh")
+            .args(["variable", "set", name, "--body", value, "--repo"])
+            .arg(format!("{GITHUB_ORGANIZATION}/{repository}"))
+            .env("GH_TOKEN", github_token),
+    )
+    .map_err(DeployError::io(format!("gh variable set {name} failed")))?;
+    if !output.status.success() {
+        return Err(DeployError::unreachable(format!(
+            "GitHub repository variable {name} of {repository} was not set: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .replace(github_token, "[REDACTED]")
+                .trim()
+        )));
+    }
+    Ok(())
+}

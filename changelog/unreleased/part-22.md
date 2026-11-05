@@ -359,3 +359,8 @@ The version bump gathers them into the release's own file and removes this one.
   included) now names the declared web edge, or the command that declares one, and the exact
   `stado web declare`, `stado web route`, `web origin declare --publication web-edge` and
   `converge` commands for that origin's own name, target, upstream and paths.
+- **`stado web origin converge --apply --github-variable REPOSITORY/NAME`** writes the origin that
+  now serves to a GitHub Actions variable, so a workflow reading `vars.<NAME>` (the version check
+  reads `vars.STADO_API_URL`) asks the serving origin and not a name written into a workflow;
+  refused without `--apply`, for a malformed name or a repository outside the organization. Stado
+  Desktop's Converge review takes the variables.

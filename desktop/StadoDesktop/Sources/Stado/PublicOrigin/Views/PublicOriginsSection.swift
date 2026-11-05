@@ -57,9 +57,9 @@ struct PublicOriginsSection: View {
             PublicOriginReviewDialog(
                 request: pending,
                 cancel: { review = nil },
-                confirm: {
+                confirm: { githubVariables in
                     review = nil
-                    Task { await store.converge(name: pending.plan.name) }
+                    Task { await store.converge(name: pending.plan.name, githubVariables: githubVariables) }
                 }
             )
         }
