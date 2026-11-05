@@ -77,7 +77,7 @@ fn print_node(
     }
     let held = declared.reservation;
     println!(
-        "{verb} node {}: {} on {} earns from {}; holds {} cores, {} GiB, {} GiB VRAM; {}",
+        "{verb} node {}: {} on {} earns from {}; holds {} cores, {} GiB, {} GiB VRAM, {} GiB disk; {}",
         declared.name,
         declared.service,
         declared.target,
@@ -85,6 +85,7 @@ fn print_node(
         held.cpu_cores,
         held.ram_gb,
         held.vram_gb,
+        held.disk_gb,
         if declared.listed {
             "offered"
         } else {
@@ -109,6 +110,7 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
             cpu_cores,
             ram_gb,
             vram_gb,
+            disk_gb,
             json,
         } => {
             if node::load(&store, name).await.map_err(cmd)?.is_some() {
@@ -130,6 +132,7 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
                         cpu_cores: *cpu_cores,
                         ram_gb: *ram_gb,
                         vram_gb: *vram_gb,
+                        disk_gb: *disk_gb,
                     },
                     // Declaring is not offering: the operator offers the node
                     // with `edit --listed true` once it is ready to run.
@@ -148,12 +151,19 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
             cpu_cores,
             ram_gb,
             vram_gb,
+            disk_gb,
             json,
         } => {
             let mut declared = node::require(&store, name).await.map_err(cmd)?;
-            if listed.is_none() && cpu_cores.is_none() && ram_gb.is_none() && vram_gb.is_none() {
+            if listed.is_none()
+                && cpu_cores.is_none()
+                && ram_gb.is_none()
+                && vram_gb.is_none()
+                && disk_gb.is_none()
+            {
                 return Err(CmdError::usage(
-                    "edit changes --listed, --cpu-cores, --ram-gb or --vram-gb; none was given",
+                    "edit changes --listed, --cpu-cores, --ram-gb, --vram-gb or --disk-gb; none \
+                     was given",
                 ));
             }
             if let Some(listed) = listed {
@@ -167,6 +177,9 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
             }
             if let Some(vram_gb) = vram_gb {
                 declared.reservation.vram_gb = *vram_gb;
+            }
+            if let Some(disk_gb) = disk_gb {
+                declared.reservation.disk_gb = *disk_gb;
             }
             declared.changed_at = chrono::Utc::now().to_rfc3339();
             let stored = node::save(&store, &declared).await.map_err(cmd)?;
@@ -252,6 +265,68 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
             .await
         }
     }
+}
+
+/// Whether `disk_gb` fits inside what `target` may still write before the
+/// disk-full rule starts deleting, as its newest beacon publishes it
+/// (`disk_headroom_gb`), or why the node is not started. A node that holds
+/// no disk fits without asking.
+async fn disk_fits(
+    store: &JobStorage,
+    target: &crate::targets::ComputeTarget,
+    disk_gb: i64,
+) -> Result<(), String> {
+    if disk_gb == 0 {
+        return Ok(());
+    }
+    let beacons = crate::cli::registry::beacon_bodies(store)
+        .await
+        .map_err(|error| {
+            format!(
+                "{}'s beacon cannot be read for its disk headroom: {error}",
+                target.name
+            )
+        })?;
+    let slugs = crate::monitor::host_health::beacon_slugs(target, &target.name);
+    let beacon = slugs
+        .iter()
+        .find_map(|slug| beacons.get(slug))
+        .ok_or_else(|| {
+            format!(
+                "{} publishes no beacon, so its disk headroom is unread",
+                target.name
+            )
+        })?;
+    let headroom = match (
+        beacon
+            .get("disk_headroom_gb")
+            .and_then(serde_json::Value::as_i64),
+        beacon.get("disk_headroom_unread"),
+    ) {
+        (Some(headroom), _) => headroom,
+        (None, Some(cause)) => {
+            return Err(format!(
+                "{}'s disk headroom is unread: {}",
+                target.name,
+                cause.as_str().unwrap_or("no cause given")
+            ))
+        }
+        (None, None) => {
+            return Err(format!(
+                "{}'s beacon publishes no disk headroom yet",
+                target.name
+            ))
+        }
+    };
+    if disk_gb > headroom {
+        return Err(format!(
+            "the node's {disk_gb} GiB of disk does not fit {}'s {headroom} GiB before the disk-full \
+             rule's {}% threshold",
+            target.name,
+            crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT
+        ));
+    }
+    Ok(())
 }
 
 /// The workload the node's reservation is taken as: the capacity primitive
@@ -382,6 +457,8 @@ async fn follow(
                 "the fleet has work for {} (queued={}, running_here={})",
                 current.target, state.queued, state.running_here
             ))
+        } else if let Err(cause) = disk_fits(store, &target, current.reservation.disk_gb).await {
+            Some(cause)
         } else {
             None
         };

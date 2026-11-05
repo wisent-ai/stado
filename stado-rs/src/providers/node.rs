@@ -49,6 +49,12 @@ pub struct NodeReservation {
     pub cpu_cores: i64,
     pub ram_gb: f64,
     pub vram_gb: i64,
+    /// The disk the node's data may take, in GiB: the follow loop starts the
+    /// node only while this fits inside what the host may still write before
+    /// the disk-full rule starts deleting, so a sold disk never eats it. A
+    /// declaration from before disks were reserved reads as none.
+    #[serde(default)]
+    pub disk_gb: i64,
 }
 
 /// One network node.
@@ -103,18 +109,19 @@ impl NodeDeclaration {
         let held = self.reservation;
         if held.cpu_cores < 0
             || held.vram_gb < 0
+            || held.disk_gb < 0
             || !(held.ram_gb.is_finite() && held.ram_gb >= 0.0)
         {
             return Err(NodeError::Usage(
-                "--cpu-cores, --ram-gb and --vram-gb are what the node holds and cannot be \
-                 negative"
+                "--cpu-cores, --ram-gb, --vram-gb and --disk-gb are what the node holds and \
+                 cannot be negative"
                     .to_string(),
             ));
         }
-        if held.cpu_cores == 0 && held.vram_gb == 0 && held.ram_gb == 0.0 {
+        if held.cpu_cores == 0 && held.vram_gb == 0 && held.ram_gb == 0.0 && held.disk_gb == 0 {
             return Err(NodeError::Usage(
                 "a node that holds nothing cannot be kept off a busy board; declare its \
-                 --cpu-cores, --ram-gb and --vram-gb"
+                 --cpu-cores, --ram-gb, --vram-gb or --disk-gb"
                     .to_string(),
             ));
         }

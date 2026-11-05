@@ -302,3 +302,7 @@ The version bump gathers them into the release's own file and removes this one.
   the declared seller (`market.handtohuman.seller`), pins compute orders back to the host, and
   sums what its accepted orders paid; `cpu` and `disk` are refused since HandToHuman sells no such
   kind. Desktop's Registry screen runs list, unlist and earnings.
+- **A network node's disk stays inside the disk rule's headroom:** `stado market node add|edit
+  --disk-gb` declares what a storage, RPC or indexing node's data may take; the beacon publishes
+  `disk_headroom_gb` (what may be written before the 80 % rule), and `follow` starts the node only
+  while its disk fits, naming why when it does not. Desktop's node operations take it.

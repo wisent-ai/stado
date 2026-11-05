@@ -339,6 +339,29 @@ async fn collect_document(
                 );
             }
         }
+        // What may still be written before the disk-full rule starts
+        // deleting, on the volume the rule judges: what a node's disk
+        // reservation must fit inside, so a sale never eats the rule's
+        // headroom. A volume that cannot be read publishes the cause.
+        match crate::providers::local::space_reclaim::rule::read_fleet_volume(&home) {
+            Ok(volume) => {
+                object.insert(
+                    "disk_headroom_gb".to_string(),
+                    json!(
+                        volume.headroom_bytes().max(0)
+                            / crate::providers::local::space_reclaim::GIB
+                    ),
+                );
+            }
+            Err(error) => {
+                object.insert(
+                    "disk_headroom_unread".to_string(),
+                    Value::String(format!(
+                        "the volume the disk rule reads cannot be read: {error}"
+                    )),
+                );
+            }
+        }
     }
     // The memory line is the host's own kernel reading, the same fields its
     // capacity publication carries.

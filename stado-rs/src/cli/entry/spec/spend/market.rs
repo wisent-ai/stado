@@ -408,6 +408,11 @@ pub(crate) enum NodeCommands {
         /// GiB of board memory it holds.
         #[arg(long = "vram-gb")]
         vram_gb: i64,
+        /// GiB of disk its data may take: the follow loop starts the node
+        /// only while this fits inside what the host may still write before
+        /// the disk-full rule's threshold.
+        #[arg(long = "disk-gb", default_value_t = 0)]
+        disk_gb: i64,
         #[arg(long)]
         json: bool,
     },
@@ -424,6 +429,8 @@ pub(crate) enum NodeCommands {
         ram_gb: Option<f64>,
         #[arg(long = "vram-gb")]
         vram_gb: Option<i64>,
+        #[arg(long = "disk-gb")]
+        disk_gb: Option<i64>,
         #[arg(long)]
         json: bool,
     },

@@ -275,6 +275,7 @@ enum NativeRegistryOperations {
                   .init(id: "cpu-cores", label: "Cores it holds", option: "--cpu-cores", required: true),
                   .init(id: "ram-gb", label: "GiB of memory it holds", option: "--ram-gb", required: true),
                   .init(id: "vram-gb", label: "GiB of board memory it holds", option: "--vram-gb", required: true),
+                  .init(id: "disk-gb", label: "GiB of disk its data may take", option: "--disk-gb", initial: "0"),
               ], jsonOutput: false),
         .init(id: "market-node-edit", title: "Offer or withdraw a network node, or change what it holds",
               path: ["market", "node", "edit"], hostPlacement: .none, fields: [
@@ -283,6 +284,7 @@ enum NativeRegistryOperations {
                   .init(id: "cpu-cores", label: "Cores it holds", option: "--cpu-cores"),
                   .init(id: "ram-gb", label: "GiB of memory it holds", option: "--ram-gb"),
                   .init(id: "vram-gb", label: "GiB of board memory it holds", option: "--vram-gb"),
+                  .init(id: "disk-gb", label: "GiB of disk its data may take", option: "--disk-gb"),
               ], jsonOutput: false),
         .init(id: "market-node-remove", title: "Retire a network node that is not running",
               path: ["market", "node", "remove"], hostPlacement: .none, fields: [
