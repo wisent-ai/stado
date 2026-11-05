@@ -338,3 +338,9 @@ The version bump gathers them into the release's own file and removes this one.
   mounted volumes, and nothing while a job runs or when the daemon's root is not on the volume the
   rule judges; the report carries what the daemon called reclaimable and what it reclaimed. Test:
   `tests/space_reclaim/docker_reclaim.mjs` against a real daemon.
+- **The janitor removes build source snapshots nothing names:** each `build submit` and `release
+  submit` publishes one `stado://sources/<product>/<sha256>/source.tar.gz`, and nothing removed
+  them; the new `source_snapshots` cleaner takes, at the disk-full rule, every snapshot no release
+  catalog entry, live job or unfinished release, build or quality record names, keeping each
+  product's newest and every pinned dependency input, and keeping everything while a record
+  cannot be read. Test: `tests/space_reclaim/source_snapshots.rs`.

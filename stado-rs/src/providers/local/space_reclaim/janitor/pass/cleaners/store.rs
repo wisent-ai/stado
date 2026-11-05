@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::providers::local::space_reclaim::janitor::state::report::CleanupReport;
 use crate::providers::local::space_reclaim::{
-    backup_twins, job_outputs, queue_workdirs, release_store,
+    backup_twins, job_outputs, queue_workdirs, release_store, source_snapshots,
 };
 
 use super::PassInputs;
@@ -50,6 +50,11 @@ pub(super) async fn run_store_cleaners(
         enforcing,
         report,
     );
+    // Build source snapshots nothing names any more: a later build of the
+    // same tree publishes its own again, so they go only under pressure.
+    if inputs.caches {
+        source_snapshots::scan_source_snapshots(home, enforcing, report);
+    }
     // Immutable release versions nothing on this host or in the fleet still
     // names, after every cleaner that reclaims scratch: a release is the one
     // class here that costs a rebuild to get back.

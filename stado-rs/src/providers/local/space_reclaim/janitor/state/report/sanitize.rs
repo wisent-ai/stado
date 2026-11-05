@@ -12,7 +12,7 @@ use crate::providers::local::space_reclaim::janitor::STATE_VERSION;
 use crate::providers::local::space_reclaim::{
     agent_logs, backup_twins, build_caches, chromium_clones, compiler_cache, delivered_releases,
     docker, job_outputs, local_snapshots, object_evidence, package_caches, queue_workdirs,
-    registered_scratch, release_store, rule, weles, xcode_derived_data,
+    registered_scratch, release_store, rule, source_snapshots, weles, xcode_derived_data,
 };
 
 // ---------------------------------------------------------------------------
@@ -177,6 +177,7 @@ pub fn sanitize_report(value: Option<&Value>, lock_busy: bool) -> Value {
             xcode_derived_data::CLEANER,
             package_caches::CLEANER,
             docker::CLEANER,
+            source_snapshots::CLEANER,
         ];
         Value::Object(
             names

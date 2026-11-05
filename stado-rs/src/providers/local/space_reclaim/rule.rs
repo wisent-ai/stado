@@ -91,6 +91,11 @@ pub const CLEANERS: &[Cleaner] = &[
         sweeps: "delivered release copies no installed coordinate or binary names, keeping each product's newest",
     },
     Cleaner {
+        name: super::source_snapshots::CLEANER,
+        root: ".stado/local-storage/ecosystem/sources",
+        sweeps: "build source snapshots no catalog entry, live job or unfinished run names, keeping each product's newest",
+    },
+    Cleaner {
         name: "huggingface_cache",
         root: ".cache/huggingface/hub",
         sweeps: "model blobs the hub can fetch again",

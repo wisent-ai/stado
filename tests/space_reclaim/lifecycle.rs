@@ -19,6 +19,7 @@ mod retirement;
 #[path = "guards/rollback_target.rs"]
 mod rollback_target;
 mod scratch;
+mod source_snapshots;
 mod sourcekit;
 mod space;
 mod workdirs;

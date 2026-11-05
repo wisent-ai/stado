@@ -38,6 +38,7 @@ pub mod registered_scratch;
 pub mod release_store;
 pub mod rule;
 pub mod safefs;
+pub mod source_snapshots;
 pub mod weles;
 pub mod xcode_derived_data;
 
