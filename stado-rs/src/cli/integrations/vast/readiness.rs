@@ -44,6 +44,10 @@ pub(super) enum Verdict {
     /// Vast.ai accepted the key, and a renter's container would reach the
     /// host's own services or local networks, or that could not be read.
     NotIsolated,
+    /// Vast.ai accepted the key and the host is isolated, but its bandwidth
+    /// has no current measurement, so an offer would state a line nobody
+    /// measured.
+    NoBandwidth,
 }
 
 impl Verdict {
@@ -86,6 +90,13 @@ impl Verdict {
                     .and_then(|isolation| isolation.refusal())
                     .unwrap_or_else(|| "the isolation reading is missing".to_string())
             ),
+            Self::NoBandwidth => format!(
+                "bandwidth unmeasured: Vast.ai accepts {ITEM}/{FIELD} and the host is isolated, and {}",
+                report
+                    .bandwidth_error
+                    .as_deref()
+                    .unwrap_or("the bandwidth reading is missing")
+            ),
         }
     }
 }
@@ -108,6 +119,10 @@ pub(super) struct Readiness {
     /// What a renter's container could reach on this host; read once the
     /// key is accepted, since only then would the host be listed.
     pub isolation: Option<crate::providers::vast::isolation::Isolation>,
+    /// The latest measured download and upload rates in Mbit/s, when current.
+    pub bandwidth_mbps: Option<(f64, f64)>,
+    /// Why the bandwidth has no current measurement.
+    pub bandwidth_error: Option<String>,
     pub remedy: Vec<String>,
 }
 
@@ -139,6 +154,8 @@ pub(super) async fn assess(vault_host: Option<String>, ask_vault: bool) -> Readi
         listed_gpu_cost: None,
         vast_error: None,
         isolation: None,
+        bandwidth_mbps: None,
+        bandwidth_error: None,
         remedy: Vec::new(),
     };
     if let Some(key) = reading.key.clone() {
@@ -151,6 +168,19 @@ pub(super) async fn assess(vault_host: Option<String>, ask_vault: bool) -> Readi
                 report.verdict = Verdict::NotIsolated;
             }
             report.isolation = Some(isolation);
+        }
+        // An offer states the line it rents; a line nobody measured within
+        // the declared interval is not offered.
+        if report.verdict == Verdict::Ready {
+            let reading = crate::deploy::host_bandwidth::published()
+                .and_then(|block| crate::deploy::host_bandwidth::current(&block));
+            match reading {
+                Ok(rates) => report.bandwidth_mbps = Some(rates),
+                Err(cause) => {
+                    report.verdict = Verdict::NoBandwidth;
+                    report.bandwidth_error = Some(cause);
+                }
+            }
         }
         report.remedy = remedy(&report, &reading);
         return report;
@@ -308,6 +338,12 @@ fn remedy(report: &Readiness, reading: &HostCredentialReading) -> Vec<String> {
             steps.push("stado market readiness --provider vast".to_string());
             steps
         }
+        Verdict::NoBandwidth => vec![
+            "declare host.bandwidth_probe {\"download_url\", \"upload_url\", \"bytes\"} and \
+             host.bandwidth_interval_seconds, and let the host-health publisher measure once"
+                .to_string(),
+            "stado market readiness --provider vast".to_string(),
+        ],
     }
 }
 

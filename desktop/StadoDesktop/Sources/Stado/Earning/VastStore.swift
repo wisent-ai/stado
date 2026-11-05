@@ -55,6 +55,8 @@ struct VastReadiness: Decodable, Equatable, Sendable {
     let listedGpuCost: Double?
     let vastError: String?
     let isolation: Isolation?
+    /// Why the host's bandwidth has no current measurement, when it has none.
+    let bandwidthError: String?
     let remedy: [String]
 
     /// What a renter's container could reach on the host, as the command
@@ -82,6 +84,7 @@ struct VastReadiness: Decodable, Equatable, Sendable {
         case machineId = "machine_id"
         case listedGpuCost = "listed_gpu_cost"
         case vastError = "vast_error"
+        case bandwidthError = "bandwidth_error"
     }
 
     var earning: Bool { verdict == "ready" }
@@ -119,6 +122,9 @@ struct VastReadiness: Decodable, Equatable, Sendable {
             return "Not isolated: Vast.ai accepts \(item)/\(field), and a renter's container would reach "
                 + (reached.isEmpty ? "something the reply does not name" : reached.joined(separator: "; "))
                 + "."
+        case "no_bandwidth":
+            return "Bandwidth unmeasured: Vast.ai accepts \(item)/\(field) and the host is isolated, and "
+                + (bandwidthError ?? "the reply names no measurement") + "."
         default:
             return "Unknown: \(item)/\(field) did not resolve and the vault could not be read."
         }

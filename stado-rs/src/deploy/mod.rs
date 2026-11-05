@@ -87,6 +87,7 @@ pub mod host_delivery;
 pub mod host_disk;
 pub mod host_exec;
 pub mod host_gates;
+pub mod host_bandwidth;
 pub mod host_gui_automation;
 pub mod host_hours;
 pub mod host_inventory;

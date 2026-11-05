@@ -292,3 +292,8 @@ The version bump gathers them into the release's own file and removes this one.
   `budgets.internal_usd_per_gpu_hour`, the deployment at what outside callers paid for it, and gives
   the board to the larger; an unreadable value is a refused candidate, never zero. Every decision is
   kept and `stado market decisions --target WORKER` prints them; Desktop's Registry screen runs it.
+- **A listed host's bandwidth is measured:** the host-health publisher downloads and uploads the
+  declared number of bytes against the endpoints the host declares (`host.bandwidth_probe`) once per
+  `host.bandwidth_interval_seconds`, and the beacon carries each direction's rate and time;
+  `stado market readiness --provider vast` answers `no_bandwidth` while there is no current
+  measurement, and the Earning screen says why.

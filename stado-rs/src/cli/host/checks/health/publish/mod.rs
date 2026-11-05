@@ -159,6 +159,13 @@ pub async fn deliver_document(
                 "the beacon's hours block could not be read: {error}"
             ))
         })?;
+        // The latest measured download and upload rates and when each was
+        // taken, which a market offer states and readiness holds current.
+        let bandwidth = crate::deploy::host_bandwidth::published().map_err(|error| {
+            CmdError::click(format!(
+                "the beacon's bandwidth block could not be read: {error}"
+            ))
+        })?;
         if let Some(object) = document.as_object_mut() {
             let link = link.unwrap_or_else(|| {
                 crate::deploy::host_link::BeaconLink::pending(
@@ -168,6 +175,7 @@ pub async fn deliver_document(
             object.insert("link".to_string(), serde_json::to_value(&link)?);
             object.insert("scans".to_string(), scans);
             object.insert("hours".to_string(), hours);
+            object.insert("bandwidth".to_string(), bandwidth);
             // A publisher on a period asks for the next tailnet read beside
             // it (none starts while one runs) and says what the client did.
             if period.is_some() {

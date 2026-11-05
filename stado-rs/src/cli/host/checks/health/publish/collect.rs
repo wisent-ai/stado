@@ -125,6 +125,9 @@ pub async fn collect_beacons_every(period: std::time::Duration) -> Result<(), Cm
         // processor's busy share into this hour, once per period: the hour's
         // energy is each draw over the seconds since the previous sample.
         crate::deploy::host_hours::sample().await;
+        // The connection's download and upload rates against the declared
+        // endpoints, taken only when the latest is older than its interval.
+        crate::deploy::host_bandwidth::sample().await;
         let collected = collect_document(Strays::End, Some(period)).await;
         // How long this collection took: the part of the next beacon's
         // promise the period alone does not cover, since the next one is

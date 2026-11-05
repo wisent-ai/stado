@@ -155,6 +155,26 @@ pub const HOST_POWER_HELPER_CONFIG: ConfigField = ConfigField::list(
     "host.power_helper",
 );
 
+/// The endpoints this host measures its bandwidth against, a document
+/// `{"download_url", "upload_url", "bytes"}`: the host downloads `bytes`
+/// from one and uploads as many to the other. No measurement service is
+/// built in; without the declaration the host's bandwidth is unmeasured and
+/// no market offer of it is made.
+pub const HOST_BANDWIDTH_PROBE_CONFIG: ConfigField = ConfigField::document(
+    "host-bandwidth-probe",
+    "STADO_HOST_BANDWIDTH_PROBE",
+    "host.bandwidth_probe",
+);
+
+/// How often, in seconds, this host measures its bandwidth; a measurement
+/// older than this is not current, and a market offer is refused until a
+/// fresh one is taken.
+pub const HOST_BANDWIDTH_INTERVAL_CONFIG: ConfigField = ConfigField::scalar(
+    "host-bandwidth-interval-seconds",
+    "STADO_HOST_BANDWIDTH_INTERVAL_SECONDS",
+    "host.bandwidth_interval_seconds",
+);
+
 /// The paths this host's Tailscale client may be at, first file wins, in place
 /// of the platform paths `remote::tailnet` lists.
 pub const TAILNET_CLIENTS_CONFIG: ConfigField = ConfigField::list(
