@@ -269,3 +269,8 @@ The version bump gathers them into the release's own file and removes this one.
   callers, and token payouts per source (a proving network, a mining pool, a node's network), each
   priced only from its own statement; unpriced stays unpriced. Stado Desktop's Registry screen runs
   it.
+- **One inference call sold without an account:** `stado inference offer set|show|withdraw|settlements`
+  declares a price, per-call token bounds, a quote lifetime and payment methods (each a
+  verification endpoint; none is built in). The gateway answers a request without a key `402` with
+  a quote, `POST /v1/pay` verifies the payment and answers a key good for one call, and the call is
+  settled with what was paid, its cost and the refund due. Earnings and `market compare` count it.

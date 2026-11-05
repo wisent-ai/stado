@@ -256,7 +256,10 @@ pub(crate) async fn earnings(
 
 /// Per UTC day: the US dollars outside callers were charged for every
 /// inference deployment declared on `host`, and every caller whose hours
-/// that day carry tokens but who has no declared price.
+/// that day carry tokens but who has no declared price. Calls sold without a
+/// key count what each paid less the refund it is owed; a paid call whose
+/// answer stated no usage, so whose refund is unread, is named among the
+/// unpriced.
 pub(super) async fn sold_by_day(
     store: &crate::queue::JobStorage,
     document: &Value,
@@ -299,6 +302,25 @@ pub(super) async fn sold_by_day(
                     );
                     entry.1.push(named);
                 }
+            }
+        }
+        for settled in
+            crate::inference::pay_per_call::settlements(store, &deployment.name, &since_hour)
+                .await?
+        {
+            let Some(day) = chrono::DateTime::parse_from_rfc3339(&settled.settled_at)
+                .ok()
+                .map(|at| at.timestamp().div_euclid(SECONDS_PER_DAY))
+            else {
+                continue;
+            };
+            let entry = days.entry(day).or_default();
+            match settled.earned_usd() {
+                Some(earned) => entry.0 += earned,
+                None => entry.1.push(format!(
+                    "paid call {} of {}: {:.6} USD paid, its answer stated no usage",
+                    settled.quote, deployment.name, settled.usd_paid
+                )),
             }
         }
     }

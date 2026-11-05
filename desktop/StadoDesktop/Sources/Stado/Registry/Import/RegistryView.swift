@@ -196,6 +196,29 @@ enum NativeRegistryOperations {
                   .init(id: "caller", label: "Caller (blank: every caller)", option: "--caller"),
                   .init(id: "since-hours", label: "Hours back", option: "--since-hours", initial: "24"),
               ], mutates: false, jsonOutput: false),
+        .init(id: "inference-offer-set", title: "Sell one call of a deployment to a caller with no key",
+              path: ["inference", "offer", "set"], hostPlacement: .none, fields: [
+                  .init(id: "deployment", label: "Deployment", required: true),
+                  .init(id: "usd-per-million-prompt", label: "USD per million prompt tokens", option: "--usd-per-million-prompt", required: true),
+                  .init(id: "usd-per-million-generated", label: "USD per million generated tokens", option: "--usd-per-million-generated", required: true),
+                  .init(id: "max-prompt-tokens", label: "Most prompt tokens per call", option: "--max-prompt-tokens", required: true),
+                  .init(id: "max-generated-tokens", label: "Most generated tokens per call", option: "--max-generated-tokens", required: true),
+                  .init(id: "quote-seconds", label: "Seconds a quote holds", option: "--quote-seconds", required: true),
+                  .init(id: "method", label: "Payment method NAME=VERIFY_URL[,VAULT_ITEM]", option: "--method", required: true, multiple: true),
+              ], jsonOutput: false),
+        .init(id: "inference-offer-show", title: "A deployment's pay-per-call offer and the most one call costs",
+              path: ["inference", "offer", "show"], hostPlacement: .none, fields: [
+                  .init(id: "deployment", label: "Deployment", required: true),
+              ], mutates: false, jsonOutput: false),
+        .init(id: "inference-offer-withdraw", title: "Stop selling calls without a key",
+              path: ["inference", "offer", "withdraw"], hostPlacement: .none, fields: [
+                  .init(id: "deployment", label: "Deployment", required: true),
+              ], jsonOutput: false),
+        .init(id: "inference-offer-settlements", title: "Each paid call: paid, outcome, tokens, cost and refund due",
+              path: ["inference", "offer", "settlements"], hostPlacement: .none, fields: [
+                  .init(id: "deployment", label: "Deployment", required: true),
+                  .init(id: "since-hours", label: "Hours back", option: "--since-hours", initial: "24"),
+              ], mutates: false, jsonOutput: false),
         .init(id: "market-earnings", title: "What a host earned on Vast.ai per day, beside its cost and margin",
               path: ["market", "earnings"], hostPlacement: .none, fields: [
                   .init(id: "target", label: "Registry target", option: "--target", required: true),

@@ -63,7 +63,7 @@ pub enum CallersCommands {
     },
 }
 
-async fn known_deployment(name: &str) -> Result<(), CmdError> {
+pub(super) async fn known_deployment(name: &str) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
     let registry = crate::inference::schema::parse(&document).map_err(CmdError::declaration)?;
     if registry

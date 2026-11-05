@@ -3,12 +3,14 @@ use clap::Subcommand;
 use super::CmdError;
 pub use callers::CallersCommands;
 pub use credential::CredentialCommands;
+pub use offer::OfferCommands;
 
 mod beacon;
 mod callers;
 mod credential;
 mod gateway;
 mod lifecycle;
+mod offer;
 mod process;
 mod read;
 mod routes;
@@ -175,6 +177,13 @@ pub enum InferenceCommands {
     Callers {
         #[command(subcommand)]
         command: CallersCommands,
+    },
+    /// Sell one call of a deployment to a caller with no key: the price, the
+    /// per-call token bounds, how long a quote holds, the payment methods,
+    /// and what each paid call cost and owes back.
+    Offer {
+        #[command(subcommand)]
+        command: OfferCommands,
     },
     /// Serve a deployment to its declared callers on --listen: each request
     /// presents a caller's key, is held to the caller's limits, is sent to
@@ -355,6 +364,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
             command: CredentialCommands::Init { json },
         } => credential::init(json).await,
         InferenceCommands::Callers { command } => callers::dispatch(command).await,
+        InferenceCommands::Offer { command } => offer::dispatch(command).await,
         InferenceCommands::Gateway {
             name,
             listen,

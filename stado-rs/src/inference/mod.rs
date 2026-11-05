@@ -4,6 +4,7 @@
 
 pub mod callers;
 pub mod license;
+pub mod pay_per_call;
 pub mod plan;
 pub mod reservation;
 pub mod schema;

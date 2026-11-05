@@ -15,6 +15,14 @@
 //! the gateway would have to parse while relaying, and a request whose
 //! tokens cannot be counted cannot be billed.
 //!
+//! A deployment with a pay-per-call offer ([`crate::inference::pay_per_call`])
+//! also sells one call to a caller with no key: a request without a key is
+//! answered `402 Payment Required` with a quote, `POST /v1/pay` with
+//! `{"quote", "method", "reference"}` asks the method's endpoint whether the
+//! reference settled the quote and answers a key good for one call, and that
+//! call is held to the quote's generated-token bound and settled — paid, cost,
+//! refund due — when it returns.
+//!
 //! Usage is held in this process and written to the fleet store at most once
 //! per `--flush-seconds` and on the hour's change, so a request is never
 //! held for a store write.
@@ -31,6 +39,7 @@ use tokio::sync::Mutex;
 use crate::cli::CmdError;
 use crate::dashboard::{read_request, RequestLimits};
 use crate::inference::callers::{self, Caller, HourUsage};
+use crate::inference::pay_per_call::{self, Offer};
 use crate::inference::schema::Deployment;
 use crate::queue::JobStorage;
 
@@ -39,6 +48,9 @@ struct State {
     deployment: Deployment,
     engine_key: String,
     callers: Vec<Caller>,
+    /// The deployment's pay-per-call offer, when it sells calls without a
+    /// key.
+    offer: Option<Offer>,
     /// Per caller: request instants in the last minute.
     recent: BTreeMap<String, Vec<Instant>>,
     /// Per caller: the UTC day and the tokens spent in it.
@@ -120,17 +132,16 @@ async fn serve_one(
             ))
             .await;
     }
+    if route == "/v1/pay" {
+        let answered = pay(&request.body, &store, &state, &client).await;
+        return stream.write_all(&answered).await;
+    }
     let Some(bearer) = request
         .header("authorization")
         .and_then(|value| value.strip_prefix("Bearer "))
     else {
-        return stream
-            .write_all(&refusal(
-                401,
-                "unauthorized",
-                "send Authorization: Bearer <your key>",
-            ))
-            .await;
+        let answered = unpaid(&store, &state).await;
+        return stream.write_all(&answered).await;
     };
     let body: Value = match serde_json::from_slice(&request.body) {
         Ok(body) => body,
@@ -152,6 +163,10 @@ async fn serve_one(
                 "streaming answers are not served: their tokens cannot be counted for billing; send \"stream\": false",
             ))
             .await;
+    }
+    if bearer.starts_with(pay_per_call::KEY_PREFIX) {
+        let answered = paid_call(bearer, body, &request.path, &store, &state, &client).await;
+        return stream.write_all(&answered).await;
     }
     let now = chrono::Utc::now();
     let day = now.date_naive().to_string();
@@ -323,6 +338,355 @@ async fn serve_one(
     stream.write_all(&answer(status, &bytes)).await
 }
 
+/// A request with no key: a quote when the deployment sells calls, else the
+/// refusal it always had.
+async fn unpaid(store: &JobStorage, state: &Arc<Mutex<State>>) -> Vec<u8> {
+    let offer = state.lock().await.offer.clone();
+    let Some(offer) = offer else {
+        return refusal(
+            401,
+            "unauthorized",
+            "send Authorization: Bearer <your key>; this deployment sells no call without one",
+        );
+    };
+    match pay_per_call::quote(store, &offer).await {
+        Ok(quote) => {
+            let body = json!({
+                "error": {
+                    "type": "payment_required",
+                    "message": format!(
+                        "one call costs at most {:.6} USD; pay quote {} by one of the methods, \
+                         then POST /v1/pay with {{\"quote\", \"method\", \"reference\"}} for a \
+                         key good for one call",
+                        quote.usd, quote.id
+                    ),
+                },
+                "quote": quote,
+            });
+            answer(402, body.to_string().as_bytes())
+        }
+        Err(error) => refusal(
+            503,
+            "quote_unkept",
+            &format!("a quote could not be kept, so none is stated: {error}"),
+        ),
+    }
+}
+
+/// `POST /v1/pay`: verify a payment with the method's endpoint and answer a
+/// one-time key.
+async fn pay(
+    body: &[u8],
+    store: &JobStorage,
+    state: &Arc<Mutex<State>>,
+    client: &reqwest::Client,
+) -> Vec<u8> {
+    let (offer, deployment) = {
+        let held = state.lock().await;
+        (held.offer.clone(), held.deployment.name.clone())
+    };
+    let Some(offer) = offer else {
+        return refusal(
+            404,
+            "not_sold",
+            "this deployment sells no call without a key",
+        );
+    };
+    let posted: Value = match serde_json::from_slice(body) {
+        Ok(posted) => posted,
+        Err(error) => {
+            return refusal(
+                400,
+                "invalid_request",
+                &format!("the body is not JSON: {error}"),
+            )
+        }
+    };
+    let (Some(quote_id), Some(method_name), Some(reference)) = (
+        posted["quote"].as_str(),
+        posted["method"].as_str(),
+        posted["reference"]
+            .as_str()
+            .filter(|reference| !reference.is_empty()),
+    ) else {
+        return refusal(
+            400,
+            "invalid_request",
+            "send {\"quote\": <id>, \"method\": <name>, \"reference\": <the payment's reference>}",
+        );
+    };
+    let quote = match pay_per_call::load_quote(store, &deployment, quote_id).await {
+        Ok(Some(quote)) => quote,
+        Ok(None) => {
+            return refusal(
+                404,
+                "unknown_quote",
+                &format!("no quote {quote_id} was stated"),
+            )
+        }
+        Err(error) => {
+            return refusal(
+                503,
+                "quote_unread",
+                &format!("quote {quote_id} could not be read: {error}"),
+            )
+        }
+    };
+    if chrono::DateTime::parse_from_rfc3339(&quote.expires_at)
+        .is_ok_and(|expires| expires < chrono::Utc::now())
+    {
+        return refusal(
+            410,
+            "quote_expired",
+            &format!(
+                "quote {} expired at {}; ask for a new one",
+                quote.id, quote.expires_at
+            ),
+        );
+    }
+    let Some(method) = offer
+        .methods
+        .iter()
+        .find(|method| method.name == method_name)
+    else {
+        return refusal(
+            400,
+            "unknown_method",
+            &format!(
+                "{method_name} is not a payment method of this offer; the methods are {}",
+                quote.methods.join(", ")
+            ),
+        );
+    };
+    let mut asked = client.post(&method.verify_url).json(&json!({
+        "quote": quote.id,
+        "deployment": deployment,
+        "usd": quote.usd,
+        "reference": reference,
+    }));
+    if let Some(item) = &method.credential_item {
+        let bearer = match crate::skarbiec::Client::configured() {
+            Ok(vault) => vault
+                .read_field(item, "token")
+                .await
+                .map_err(|error| error.to_string()),
+            Err(error) => Err(error.to_string()),
+        };
+        let token = match &bearer {
+            Ok(value) => value
+                .as_str()
+                .ok_or_else(|| "it has no string field token".to_string()),
+            Err(error) => Err(format!("it could not be read: {error}")),
+        };
+        match token {
+            Ok(token) => asked = asked.bearer_auth(token),
+            Err(cause) => {
+                let message = format!("payment method {method_name}'s vault item {item}: {cause}");
+                return refusal(503, "method_credential_unread", &message);
+            }
+        }
+    }
+    let verdict: Result<Value, String> = match crate::wait::request(asked).await {
+        Ok(response) if response.status().is_success() => response
+            .json()
+            .await
+            .map_err(|error| format!("answered something that is not JSON: {error}")),
+        Ok(response) => Err(format!(
+            "refused the verification with HTTP {}",
+            response.status()
+        )),
+        Err(error) => Err(format!("did not answer: {error}")),
+    };
+    let verdict = match verdict {
+        Ok(verdict) => verdict,
+        Err(cause) => {
+            let message = format!("payment method {method_name} {cause}");
+            return refusal(502, "payment_unverified", &message);
+        }
+    };
+    let (Some(settled), Some(usd_paid)) = (verdict["settled"].as_bool(), verdict["usd"].as_f64())
+    else {
+        return refusal(
+            502,
+            "payment_unverified",
+            &format!("payment method {method_name} did not state settled and usd: {verdict}"),
+        );
+    };
+    if !settled || usd_paid < quote.usd {
+        return refusal(
+            402,
+            "payment_insufficient",
+            &format!(
+                "payment method {method_name} states {} with {usd_paid} USD paid; quote {} needs {} USD",
+                if settled { "a settled payment" } else { "no settled payment" },
+                quote.id,
+                quote.usd
+            ),
+        );
+    }
+    match pay_per_call::claim_reference(store, &deployment, method_name, reference, &quote.id).await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            return refusal(
+                409,
+                "reference_used",
+                "this payment reference was already exchanged for a key",
+            )
+        }
+        Err(error) => {
+            return refusal(
+                503,
+                "payment_unkept",
+                &format!("the payment could not be kept: {error}"),
+            )
+        }
+    }
+    match pay_per_call::mint(store, &quote, method_name, reference, usd_paid).await {
+        Ok(key) => answer(
+            200,
+            json!({"key": key, "quote": quote.id, "usd_paid": usd_paid, "calls": 1})
+                .to_string()
+                .as_bytes(),
+        ),
+        Err(error) => refusal(
+            503,
+            "payment_unkept",
+            &format!(
+                "the payment was verified and its reference claimed, but its key could not be \
+                 kept: {error}; the payment is owed back"
+            ),
+        ),
+    }
+}
+
+/// One call with a one-time key: spent before the engine is asked, held to
+/// the quote's generated-token bound, settled when it returns.
+async fn paid_call(
+    key: &str,
+    mut body: Value,
+    path: &str,
+    store: &JobStorage,
+    state: &Arc<Mutex<State>>,
+    client: &reqwest::Client,
+) -> Vec<u8> {
+    let (deployment, engine_url, engine_key) = {
+        let held = state.lock().await;
+        (
+            held.deployment.name.clone(),
+            format!(
+                "http://{}:{}{}",
+                held.deployment.endpoint.host, held.deployment.endpoint.port, path
+            ),
+            held.engine_key.clone(),
+        )
+    };
+    let payment = match pay_per_call::payment_for(store, &deployment, key).await {
+        Ok(Some(payment)) => payment,
+        Ok(None) => {
+            return refusal(
+                401,
+                "unauthorized",
+                "the key is not one this deployment sold",
+            )
+        }
+        Err(error) => {
+            return refusal(
+                503,
+                "payment_unread",
+                &format!("the key's payment could not be read: {error}"),
+            )
+        }
+    };
+    let quote = match pay_per_call::load_quote(store, &deployment, &payment.quote).await {
+        Ok(Some(quote)) => quote,
+        Ok(None) => {
+            return refusal(
+                503,
+                "quote_unread",
+                &format!("quote {} of this key is not kept", payment.quote),
+            )
+        }
+        Err(error) => {
+            return refusal(
+                503,
+                "quote_unread",
+                &format!("quote {} could not be read: {error}", payment.quote),
+            )
+        }
+    };
+    match pay_per_call::spend(store, &payment).await {
+        Ok(true) => {}
+        Ok(false) => return refusal(401, "spent", "this key paid for one call, which was made"),
+        Err(error) => {
+            return refusal(
+                503,
+                "spend_unkept",
+                &format!("the key could not be marked spent: {error}"),
+            )
+        }
+    }
+    // The quote's bound holds even when the offer changed or was withdrawn
+    // after it was paid.
+    let asked = body["max_tokens"].as_u64();
+    if asked.is_none_or(|asked| asked > quote.max_generated_tokens) {
+        body["max_tokens"] = json!(quote.max_generated_tokens);
+    }
+    let started = Instant::now();
+    let sent = crate::wait::request(
+        client
+            .post(&engine_url)
+            .bearer_auth(&engine_key)
+            .json(&body),
+    )
+    .await;
+    let (status, bytes) = match sent {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            match response.bytes().await {
+                Ok(bytes) => (Some(status), Ok(bytes.to_vec())),
+                Err(error) => (
+                    Some(status),
+                    Err(format!("the engine's answer could not be read: {error}")),
+                ),
+            }
+        }
+        Err(error) => (None, Err(format!("the engine did not answer: {error}"))),
+    };
+    let stated = bytes.as_ref().ok().and_then(|bytes| {
+        let answer: Value = serde_json::from_slice(bytes).ok()?;
+        Some((
+            answer["usage"]["prompt_tokens"].as_u64()?,
+            answer["usage"]["completion_tokens"].as_u64()?,
+        ))
+    });
+    let served_status = match (&bytes, status) {
+        (Ok(_), status) => status,
+        (Err(_), _) => None,
+    };
+    let settlement = pay_per_call::Settlement::of(
+        &payment,
+        &quote.price,
+        served_status,
+        stated,
+        started.elapsed().as_secs_f64(),
+    );
+    if let Err(error) = pay_per_call::save_settlement(store, &settlement).await {
+        eprintln!(
+            "stado inference gateway: the settlement of quote {} is not kept: {error}",
+            settlement.quote
+        );
+    }
+    match bytes {
+        Ok(bytes) => answer(status.unwrap_or(502), &bytes),
+        Err(cause) => refusal(
+            502,
+            "engine_failed",
+            &format!("{cause}; the call is settled as failed and its whole payment is owed back"),
+        ),
+    }
+}
+
 /// The day's tokens each caller already spent, from the kept usage, so a
 /// restarted gateway does not hand a caller its day again.
 async fn spent_today(
@@ -387,11 +751,13 @@ pub async fn run(
     let engine_key = super::credential::read().await?;
     let store = JobStorage::new().await?;
     let declared = callers::list(&store, name).await?;
+    let offer = pay_per_call::offer(&store, name).await?;
     let (day_tokens, hours) = spent_today(&store, name).await?;
     let state = Arc::new(Mutex::new(State {
         deployment,
         engine_key,
         callers: declared,
+        offer,
         recent: BTreeMap::new(),
         day_tokens,
         hours,
@@ -418,6 +784,13 @@ pub async fn run(
                     Ok(fresh) => state.lock().await.callers = fresh,
                     Err(error) => eprintln!(
                         "stado inference gateway: the callers of {name} were not read again: {error}"
+                    ),
+                }
+                match pay_per_call::offer(&store, &name).await {
+                    Ok(fresh) => state.lock().await.offer = fresh,
+                    Err(error) => eprintln!(
+                        "stado inference gateway: the pay-per-call offer of {name} was not read \
+                         again: {error}"
                     ),
                 }
                 let mut held = state.lock().await;
