@@ -133,19 +133,20 @@ pub async fn auto_list_loop(
         pace.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         pace
     });
-    // Whether a maintenance notice was already sent for the failure now
-    // running, so one failure is announced once, not on every poll.
-    let mut announced: Option<String> = None;
+    // The failure last announced and when its notice ends (Unix seconds), so
+    // one failure is announced once per notice, not on every poll.
+    let mut announced: Option<(String, i64)> = None;
     loop {
         if let Some(pace) = pace.as_mut() {
             pace.tick().await;
         }
-        // A host whose boards or disk are failing takes no new renter, and
-        // the renter it holds is told to save their work: a contract broken
-        // by a crash costs the host's reliability score.
+        // A host whose boards, disk or link are failing takes no new renter,
+        // and the renter it holds is told to save their work: a contract
+        // broken by a crash costs the host's reliability score.
         if !params.dry_run {
-            match crate::providers::vast::failing::failing().await {
-                Some(cause) => {
+            match crate::providers::vast::failing::failing(store).await {
+                Some(failure) => {
+                    let cause = failure.sentence();
                     if let Some(client) = client {
                         if listed {
                             match client.unlist_machine().await {
@@ -158,21 +159,29 @@ pub async fn auto_list_loop(
                                 )),
                             }
                         }
-                        if announced.as_deref() != Some(cause.as_str()) {
-                            let category = if cause.contains("GiB free") {
-                                "disk"
-                            } else {
-                                "gpu"
-                            };
+                        // The notice covers the idle window: once the host
+                        // recovers it is listed again only after that window
+                        // passes, so it is down at least that long. A failure
+                        // still standing when the notice ends is announced
+                        // again; a different failure at once.
+                        let now = chrono::Utc::now().timestamp();
+                        let due = match &announced {
+                            Some((said, until)) => said != &cause || now >= *until,
+                            None => true,
+                        };
+                        if due {
+                            let hours = params.idle_window_s as f64 / 3600.0;
                             match client
-                                .schedule_maintenance(chrono::Utc::now().timestamp(), 1.0, category)
+                                .schedule_maintenance(now, hours, failure.category())
                                 .await
                             {
                                 Ok(answer) => {
                                     log(&format!(
-                                        "told Vast's renters of the failure ({cause}): {answer}"
+                                        "announced {hours:.2} h of {} maintenance to Vast's \
+                                         renters for the failure ({cause}): {answer}",
+                                        failure.category()
                                     ));
-                                    announced = Some(cause.clone());
+                                    announced = Some((cause.clone(), now + params.idle_window_s));
                                 }
                                 Err(exc) => log(&format!(
                                     "the maintenance notice for the failure ({cause}) failed: {exc}"
@@ -186,7 +195,11 @@ pub async fn auto_list_loop(
                     }
                     continue;
                 }
-                None => announced = None,
+                None => {
+                    if announced.take().is_some() {
+                        log("the failure cleared; the host is listed again after the idle window");
+                    }
+                }
             }
         }
         // A reservation record that cannot be read may be one, so it holds the

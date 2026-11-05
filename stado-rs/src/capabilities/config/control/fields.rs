@@ -184,6 +184,17 @@ pub const HOST_BANDWIDTH_INTERVAL_CONFIG: ConfigField = ConfigField::scalar(
     "host.bandwidth_interval_seconds",
 );
 
+/// The download and upload rates, in Mbit/s, below which this host's link
+/// is failing for the renters it holds, a document `{"download", "upload"}`:
+/// a listed host whose current measurement falls below either withdraws its
+/// offer, and is listed again once a measurement is back above it. Without
+/// the declaration no link floor is judged.
+pub const HOST_BANDWIDTH_FLOOR_CONFIG: ConfigField = ConfigField::document(
+    "host-bandwidth-floor-mbps",
+    "STADO_HOST_BANDWIDTH_FLOOR_MBPS",
+    "host.bandwidth_floor_mbps",
+);
+
 /// The paths this host's Tailscale client may be at, first file wins, in place
 /// of the platform paths `remote::tailnet` lists.
 pub const TAILNET_CLIENTS_CONFIG: ConfigField = ConfigField::list(

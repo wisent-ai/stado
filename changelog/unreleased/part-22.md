@@ -326,3 +326,9 @@ The version bump gathers them into the release's own file and removes this one.
   validate` (from the registry the store or this host's last-known-good copy holds) and `stado web
   edge status` refuse it as route, hostnames and origin declare already did, with one sentence
   naming the host and the full provision and declare commands. Test: `tests/web/edge_target.rs`.
+- **A failing board, disk or link withdraws a Vast offer:** the follow loop now also withdraws a
+  host whose board reports uncorrected ECC errors, whose disk is at the disk-full rule's threshold
+  (in place of a fixed free-space figure), or whose measured link is below the declared
+  `host.bandwidth_floor_mbps`; the maintenance notice names `gpu`, `disk` or `network`, lasts the
+  idle window, is announced again when it ends, and the recovery is logged. Readiness and the loop
+  read the bandwidth from the host's published beacon, since only the publisher measures it.

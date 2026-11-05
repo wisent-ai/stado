@@ -211,11 +211,28 @@ pub async fn sample() {
     register.unmeasured = None;
 }
 
-/// The `bandwidth` block of this host's beacon.
+/// The `bandwidth` block the beacon publisher adds: this process's register,
+/// which only the process that samples ([`sample`]) fills.
 pub fn published() -> Result<Value, String> {
     let register = crate::primitives::lock::held(&REGISTER);
     serde_json::to_value(&*register)
         .map_err(|error| format!("the bandwidth block cannot be serialized: {error}"))
+}
+
+/// The `bandwidth` block of this host's latest beacon in the fleet store:
+/// what any other process of the host (`stado market readiness`, a market
+/// follow loop) reads, since the register is filled only in the publisher.
+pub async fn of_this_host(store: &crate::queue::JobStorage) -> Result<Value, String> {
+    let hostname = crate::providers::vast::system_hostname();
+    let report = crate::monitor::host_health::load_host_health(store, &hostname)
+        .await
+        .map_err(|error| format!("this host's beacon cannot be read for its bandwidth: {error}"))?;
+    report.beacon.get("bandwidth").cloned().ok_or_else(|| {
+        format!(
+            "this host's beacon carries no bandwidth block; the host-health publisher of \
+                 {hostname} has not published one"
+        )
+    })
 }
 
 /// Whether a published block carries a current measurement in both

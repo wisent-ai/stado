@@ -170,10 +170,17 @@ pub(super) async fn assess(vault_host: Option<String>, ask_vault: bool) -> Readi
             report.isolation = Some(isolation);
         }
         // An offer states the line it rents; a line nobody measured within
-        // the declared interval is not offered.
+        // the declared interval is not offered. The measurement is read from
+        // this host's published beacon: the register holding it lives in the
+        // publisher's process, not in this one.
         if report.verdict == Verdict::Ready {
-            let reading = crate::deploy::host_bandwidth::published()
-                .and_then(|block| crate::deploy::host_bandwidth::current(&block));
+            let reading = match crate::queue::JobStorage::new().await {
+                Ok(store) => crate::deploy::host_bandwidth::of_this_host(&store).await,
+                Err(error) => Err(format!(
+                    "the fleet store holding this host's beacon cannot be opened: {error}"
+                )),
+            }
+            .and_then(|block| crate::deploy::host_bandwidth::current(&block));
             match reading {
                 Ok(rates) => report.bandwidth_mbps = Some(rates),
                 Err(cause) => {
