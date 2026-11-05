@@ -81,6 +81,11 @@ pub const CLEANERS: &[Cleaner] = &[
         sweeps: "the compiler cache's store (~/Library/Caches/kache, ~/.cache/kache), while no job runs",
     },
     Cleaner {
+        name: super::docker::CLEANER,
+        root: "",
+        sweeps: "Docker's images, build cache, stopped containers and unused volumes, through the daemon, while no job runs",
+    },
+    Cleaner {
         name: super::delivered_releases::CLEANER,
         root: super::delivered_releases::DELIVERED_ROOT,
         sweeps: "delivered release copies no installed coordinate or binary names, keeping each product's newest",

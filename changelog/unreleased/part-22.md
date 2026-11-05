@@ -332,3 +332,9 @@ The version bump gathers them into the release's own file and removes this one.
   `host.bandwidth_floor_mbps`; the maintenance notice names `gpu`, `disk` or `network`, lasts the
   idle window, is announced again when it ends, and the recovery is logged. Readiness and the loop
   read the bandwidth from the host's published beacon, since only the publisher measures it.
+- **The janitor prunes Docker's data at the disk-full rule:** the new `docker` cleaner asks the
+  daemon to remove images, build cache, stopped containers and volumes nothing uses
+  (`docker system prune --all --volumes --force`), keeping running containers, their images and
+  mounted volumes, and nothing while a job runs or when the daemon's root is not on the volume the
+  rule judges; the report carries what the daemon called reclaimable and what it reclaimed. Test:
+  `tests/space_reclaim/docker_reclaim.mjs` against a real daemon.

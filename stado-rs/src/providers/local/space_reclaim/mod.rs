@@ -24,6 +24,7 @@ pub mod chromium_clones;
 pub mod compiler_cache;
 pub mod consent;
 pub mod delivered_releases;
+pub mod docker;
 pub mod hf;
 mod holders;
 mod janitor;

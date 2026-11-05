@@ -67,6 +67,7 @@ fn at_the_threshold_a_shared_host_cleans_only_stados_own_tree() {
         "huggingface_cache",
         "agent_logs",
         "compiler_cache",
+        "docker",
         "local_snapshots",
     ] {
         assert_eq!(

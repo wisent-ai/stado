@@ -24,6 +24,7 @@ fn deleted_items(report: &CleanupReport) -> i64 {
         &report.registered_scratch,
         &report.xcode_derived_data,
         &report.package_caches,
+        &report.docker,
     ]
     .iter()
     .map(|cleaner| cleaner.deleted_items)

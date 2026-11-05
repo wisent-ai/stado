@@ -21,7 +21,7 @@ use crate::providers::local::space_reclaim::janitor::policy::ownership;
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 use crate::providers::local::space_reclaim::janitor::state::report::CleanupReport;
 use crate::providers::local::space_reclaim::{
-    agent_logs, chromium_clones, compiler_cache, delivered_releases, hf, local_snapshots,
+    agent_logs, chromium_clones, compiler_cache, delivered_releases, docker, hf, local_snapshots,
     object_evidence, weles,
 };
 
@@ -101,6 +101,10 @@ pub(crate) async fn run_cleaners(
     // since a build reads and writes it.
     compiler_cache::scan_compiler_cache(home, foreign && inputs.caches, report);
     agent_logs::scan_agent_logs(home, foreign && inputs.caches, report);
+    // Docker's images, build cache, stopped containers and unused volumes:
+    // the daemon's, outside any account's home, so only a host whose whole
+    // disk is Stado's prunes them, and only under pressure.
+    docker::scan_docker(home, foreign && inputs.caches, report);
     local_snapshots::delete_all(home, foreign && inputs.caches, report);
     if kept {
         let mut weles_kept = (!weles_owned).then_some(&mut report.weles);
@@ -110,6 +114,7 @@ pub(crate) async fn run_cleaners(
             Some(&mut report.clones),
             Some(&mut report.compiler_cache),
             Some(&mut report.agent_logs),
+            Some(&mut report.docker),
             Some(&mut report.local_snapshots),
         ]
         .into_iter()

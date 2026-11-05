@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use super::Class;
 use crate::providers::local::space_reclaim::janitor::state::report::build::utc_now;
 use crate::providers::local::space_reclaim::{
-    agent_logs, backup_twins, chromium_clones, compiler_cache, delivered_releases, euid,
+    agent_logs, backup_twins, chromium_clones, compiler_cache, delivered_releases, docker, euid,
     job_outputs, local_snapshots, object_evidence, queue_workdirs, release_store, weles,
     CleanerReport, CleanupReport, JanitorError,
 };
@@ -97,7 +97,7 @@ pub(in crate::providers::local::space_reclaim) fn record_tree(
 
 /// Every cleaner that removes items by the file rather than trees
 /// [`record_tree`] records one by one.
-fn per_pass_cleaners(report: &CleanupReport) -> [(&'static str, &CleanerReport); 12] {
+fn per_pass_cleaners(report: &CleanupReport) -> [(&'static str, &CleanerReport); 13] {
     [
         ("huggingface_cache", &report.hf),
         (weles::CLEANER, &report.weles),
@@ -111,6 +111,7 @@ fn per_pass_cleaners(report: &CleanupReport) -> [(&'static str, &CleanerReport);
         (agent_logs::CLEANER, &report.agent_logs),
         (delivered_releases::CLEANER, &report.delivered_releases),
         (compiler_cache::CLEANER, &report.compiler_cache),
+        (docker::CLEANER, &report.docker),
     ]
 }
 

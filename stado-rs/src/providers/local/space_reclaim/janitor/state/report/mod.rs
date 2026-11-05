@@ -95,6 +95,8 @@ pub struct CleanupReport {
     pub delivered_releases: CleanerReport,
     /// The compiler cache's store.
     pub compiler_cache: CleanerReport,
+    /// Docker's images, build cache, stopped containers and unused volumes.
+    pub docker: CleanerReport,
     /// Scratch trees their creators registered as the fleet's to remove.
     pub registered_scratch: CleanerReport,
     /// Xcode's per-project build directories under DerivedData.
