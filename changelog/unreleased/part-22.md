@@ -229,3 +229,7 @@ The version bump gathers them into the release's own file and removes this one.
   requests-per-minute and tokens-per-day limits and an optional price, and `stado inference gateway`
   admits each request by key, refuses a caller past a limit with `429`, and keeps its tokens per
   hour. Desktop's Registry screen manages callers.
+- **`stado market earnings` counts inference sold to outside callers:** what the gateway's callers
+  were charged for the host's deployments was kept but never added to the host's day. It now joins
+  the day's income at each caller's declared price, and a caller with no price leaves the day
+  without a margin.

@@ -132,6 +132,11 @@ pub(crate) async fn earnings(
     // The same host's payouts from other sources in a token: each is the
     // income of the UTC day it was paid, valued at the rate kept with it.
     let payouts = super::payout::kept(&store, Some(&host.name)).await?;
+    // What outside callers were charged for the host's inference
+    // deployments, per UTC day, from the gateway's kept usage at each
+    // caller's declared price; a caller with no declared price is named
+    // and leaves the day without a margin, as an unpriced payout does.
+    let sold = sold_by_day(&store, &document, &host.name, since).await?;
     let rows: Vec<Value> = (since..=today)
         .map(|day| {
             let earned: Option<&EarnedDay> = stated.iter().find(|row| row.day == day);
@@ -155,6 +160,10 @@ pub(crate) async fn earnings(
                     })
                 })
                 .collect();
+            let (sold_usd, sold_unpriced) = match sold.get(&day) {
+                Some((usd, unpriced)) => (*usd, unpriced.clone()),
+                None => (0.0, Vec::new()),
+            };
             json!({
                 "date": date_of(day),
                 "day": day,
@@ -163,13 +172,15 @@ pub(crate) async fn earnings(
                 "payouts": paid,
                 "payouts_usd": tokens_usd,
                 "payouts_unpriced": unpriced,
+                "inference_sold_usd": sold_usd,
+                "inference_unpriced": sold_unpriced,
                 "cost": cost.as_ref().ok(),
                 "cost_unread": cost.as_ref().err(),
-                // A day with an unpriced payout has no margin: its income is
-                // not known, and leaving the payout out would understate it.
+                // A day with an unpriced payout or caller has no margin: its
+                // income is not known, and leaving it out would understate it.
                 "margin": match (earned, &cost) {
-                    (Some(earned), Ok(cost)) if unpriced.is_empty() => {
-                        Some(earned.gross() + tokens_usd - cost)
+                    (Some(earned), Ok(cost)) if unpriced.is_empty() && sold_unpriced.is_empty() => {
+                        Some(earned.gross() + tokens_usd + sold_usd - cost)
                     }
                     _ => None,
                 },
@@ -205,10 +216,17 @@ pub(crate) async fn earnings(
                 row["payouts_usd"].as_f64().unwrap_or(0.0)
             ),
         };
+        let sold = match row["inference_sold_usd"].as_f64() {
+            Some(usd) if usd > 0.0 => format!("; inference sold {usd:.2}"),
+            _ => String::new(),
+        };
         let unpriced: Vec<&str> = row["payouts_unpriced"]
             .as_array()
-            .map(|causes| causes.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
+            .into_iter()
+            .chain(row["inference_unpriced"].as_array())
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
         let unpriced = if unpriced.is_empty() {
             String::new()
         } else {
@@ -224,9 +242,60 @@ pub(crate) async fn earnings(
             None => String::new(),
         };
         println!(
-            "{} {gross}{tokens}{unpriced}; {cost}{margin}",
+            "{} {gross}{tokens}{sold}{unpriced}; {cost}{margin}",
             row["date"].as_str().unwrap_or("?")
         );
     }
     Ok(())
+}
+
+/// Per UTC day: the US dollars outside callers were charged for every
+/// inference deployment declared on `host`, and every caller whose hours
+/// that day carry tokens but who has no declared price.
+async fn sold_by_day(
+    store: &crate::queue::JobStorage,
+    document: &Value,
+    host: &str,
+    since: i64,
+) -> Result<std::collections::BTreeMap<i64, (f64, Vec<String>)>, CmdError> {
+    use crate::inference::callers;
+    let registry = crate::inference::schema::parse(document).map_err(CmdError::declaration)?;
+    let since_hour = date_of(since) + "T00:00:00Z";
+    let mut days: std::collections::BTreeMap<i64, (f64, Vec<String>)> = Default::default();
+    for deployment in registry
+        .deployments
+        .iter()
+        .filter(|deployment| deployment.target == host)
+    {
+        let declared = callers::list(store, &deployment.name).await?;
+        for hour in callers::usage(store, &deployment.name, None, &since_hour).await? {
+            if hour.tokens() == 0 {
+                continue;
+            }
+            let Some(day) = chrono::DateTime::parse_from_rfc3339(&hour.hour)
+                .ok()
+                .map(|at| at.timestamp().div_euclid(SECONDS_PER_DAY))
+            else {
+                continue;
+            };
+            let entry = days.entry(day).or_default();
+            match declared
+                .iter()
+                .find(|caller| caller.caller == hour.caller)
+                .and_then(|caller| caller.price)
+            {
+                Some(price) => entry.0 += hour.charge(&price),
+                None => {
+                    let named = format!(
+                        "{} tokens of caller {} of {}: no price declared",
+                        hour.tokens(),
+                        hour.caller,
+                        deployment.name
+                    );
+                    entry.1.push(named);
+                }
+            }
+        }
+    }
+    Ok(days)
 }
