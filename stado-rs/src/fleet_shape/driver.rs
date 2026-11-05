@@ -5,15 +5,15 @@ use super::loaded::environment::unit_environment;
 use super::loaded::orphans::loaded_without_unit_file;
 use super::loaded::restarts::restart_loops;
 use super::loaded::shadows::path_binary;
-use super::loaded::{duplicate_domains, process_identity};
+use super::loaded::{duplicate_domains, duplicate_services, process_identity};
 use super::naming::{declared_doubled_prefix, doubled_prefix, doubled_suffix, profile_unit_names};
 use super::resources::artefacts::service_artefacts;
 use super::resources::disk::disk_headroom;
 use super::resources::listener_count;
 use super::resources::stores::replica_addressing;
 use super::{
-    Finding, Measurement, Sweep, ORPHAN_CHECK, PREFIX_CHECK, RESTART_CHECK, SHADOW_CHECK,
-    SUFFIX_CHECK, UNIT_ENV_CHECK,
+    Finding, Measurement, Sweep, ORPHAN_CHECK, PREFIX_CHECK, RESTART_CHECK, SERVICE_COPY_CHECK,
+    SHADOW_CHECK, SUFFIX_CHECK, UNIT_ENV_CHECK,
 };
 use crate::deploy::{host_channel, service, Runner};
 use crate::targets::{ComputeTarget, Registry};
@@ -122,6 +122,8 @@ async fn host_findings(
         .map_err(|error| error.to_string())?;
     duplicate_domains(target, &loaded, &mut findings);
     process_identity(target, &loaded, &mut findings, &mut notes);
+    let mut services_measured = 0_usize;
+    duplicate_services(target, &loaded, &mut findings, &mut services_measured);
     // Five checks, each one a state that was once found by hand and that
     // nothing would have reported again.
     let mut labels_measured = 0_usize;
@@ -151,6 +153,7 @@ async fn host_findings(
     let mut measurements = Vec::new();
     for (check, measured) in [
         (PREFIX_CHECK, labels_measured),
+        (SERVICE_COPY_CHECK, services_measured),
         (ORPHAN_CHECK, orphan_measured),
         (RESTART_CHECK, runs_measured),
         (UNIT_ENV_CHECK, env_measured),

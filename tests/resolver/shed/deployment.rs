@@ -44,7 +44,11 @@ impl Deployment {
                 "PATH",
                 std::env::var_os("PATH").expect("PATH names the tools"),
             )
-            .env("HOME", &self.root).env("STADO_CONFIG", concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"))
+            // `config init` writes this deployment's own config under its
+            // root; the shared tests/config/empty.json is for a journey that
+            // writes none.
+            .env("HOME", &self.root)
+            .env("STADO_CONFIG", self.root.join(".stado").join("config.json"))
             .env("TMPDIR", self.root.join("tmp"))
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.root.join("store"))

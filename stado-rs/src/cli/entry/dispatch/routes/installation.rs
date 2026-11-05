@@ -32,6 +32,7 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
                 family,
                 consumer,
                 json,
+                await_statement,
             }) => {
                 let mut input = String::new();
                 std::io::Read::read_to_string(&mut std::io::stdin(), &mut input).map_err(
@@ -40,7 +41,7 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
                             .machine_readable(json)
                     },
                 )?;
-                capabilities::call(&family, &consumer, &input, json).await
+                capabilities::call(&family, &consumer, &input, json, await_statement).await
             }
             Some(CapabilityAction::Select { family, order }) => {
                 capabilities::select(&family, &order)

@@ -8,9 +8,86 @@ pub(in crate::fleet_shape) mod orphans;
 pub(in crate::fleet_shape) mod restarts;
 pub(in crate::fleet_shape) mod shadows;
 
-use super::{Finding, BINARY_CHECK, DOMAIN_CHECK, PROGRAM_CHECK};
+use super::{Finding, BINARY_CHECK, DOMAIN_CHECK, PROGRAM_CHECK, SERVICE_COPY_CHECK};
 use crate::deploy::service;
 use crate::targets::ComputeTarget;
+
+/// The `launch` a unit started on a schedule reports (timer, interval,
+/// calendar, path or mount), as the loaded-units reader writes it.
+const SCHEDULED: &str = "scheduled";
+
+/// What a unit runs, as a key two units of one service share whatever either
+/// is called: the binary its declared program executes, without its
+/// directory, and that binary's first subcommand. `stado serve …` under any
+/// label is one key; `stado network serve` is another. `None` when the unit
+/// declares no program.
+fn program_key(unit: &service::UndeclaredUnit) -> Option<String> {
+    let line = unit.declared_program();
+    let mut words = line.split_whitespace();
+    let binary = words.next()?;
+    let name = binary.rsplit('/').next().unwrap_or(binary);
+    Some(match words.find(|word| !word.starts_with('-')) {
+        Some(word) => format!("{name} {word}"),
+        None => name.to_string(),
+    })
+}
+
+/// One service, one unit: no two units this host loads run the same program.
+///
+/// Decided by what each unit RUNS ([`program_key`]), never by what it is
+/// called. A second copy of a service has carried every kind of name — a
+/// retired prefix, a role suffix, a forward beside it — and a rule that lists
+/// those names misses the next one. Two units whose programs execute the same
+/// binary with the same subcommand are two copies, whatever their labels say;
+/// only fleet units are compared (a unit file this fleet wrote), so two
+/// platform agents sharing a helper are not. Only services are compared: a
+/// unit its manager starts on a schedule (`launch == "scheduled"`) is a job
+/// that runs and ends, and two such jobs of one program with different work
+/// — a sync per surface — are two jobs, not two copies of one.
+pub(in crate::fleet_shape) fn duplicate_services(
+    target: &ComputeTarget,
+    loaded: &[service::UndeclaredUnit],
+    out: &mut Vec<Finding>,
+    measured: &mut usize,
+) {
+    let mut by_program: std::collections::BTreeMap<String, Vec<&service::UndeclaredUnit>> =
+        std::collections::BTreeMap::new();
+    for unit in loaded
+        .iter()
+        .filter(|unit| !unit.declaring_paths.is_empty() && unit.launch != SCHEDULED)
+    {
+        let Some(key) = program_key(unit) else {
+            continue;
+        };
+        *measured += 1;
+        by_program.entry(key).or_default().push(unit);
+    }
+    for (program, units) in by_program {
+        if units.len() < 2 {
+            continue;
+        }
+        let labels: Vec<&str> = units.iter().map(|unit| unit.label.as_str()).collect();
+        let declared: Vec<&str> = units
+            .iter()
+            .filter(|unit| unit.declared)
+            .map(|unit| unit.label.as_str())
+            .collect();
+        let keep = match declared.as_slice() {
+            [one] => (*one).to_string(),
+            _ => "the one unit the registry declares for it".to_string(),
+        };
+        out.push(Finding {
+            check: SERVICE_COPY_CHECK,
+            subject: format!("{}:{program}", target.name),
+            declared: format!("one unit runs {program}: {keep}"),
+            observed: format!("{} units run it: {}", units.len(), labels.join(", ")),
+            command: format!(
+                "stado service bootout <each label but {keep}> --host {} --domain <the domain it is loaded in>",
+                target.name
+            ),
+        });
+    }
+}
 
 /// One label, one declaring domain.
 ///

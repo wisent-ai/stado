@@ -54,6 +54,11 @@ pub(crate) enum CapabilityAction {
         /// Print the resolution beside the answer, and a refusal, as JSON.
         #[arg(long)]
         json: bool,
+        /// When the attestation alternative is reached and no statement
+        /// answers this request yet, wait for one (`attestation record`)
+        /// and print it, instead of refusing and keeping the request.
+        #[arg(long)]
+        await_statement: bool,
     },
     /// Statements that answer one exact request in place of a product, for
     /// the attestation alternative: the requests `call` kept, read, answered

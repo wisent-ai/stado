@@ -24,6 +24,7 @@ enum NativeComputeProviderOperations {
             path: ["capabilities", "call"], hostPlacement: .none, fields: [
                 .init(id: "family", label: "Family", required: true, choices: ["inference", "image", "search"], initial: "inference"),
                 .init(id: "consumer", label: "Consumer (the product asking)", option: "--consumer", required: true),
+                .init(id: "await-statement", label: "When only a statement can answer, wait for one to be recorded", option: "--await-statement", flag: true),
             ], payload: .standardInput(label: "The request JSON: inference a chat-completions request; image {\"plan\", \"inputs\", \"output\"}; search {\"query\", \"count\"}", initial: "")),
         .init(id: "capabilities-attestation-list", title: "List requests kept for a statement, and whether one answers each",
             path: ["capabilities", "attestation", "list"], hostPlacement: .none, fields: [

@@ -40,10 +40,18 @@ fn deployment_with_role_on(host: &str) -> Deployment {
             .expect("each target lists its services");
         services.push(json!({ "name": "stado", "unit": "com.wisent.stado" }));
     }
-    let endpoint =
-        document["service_directory"]["services"]["marker-api"]["endpoints"][AUTHORITY].clone();
-    document["service_directory"]["services"][ROLE] =
-        json!({ "managed_service": "stado", "active_host": host, "endpoints": { host: endpoint } });
+    let template = &document["service_directory"]["services"]["marker-api"];
+    let endpoint = template["endpoints"][AUTHORITY].clone();
+    // A directory entry names the consumers that reach it, and the registry
+    // refuses one that names none: the role is reached by the template
+    // route's own consumer.
+    let consumers = template["consumers"].clone();
+    document["service_directory"]["services"][ROLE] = json!({
+        "managed_service": "stado",
+        "active_host": host,
+        "endpoints": { host: endpoint },
+        "consumers": consumers,
+    });
     let deployment = Deployment::start();
     deployment.cli(&["config", "init"]);
     deployment.import(&document);
@@ -123,26 +131,35 @@ fn a_fixed_route_is_drafted_into_a_profile_that_declares_as_printed() {
             "registry target {PLACED_ON} declares managed service {managed} with no unit file path"
         ),
     );
-    let mut recorded = template.clone();
-    let unit_file = format!("/home/example/.config/systemd/user/{managed}.service");
-    for target in recorded["targets"]
-        .as_array_mut()
-        .expect("the template lists targets")
-    {
-        if target["name"] != PLACED_ON {
-            continue;
-        }
-        for service in target["services"]
-            .as_array_mut()
-            .expect("the host lists services")
-        {
-            if service["name"] == managed.as_str() {
-                service["path"] = json!(unit_file);
-                service["kind"] = json!("systemd");
-            }
+    // The unit file is recorded through `registry set`, the verb that changes
+    // one field of a record the registry already holds: `registry import`
+    // only adds, and refuses a target record whose content differs.
+    // A systemd unit is named `<name>.service`, the name the profile's
+    // validation requires and the file is called by; the record states the
+    // unit, its kind and its file together.
+    let unit_name = format!("com.wisent.{managed}.service");
+    let unit_file = format!("/home/example/.config/systemd/user/{unit_name}");
+    let mut services = template["targets"]
+        .as_array()
+        .and_then(|targets| targets.iter().find(|target| target["name"] == PLACED_ON))
+        .and_then(|target| target["services"].as_array())
+        .cloned()
+        .expect("the template declares the placed host's services");
+    for service in &mut services {
+        if service["name"] == managed.as_str() {
+            service["unit"] = json!(unit_name);
+            service["path"] = json!(unit_file);
+            service["kind"] = json!("systemd");
         }
     }
-    deployment.import(&recorded);
+    deployment.cli(&[
+        "registry",
+        "set",
+        "--path",
+        &format!("targets.{PLACED_ON}.services"),
+        "--value",
+        &serde_json::to_string(&services).unwrap(),
+    ]);
     let before = deployment.registry();
     let managed = managed.as_str();
 

@@ -49,14 +49,19 @@ pub(super) fn checked_route(
 
 /// The address the destination's Stado serves its object API on, from the
 /// catalog's host process (`--bind`, `--port`) resolved for `destination`.
-/// A catalog that names the port as `$STADO_LISTEN_PORT` takes the one the
-/// service directory records for that host; a literal port is used as
-/// written. After the move it is the active host's endpoint, where every
+/// A catalog that names the port as `$STADO_LISTEN_PORT` takes the one
+/// `document` — the registry the command acts on — records for that host;
+/// a literal port is used as written. Read from `document`, not through the
+/// store, because the store may be the one on the host that does not
+/// answer. After the move it is the active host's endpoint, where every
 /// caller's tunnel ends. A placeholder the directory records no port for is
 /// refused by name, as is a `--port` that is no port; neither reaches a URL.
-pub(super) async fn served_address(destination: &ComputeTarget) -> Result<String, CmdError> {
+pub(super) fn served_address(
+    document: &serde_json::Value,
+    destination: &ComputeTarget,
+) -> Result<String, CmdError> {
     let host = crate::deploy::service_catalog::host_process().map_err(CmdError::declaration)?;
-    let recorded = crate::cli::directory::recorded_listen_port(&host, &destination.name).await?;
+    let recorded = crate::cli::directory::listen_port_in(document, &host, &destination.name);
     if recorded.is_none() && crate::cli::directory::names_port(&host) {
         return Err(CmdError::missing(format!(
             "the service directory records no listen port for the host Stado process ({}) on {}, \

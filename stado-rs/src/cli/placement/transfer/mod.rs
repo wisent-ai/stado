@@ -21,7 +21,7 @@ pub(in crate::cli::placement) use journal::{
 };
 pub(in crate::cli::placement) use readiness::preflight;
 pub(in crate::cli::placement) use role::{
-    apply_role, ensure_runs_on, move_role, prepare_role, store_fence,
+    apply_role, ensure_runs_on, move_role, prepare_role, store_fence, take_role,
 };
 pub(in crate::cli::placement) use state::{discard_staging, rehome_states, settle_state_backup};
 pub(in crate::cli::placement) use vault_fence::write_fenced;

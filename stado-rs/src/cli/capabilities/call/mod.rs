@@ -26,7 +26,10 @@
 //! shape than the family's, is named with its cause and the next one is
 //! tried, the same request; the refusal when none answers names every one.
 
+mod attested;
 mod families;
+
+use attested::attested;
 
 pub(crate) use families::check_answer;
 
@@ -37,7 +40,7 @@ use sha2::{Digest, Sha256};
 
 use super::record::Unreachable;
 use super::resolve::{choose, Resolution};
-use crate::capabilities::alternatives::{Family, Reach};
+use crate::capabilities::alternatives::Reach;
 use crate::capabilities::CapabilityKind;
 use crate::cli::CmdError;
 
@@ -206,24 +209,12 @@ async fn brama(route: &str, consumer: &str, body: &str) -> Outcome {
     Outcome::Passed(format!("{url} answered {status}: {said}"))
 }
 
-/// Answer the request from the statement recorded for it, or keep it.
-fn attested(family: &Family, consumer: &str, request: &Value) -> Outcome {
-    match super::attestation::answer_or_keep(family, consumer, request) {
-        Ok((_, Some(answer))) => Outcome::Answered(answer),
-        Ok((digest, None)) => Outcome::Passed(format!(
-            "no statement answers request {digest} yet; read it with `stado capabilities attestation show {} --consumer {consumer} {digest}` and answer it with `stado capabilities attestation record {} --consumer {consumer} {digest} --checked <what was checked>`, the answer on standard input",
-            family.id, family.id
-        )),
-        Err(cause) => Outcome::Passed(cause),
-    }
-}
-
-async fn ask(resolution: &Resolution, request: &Value, body: &str) -> Outcome {
+async fn ask(resolution: &Resolution, request: &Value, body: &str, wait: bool) -> Outcome {
     let consumer = resolution.consumer.as_str();
     let family = resolution.family;
     let outcome = match resolution.chosen.alternative.reach {
         Reach::Directory { .. } => brama(&resolution.chosen.route, consumer, body).await,
-        Reach::Attestation => attested(family, consumer, request),
+        Reach::Attestation => attested(family, consumer, request, wait),
         Reach::Program { .. } if family.id == CapabilityKind::Image => {
             families::obraz(&resolution.chosen.route, request).await
         }
@@ -251,13 +242,14 @@ async fn ask(resolution: &Resolution, request: &Value, body: &str) -> Outcome {
     }
 }
 
-/// `stado capabilities call FAMILY --consumer C [--json]`, the request on
-/// standard input.
+/// `stado capabilities call FAMILY --consumer C [--json] [--await-statement]`,
+/// the request on standard input.
 pub(crate) async fn run(
     family: &str,
     consumer: &str,
     input: &str,
     as_json: bool,
+    await_statement: bool,
 ) -> Result<(), CmdError> {
     let refuse = |error: CmdError| error.machine_readable(as_json);
     let family = super::declared_family(family).map_err(refuse)?;
@@ -283,7 +275,7 @@ pub(crate) async fn run(
             .await
             .map_err(refuse)?;
         let provider = resolution.chosen.alternative.provider.as_str();
-        match ask(&resolution, &request, &body).await {
+        match ask(&resolution, &request, &body, await_statement).await {
             Outcome::Answered(answer) => {
                 let printed = if as_json {
                     json!({"resolution": resolution.answer(), "answer": answer})
