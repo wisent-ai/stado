@@ -89,4 +89,5 @@ pub const CONTROL_CONFIG: &[ConfigField] = &[
     alternatives::SEARCH_ORDER_CONFIG,
     alternatives::SEARCH_ENDPOINT_URL_CONFIG,
     alternatives::SEARCH_ENDPOINT_KEY_ROLE_CONFIG,
+    alternatives::MARKET_ORDER_CONFIG,
 ];

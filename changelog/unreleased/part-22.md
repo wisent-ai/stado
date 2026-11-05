@@ -256,3 +256,6 @@ The version bump gathers them into the release's own file and removes this one.
   event recorded from the program's notice makes each named host claim nothing, yield its yieldable
   jobs back to the queue and drop its Vast listing for the window; `report` reads the load shed from
   the beacon hours and `paid` records the payment. Desktop's Registry screen manages events.
+- **`stado capabilities select market --order` orders the sellers:** the market family's sellers
+  were read in the catalog's order only. `capabilities.market.order` now sets which seller is read
+  and offered first; an undeclared or repeated seller is refused.

@@ -45,7 +45,21 @@ async fn sellers(market: &ProductCapability) -> Vec<Value> {
     use crate::capabilities::ProviderId;
     use crate::cli::integrations::{peer, vast};
     let mut rows = Vec::new();
-    for row in market.providers {
+    // The selected order first, then every seller it does not name, in the
+    // catalog's order; an order that cannot be read is said and the
+    // catalog's order stands.
+    let ordered = match market_order(market) {
+        Ok(ordered) => ordered,
+        Err(cause) => {
+            rows.push(serde_json::json!({
+                "provider": "order",
+                "ready": false,
+                "verdict": cause,
+            }));
+            market.providers.iter().collect()
+        }
+    };
+    for row in ordered {
         let provider = row.provider.as_str();
         match row.provider {
             ProviderId::Vast => {
@@ -258,6 +272,9 @@ fn declared_family(id: &str) -> Result<&'static alternatives::Family, CmdError> 
 /// selected order to `capabilities.<family>.order` in the config file, after
 /// refusing a name the family does not declare or names twice.
 pub(crate) fn select(family: &str, order: &[String]) -> Result<(), CmdError> {
+    if family == capabilities::CapabilityKind::Market.as_str() {
+        return select_market(order);
+    }
     let declared = declared_family(family)?;
     if order.is_empty() {
         return Err(CmdError::usage(format!(
@@ -273,4 +290,91 @@ pub(crate) fn select(family: &str, order: &[String]) -> Result<(), CmdError> {
         .map(|alternative| alternative.provider.as_str())
         .collect();
     crate::cli::config_cmd::keys::set(declared.order.path, &serde_json::to_string(&names)?)
+}
+
+/// The market family's sellers in the selected order
+/// (`capabilities.market.order`), followed by every seller it does not
+/// name, in the catalog's order. A name the family does not declare is the
+/// refusal, naming the sellers.
+fn market_order(
+    market: &ProductCapability,
+) -> Result<Vec<&'static crate::capabilities::ProviderCapability>, String> {
+    let field = &alternatives::MARKET_ORDER_CONFIG;
+    let selected: Vec<String> = match crate::config_file::field_value(field) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        Some(Value::String(text)) => text.split(',').map(|name| name.trim().to_owned()).collect(),
+        Some(other) => return Err(format!("{} is {other}, not a list of sellers", field.path)),
+        None => Vec::new(),
+    };
+    let providers: &'static [crate::capabilities::ProviderCapability] = market.providers;
+    let mut ordered = Vec::new();
+    for name in &selected {
+        let row = providers
+            .iter()
+            .find(|row| row.provider.matches(name))
+            .ok_or_else(|| {
+                format!(
+                    "{} names {name:?}, which the market family does not declare; it declares {}",
+                    field.path,
+                    providers
+                        .iter()
+                        .map(|row| row.provider.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+        if !ordered.contains(&row) {
+            ordered.push(row);
+        }
+    }
+    for row in providers {
+        if !ordered.contains(&row) {
+            ordered.push(row);
+        }
+    }
+    Ok(ordered)
+}
+
+/// `stado capabilities select market --order A,B`: write the sellers' order
+/// to `capabilities.market.order`, refusing a seller the family does not
+/// declare or names twice.
+fn select_market(order: &[String]) -> Result<(), CmdError> {
+    let market = capabilities::product_capability(capabilities::CapabilityKind::Market.as_str())
+        .ok_or_else(|| CmdError::declaration("the capability catalog declares no market family"))?;
+    let declared: Vec<&str> = market
+        .providers
+        .iter()
+        .map(|row| row.provider.as_str())
+        .collect();
+    if order.is_empty() {
+        return Err(CmdError::usage(format!(
+            "--order names the market's sellers in the order they are offered: [{}]",
+            declared.join(", ")
+        )));
+    }
+    let mut names: Vec<&str> = Vec::new();
+    for name in order {
+        let row = market
+            .providers
+            .iter()
+            .find(|row| row.provider.matches(name.trim()))
+            .ok_or_else(|| {
+                CmdError::usage(format!(
+                    "the market family has no seller {name:?}; its sellers are [{}]",
+                    declared.join(", ")
+                ))
+            })?;
+        if names.contains(&row.provider.as_str()) {
+            return Err(CmdError::usage(format!("--order names {name:?} twice")));
+        }
+        names.push(row.provider.as_str());
+    }
+    crate::cli::config_cmd::keys::set(
+        alternatives::MARKET_ORDER_CONFIG.path,
+        &serde_json::to_string(&names)?,
+    )
 }

@@ -119,6 +119,14 @@ pub const SEARCH_ENDPOINT_KEY_ROLE_CONFIG: ConfigField = ConfigField::scalar(
     "STADO_SEARCH_ENDPOINT_KEY_ROLE",
     "capabilities.search.endpoint.key_role",
 );
+/// The order the market family's sellers are read and offered in. The
+/// market family is not one a product resolves (its sellers are where the
+/// fleet sells, not what a product calls), so it carries its own order key.
+pub const MARKET_ORDER_CONFIG: ConfigField = ConfigField::list(
+    "market-order",
+    "STADO_MARKET_ORDER",
+    "capabilities.market.order",
+);
 
 /// Every family a product resolves through Stado, each with its
 /// alternatives in the declared order.
