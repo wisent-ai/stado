@@ -60,10 +60,12 @@ mod registry_policy;
 use crate::queue::submit::json_dumps_sorted_compact;
 use crate::queue::StorageError;
 
-use listener::{constant_time_eq, http_status, send_json, trusted_request_host, Request, Response};
+use listener::{http_status, send_json, trusted_request_host, Request, Response};
 
+pub(crate) use listener::{
+    constant_time_eq, read_request, PreparedListener, Refusal, RequestLimits,
+};
 pub use listener::{join_script_source, Dashboard};
-pub(crate) use listener::{read_request, PreparedListener, Refusal, RequestLimits};
 
 /// Dashboard serve failure.
 #[derive(Debug, thiserror::Error)]

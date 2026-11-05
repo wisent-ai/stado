@@ -1,10 +1,13 @@
 use clap::Subcommand;
 
 use super::CmdError;
+pub use callers::CallersCommands;
 pub use credential::CredentialCommands;
 
 mod beacon;
+mod callers;
 mod credential;
+mod gateway;
 mod lifecycle;
 mod process;
 mod read;
@@ -157,6 +160,30 @@ pub enum InferenceCommands {
     Credential {
         #[command(subcommand)]
         command: CredentialCommands,
+    },
+    /// Who may call a deployment from outside the fleet: keys, limits and
+    /// prices per caller, and what each called per hour.
+    Callers {
+        #[command(subcommand)]
+        command: CallersCommands,
+    },
+    /// Serve a deployment to its declared callers on --listen: each request
+    /// presents a caller's key, is held to the caller's limits, is sent to
+    /// the engine with the deployment's own key, and its tokens are added to
+    /// the caller's hour. Refused for a model whose license chain is unread
+    /// or declares none.
+    Gateway {
+        name: String,
+        /// Address and port the gateway listens on.
+        #[arg(long)]
+        listen: String,
+        /// Seconds between writes of held usage to the fleet store.
+        #[arg(long = "flush-seconds")]
+        flush_seconds: u64,
+        /// Seconds between reads of the declared callers, so an issued or
+        /// revoked key takes effect without a restart.
+        #[arg(long = "refresh-seconds")]
+        refresh_seconds: u64,
     },
     /// Emit this host's inference beacon fragment.
     #[command(hide = true)]
@@ -314,6 +341,13 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
         InferenceCommands::Credential {
             command: CredentialCommands::Init { json },
         } => credential::init(json).await,
+        InferenceCommands::Callers { command } => callers::dispatch(command).await,
+        InferenceCommands::Gateway {
+            name,
+            listen,
+            flush_seconds,
+            refresh_seconds,
+        } => gateway::run(&name, &listen, flush_seconds, refresh_seconds).await,
         InferenceCommands::Beacon => beacon::local(),
     }
 }

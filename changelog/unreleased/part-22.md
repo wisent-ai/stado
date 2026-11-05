@@ -223,3 +223,9 @@ The version bump gathers them into the release's own file and removes this one.
   with host names, consumer ids and holders in them. The export writes one kind as JSON lines with a
   manifest, hosts and boards replaced by keyed pseudonyms, times kept to the hour, and refuses a
   field it declares neither kept nor dropped. Desktop's Registry screen runs it.
+- **Outside callers of an inference deployment get their own key, limits and metering:** a
+  deployment had one engine bearer, so a model could not be offered to anyone outside the fleet per
+  caller. `stado inference callers add|revoke|list|usage` issues a key per caller into the vault with
+  requests-per-minute and tokens-per-day limits and an optional price, and `stado inference gateway`
+  admits each request by key, refuses a caller past a limit with `429`, and keeps its tokens per
+  hour. Desktop's Registry screen manages callers.

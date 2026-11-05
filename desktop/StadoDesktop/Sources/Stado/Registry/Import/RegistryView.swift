@@ -146,6 +146,30 @@ enum NativeRegistryOperations {
                   .init(id: "out", label: "Empty or new output directory", option: "--out", required: true),
                   .init(id: "key-role", label: "Credential role holding the export key", option: "--key-role", required: true),
               ], jsonOutput: false),
+        .init(id: "inference-callers-list", title: "Outside callers of an inference deployment, with their limits and prices",
+              path: ["inference", "callers", "list"], hostPlacement: .none, fields: [
+                  .init(id: "deployment", label: "Deployment", required: true),
+              ], mutates: false, jsonOutput: false),
+        .init(id: "inference-callers-add", title: "Issue a key to an outside caller of an inference deployment",
+              path: ["inference", "callers", "add"], hostPlacement: .none, fields: [
+                  .init(id: "deployment", label: "Deployment", required: true),
+                  .init(id: "caller", label: "Caller name", option: "--caller", required: true),
+                  .init(id: "requests-per-minute", label: "Requests per minute", option: "--requests-per-minute", required: true),
+                  .init(id: "tokens-per-day", label: "Tokens per UTC day", option: "--tokens-per-day", required: true),
+                  .init(id: "usd-per-million-prompt", label: "USD per million prompt tokens", option: "--usd-per-million-prompt"),
+                  .init(id: "usd-per-million-generated", label: "USD per million generated tokens", option: "--usd-per-million-generated"),
+              ], jsonOutput: false),
+        .init(id: "inference-callers-revoke", title: "Revoke an outside caller's key",
+              path: ["inference", "callers", "revoke"], hostPlacement: .none, fields: [
+                  .init(id: "deployment", label: "Deployment", required: true),
+                  .init(id: "caller", label: "Caller name", option: "--caller", required: true),
+              ], jsonOutput: false),
+        .init(id: "inference-callers-usage", title: "Each outside caller's requests, tokens, refusals and charge per hour",
+              path: ["inference", "callers", "usage"], hostPlacement: .none, fields: [
+                  .init(id: "deployment", label: "Deployment", required: true),
+                  .init(id: "caller", label: "Caller (blank: every caller)", option: "--caller"),
+                  .init(id: "since-hours", label: "Hours back", option: "--since-hours", initial: "24"),
+              ], mutates: false, jsonOutput: false),
         .init(id: "market-earnings", title: "What a host earned on Vast.ai per day, beside its cost and margin",
               path: ["market", "earnings"], hostPlacement: .none, fields: [
                   .init(id: "target", label: "Registry target", option: "--target", required: true),
