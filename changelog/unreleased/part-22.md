@@ -214,3 +214,7 @@ The version bump gathers them into the release's own file and removes this one.
   heating no report showed. A target may declare `heat_use {price_per_kwh, currency, source,
   months?}`; `cost host` prints the window's heat, the part given off in those months and its
   saving, and nothing for a host with no declared use.
+- **`stado quality check` reads an older registry copy instead of refusing every push:** while the
+  fleet object API hung, the check refused every commit with infra_down, because the last-known-good
+  registry copy was past the resolver's max-stale. That bound guards placement, not a list of names
+  to keep out of a commit, so the check now reads the copy however old, and says how old.

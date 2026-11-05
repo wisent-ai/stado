@@ -25,10 +25,30 @@ struct Declared {
 /// this machine has an account of that name too, as every machine has
 /// `root`: such an account names no installation), this account's home
 /// directory and name.
+///
+/// The registry is the authority's when it answers. When it does not, the
+/// last-known-good copy is read however old it is: the max-stale bound
+/// guards decisions that act on where a host is now, and this is a list of
+/// names to keep out of a commit, which an older copy still holds in full,
+/// missing only a host added since. The copy's age is printed, so a check
+/// read from it says so. No copy at all is the refusal.
 async fn declared() -> Result<Vec<Declared>, String> {
-    let (registry, _) = crate::targets::fetch_registry_or_last_good()
-        .await
-        .map_err(|error| error.to_string())?;
+    let registry = match crate::targets::fetch_registry_remote().await {
+        Ok(registry) => registry,
+        Err(authority) => {
+            let (registry, notice) = crate::targets::registry_without_authority(
+                "the quality check reads this installation's own values",
+            )
+            .await
+            .map_err(|copy| {
+                format!("the registry authority did not answer ({authority}), and {copy}")
+            })?;
+            if let Some(notice) = notice {
+                eprintln!("{notice}, because the authority did not answer: {authority}");
+            }
+            registry
+        }
+    };
     let mut values = Vec::new();
     let mut add = |value: &str, by: String| {
         let value = value.trim();
