@@ -405,7 +405,19 @@ pub async fn auto_list_loop(
             }
         } else {
             idle_since = None;
-            let decided = decide_action(listed, &state, None, params.idle_window_s);
+            let mut decided = decide_action(listed, &state, None, params.idle_window_s);
+            // Work queued for the fleet takes the board from the offer only
+            // when it is worth more per board-hour than the offer's price; a
+            // job already running here has the board, and the offer goes.
+            if decided == AutoListAction::Unlist && state.running_here == 0 {
+                match offer_outweighs_queue(store, &state, &params).await {
+                    Ok(kept) => {
+                        log(&format!("still listed: {kept}"));
+                        decided = AutoListAction::BusyNotListed;
+                    }
+                    Err(why) => log(&format!("the queued job takes the host: {why}")),
+                }
+            }
             if decided == AutoListAction::Unlist {
                 if params.dry_run {
                     listed = false;
@@ -450,6 +462,7 @@ pub async fn auto_list_loop(
                     state.queued,
                     py_float(free_vram_gb)
                 )),
+                AutoListAction::BusyNotListed if listed => {}
                 AutoListAction::BusyNotListed => log(&format!("busy ({}); not listed", counts())),
                 AutoListAction::Unlist
                 | AutoListAction::List { .. }
@@ -459,6 +472,85 @@ pub async fn auto_list_loop(
         if params.once {
             return Ok(());
         }
+    }
+}
+
+/// The board decision between the queued job and the listed offer, kept
+/// with its inputs like every board decision: `Ok` with its reason when the
+/// offer is worth more and stays listed, `Err` with why the queued job takes
+/// the host. The job is valued at the income its submitter stated, else the
+/// autonomy policy's `budgets.internal_usd_per_gpu_hour`; the offer at its
+/// price per GPU-hour. A job whose value cannot be read is not weighed: the
+/// fleet's own work takes the host, as before any value was declared, and the
+/// reason names what to declare.
+async fn offer_outweighs_queue(
+    store: &JobStorage,
+    state: &super::BusyState,
+    params: &AutoListParams,
+) -> Result<String, String> {
+    use crate::providers::local::agent::allocate::{self, Candidate, Use};
+    let Some(job_id) = state.queued_job_id.clone() else {
+        return Err("the queued job's record vanished before it was read".to_string());
+    };
+    let (value, source) = match &state.queued_income {
+        Some((income, source)) => (*income, format!("stated by {source}")),
+        None => match crate::autonomy::storage::load_policy(store).await {
+            Ok(Some(policy)) => match policy.budgets.internal_usd_per_gpu_hour {
+                Some(value) => (
+                    value,
+                    "internal work at the policy's budgets.internal_usd_per_gpu_hour".to_string(),
+                ),
+                None => {
+                    return Err(format!(
+                        "job {job_id} states no income and the autonomy policy declares no \
+                         budgets.internal_usd_per_gpu_hour, so it is not weighed against the \
+                         offer"
+                    ))
+                }
+            },
+            Ok(None) => {
+                return Err(format!(
+                    "job {job_id} states no income and no autonomy policy is written, so it is \
+                     not weighed against the offer"
+                ))
+            }
+            Err(error) => {
+                return Err(format!(
+                    "job {job_id} states no income and the autonomy policy cannot be read \
+                     ({error}), so it is not weighed against the offer"
+                ))
+            }
+        },
+    };
+    let offer_use = Use::Offer {
+        provider: "vast".to_string(),
+    };
+    let candidates = vec![
+        Candidate::valued(Use::Job { job_id }, value, source),
+        Candidate::valued(
+            offer_use.clone(),
+            params.price_gpu,
+            "the Vast.ai offer's price per GPU-hour",
+        ),
+    ];
+    // Vast rents the machine whole, so the decision is the host's, kept
+    // under the worker name `stado market decisions --target` reads. The
+    // offer holds the board, so a tie keeps it listed.
+    let decision = allocate::decide(
+        &crate::config::worker_name(),
+        "machine",
+        Some(offer_use.clone()),
+        candidates,
+        None,
+    );
+    let kept = match allocate::keep(store, &decision).await {
+        Ok(()) => String::new(),
+        Err(error) => format!("; the decision was not kept: {error}"),
+    };
+    let said = format!("{}{kept}", decision.reason);
+    match decision.chosen.as_ref() == Some(&offer_use) {
+        true => Ok(said),
+        false => Err(said),
     }
 }
 

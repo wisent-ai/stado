@@ -388,3 +388,8 @@ The version bump gathers them into the release's own file and removes this one.
   touching the host, a deployment with a priced unrevoked caller, a pay-per-call offer or a listed
   network node serving it is refused while its model license is unread or its chain declares
   none, naming each sale and what the license lacks. Test `tests/inference/sale_license.mjs`.
+- **Queued work takes a Vast-listed host only when it is worth more than the offer:** the Vast
+  follow loop weighs a queued job (its stated income, else the policy's
+  `budgets.internal_usd_per_gpu_hour`) against the offer's `--price-gpu` before unlisting; the
+  offer stays listed when worth at least as much, the decision kept for `stado market decisions`.
+  A job running here, or one whose value cannot be read, still takes the host, said in the log.
