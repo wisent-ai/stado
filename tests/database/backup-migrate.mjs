@@ -136,11 +136,27 @@ try {
   report.retention = { listed, second, after };
 
   refused(run(stado, ['database', 'migrate', name, '--to', 'supabase', '--port', port, '--json']), 'is not a destination migrate places');
-  // A database whose provider deleted it is moved from the backup this
+  // A database whose source no longer answers is moved from the backup this
   // machine kept, never from the source: the kept backup is proven first.
   // Refused: a directory that holds no backup, a backup of another database,
-  // and an archive whose bytes changed since it was read back.
+  // an archive whose bytes changed since it was read back, a backup older
+  // than the newest complete one, and any kept backup while the source still
+  // answers (a new backup would hold writes the kept one lacks).
   const fromBackup = directory => ['database', 'migrate', name, '--to', 'fleet', '--port', port, '--from-backup', directory, '--json'];
+  refused(run(stado, fromBackup(second.backup)), 'still answers');
+  // The source stops answering: the item's session names an address no
+  // resolver answers (.invalid, RFC 6761), in this test's own vault, and the
+  // item it held is put back after the move refuses or completes.
+  const answering = JSON.parse(success(run(skarbiec, ['get', item])));
+  const silent = new URL(field(item, 'session_url'));
+  silent.hostname = 'stado-source.invalid';
+  const rewrite = payload => {
+    const answer = spawnSync(skarbiec, ['set', item], { cwd: root, env: environment, input: JSON.stringify(payload), encoding: 'utf8' });
+    report.commands.push({ program: skarbiec, arguments: ['set', item], exit_status: answer.status, stderr: answer.stderr });
+    assert.equal(answer.status, constants.F_OK, `skarbiec set ${item}: ${answer.stderr}`);
+  };
+  const payloadOf = document => document.payload ?? document;
+  rewrite({ ...payloadOf(answering), fields: { ...payloadOf(answering).fields, session_url: silent.toString() } });
   refused(run(stado, fromBackup(output)), 'is no kept backup');
   const foreign = join(output, 'foreign-backup');
   mkdirSync(foreign);
@@ -151,6 +167,8 @@ try {
   writeFileSync(join(altered, 'manifest.json'), JSON.stringify(manifest));
   writeFileSync(join(altered, 'database.dump'), Buffer.concat([readFileSync(archive), Buffer.from('altered')]));
   refused(run(stado, fromBackup(altered)), 'the archive changed and is not restored');
+  const older = complete(JSON.parse(success(run(stado, ['database', 'backups', name, '--json'])))).find(backup => backup !== second.backup);
+  if (older) refused(run(stado, fromBackup(older)), 'is not the newest complete backup');
   assert.equal(field(item, 'provider'), 'external', 'A refused migration must leave the item on the source');
   const moved = JSON.parse(success(run(stado, fromBackup(second.backup))));
   assert.equal(moved.migrated, name);
@@ -158,6 +176,12 @@ try {
   assert.deepEqual(moved.restore.mismatches, []);
   assert.equal(field(item, 'provider'), 'fleet', 'The item must point at the fleet copy');
   assert.equal(field(`${item}-previous`, 'provider'), 'external', 'The source coordinates must be kept');
+  assert.equal(field(`${item}-previous`, 'session_url'), silent.toString(), 'The kept coordinates are the ones the item held when it moved');
+  // The source answers again at its real address: the kept coordinates name it.
+  const keptPrevious = JSON.parse(success(run(skarbiec, ['get', `${item}-previous`])));
+  const restored = { ...payloadOf(keptPrevious), fields: { ...payloadOf(keptPrevious).fields, session_url: payloadOf(answering).fields.session_url } };
+  const put = spawnSync(skarbiec, ['set', `${item}-previous`], { cwd: root, env: environment, input: JSON.stringify(restored), encoding: 'utf8' });
+  assert.equal(put.status, constants.F_OK, `skarbiec set ${item}-previous: ${put.stderr}`);
   assert.deepEqual(counted(item), before, 'The fleet copy must hold every row the source held');
   assert.deepEqual(configuration().database_api.databases[name], declaration, 'The declaration must not change');
   report.migrated = moved;
@@ -202,6 +226,21 @@ try {
   const authPort = required('STADO_DATABASE_TEST_AUTH_PORT');
   const authReady = required('STADO_DATABASE_TEST_AUTH_READY_SECONDS');
   const authProject = required('STADO_DATABASE_TEST_AUTH_PROJECT');
+  // Settings given instead of the provider's are checked before anything is
+  // placed: a file that is not there, text that is not JSON, and JSON that is
+  // not one object are each refused naming where they came from.
+  const placeWith = (...settings) => run(stado, ['database', 'auth', 'place', name, '--port', authPort,
+    '--ready-within', authReady, ...settings, '--json']);
+  refused(placeWith('--settings-file', join(output, 'no-settings.json')), 'cannot be read');
+  const notJson = join(output, 'settings-not-json.json');
+  writeFileSync(notJson, 'not json');
+  refused(placeWith('--settings-file', notJson), 'are not JSON');
+  const notObject = join(output, 'settings-array.json');
+  writeFileSync(notObject, '[]');
+  refused(placeWith('--settings-file', notObject), 'are an array, not one object');
+  refused(placeWith('--settings-json', '"text"'), 'are a string, not one object');
+  const authUrl = run(skarbiec, ['get', item, '--field', 'auth_url']);
+  assert.ok(authUrl.status !== constants.F_OK || authUrl.stdout.trim() === '', `a refused placement must not name a sign-in address: ${authUrl.stdout}`);
   const placeAuth = () => run(stado, ['database', 'auth', 'place', name, '--port', authPort,
     '--ready-within', authReady, '--from-project', authProject, '--json']);
   const signIn = JSON.parse(success(placeAuth()));

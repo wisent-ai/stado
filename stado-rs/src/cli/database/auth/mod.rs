@@ -78,15 +78,20 @@ pub(crate) struct AuthPlaceArgs {
     /// The hosted Supabase project whose sign-in settings the server takes,
     /// when the item does not record it (a database migrated before the
     /// item kept its project ref).
-    #[arg(long, conflicts_with = "settings_file")]
+    #[arg(long, conflicts_with_all = ["settings_file", "settings_json"])]
     pub(super) from_project: Option<String>,
     /// A JSON object in the shape the management API answers for a project's
-    /// auth configuration (`GET /v1/projects/{ref}/config/auth`), read instead
-    /// of asking the provider: the sign-in of a database whose hosted project
-    /// the provider paused or deleted, so its management API answers nothing.
-    /// `{}` takes the server's defaults for every setting.
-    #[arg(long)]
+    /// auth configuration (`GET /v1/projects/{ref}/config/auth`), read on
+    /// this machine instead of asking the provider: the sign-in of a database
+    /// whose hosted project no longer answers. `{}` takes the server's
+    /// defaults for every setting. When the database runs on another host the
+    /// object travels to it through the host channel.
+    #[arg(long, conflicts_with = "settings_json")]
     pub(super) settings_file: Option<std::path::PathBuf>,
+    /// The same object as `--settings-file`, as text: how a forwarded
+    /// placement receives the file this machine read.
+    #[arg(long)]
+    pub(super) settings_json: Option<String>,
     /// Write the configuration again from the project and restart the unit,
     /// even when the server is already placed.
     #[arg(long)]
@@ -208,10 +213,25 @@ pub(in crate::cli::database) async fn place(args: AuthPlaceArgs) -> Result<(), C
         port,
         from_project,
         settings_file,
+        settings_json,
         reconfigure,
         ready_within,
         json: json_output,
     } = args;
+    // Settings given instead of the provider's are read and checked here,
+    // before anything is placed: a file on this machine, or the text a
+    // forwarded placement received. They must be one JSON object.
+    let (settings_source, settings) = match (&settings_file, settings_json) {
+        (Some(file), _) => {
+            let text = std::fs::read_to_string(file).map_err(|error| {
+                CmdError::click(format!("the settings file {} cannot be read: {error}", file.display()))
+                    .stating(FailureCode::NotFound)
+            })?;
+            (Some(format!("the settings file {}", file.display())), Some(settings_object(&text, &file.display().to_string())?))
+        }
+        (None, Some(text)) => (Some("the settings given with --settings-json".to_string()), Some(settings_object(&text, "--settings-json")?)),
+        (None, None) => (None, None),
+    };
     let here = crate::cli::release_catalog::this_host().await?;
     let owner = owner_vault::locate().await?;
     let (item, fields) = super::dump::item_fields(&name, &owner).await?;
@@ -244,16 +264,17 @@ pub(in crate::cli::database) async fn place(args: AuthPlaceArgs) -> Result<(), C
         if let Some(reference) = &from_project {
             remote.push_str(&format!(" --from-project {reference}"));
         }
-        if settings_file.is_some() {
-            return Err(CmdError::usage(format!(
-                "--settings-file names a file on this machine, and {name}'s database runs on {host}: run \
-                 `stado database auth place` there with the file copied to it"
-            )));
-        }
+        let settings_text = settings.as_ref().map(Value::to_string);
         if reconfigure {
             remote.push_str(" --reconfigure");
         }
-        let arguments: Vec<&str> = remote.split_whitespace().collect();
+        let mut arguments: Vec<&str> = remote.split_whitespace().collect();
+        // The settings this machine read travel as one argument; the host
+        // channel carries every argument encoded, whatever it holds.
+        if let Some(text) = &settings_text {
+            arguments.push("--settings-json");
+            arguments.push(text);
+        }
         let output = crate::cli::host::remote_stado_output(host, &arguments)
             .await
             .map_err(|error| {
@@ -305,8 +326,8 @@ pub(in crate::cli::database) async fn place(args: AuthPlaceArgs) -> Result<(), C
             None => None,
         },
     };
-    let reference = match (&settings_file, &from_project, fields["project_ref"].as_str(), kept_reference) {
-        (Some(file), _, _, _) => format!("the settings file {}", file.display()),
+    let reference = match (&settings_source, &from_project, fields["project_ref"].as_str(), kept_reference) {
+        (Some(source), _, _, _) => source.clone(),
         (None, Some(reference), _, _) => reference.clone(),
         (None, None, Some(recorded), _) if !recorded.is_empty() => recorded.to_string(),
         (None, None, _, Some(kept)) if !kept.is_empty() => kept,
@@ -343,20 +364,8 @@ pub(in crate::cli::database) async fn place(args: AuthPlaceArgs) -> Result<(), C
         CmdError::click(format!("the sign-in server of {name} cannot be installed: {error:#}"))
             .stating(FailureCode::InfraDown)
     })?;
-    let settings = match &settings_file {
-        Some(file) => {
-            let text = std::fs::read_to_string(file).map_err(|error| {
-                CmdError::click(format!("the settings file {} cannot be read: {error}", file.display()))
-                    .stating(FailureCode::NotFound)
-            })?;
-            serde_json::from_str::<Value>(&text).map_err(|error| {
-                CmdError::usage(format!(
-                    "the settings file {} is not JSON: {error}; it holds one object in the shape the management \
-                     API answers for a project's auth configuration, `{{}}` for the server's defaults",
-                    file.display()
-                ))
-            })?
-        }
+    let settings = match settings {
+        Some(settings) => settings,
         None => super::supabase::auth_config(&reference).await.map_err(|error| {
             error.within(format!(
                 "the sign-in settings of project {reference} are read so {name}'s accounts sign in as they did; when \
@@ -510,4 +519,30 @@ fn answer(report: &Value, json_output: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     crate::cli::print_answer(report, false)
+}
+
+/// The sign-in settings `text` (from `source`) as the one JSON object the
+/// management API answers for a project's auth configuration; anything else
+/// is refused naming where it came from.
+fn settings_object(text: &str, source: &str) -> Result<Value, CmdError> {
+    let value = serde_json::from_str::<Value>(text).map_err(|error| {
+        CmdError::usage(format!(
+            "the sign-in settings in {source} are not JSON: {error}; they are one object in the shape the management \
+             API answers for a project's auth configuration, `{{}}` for the server's defaults"
+        ))
+    })?;
+    if !value.is_object() {
+        return Err(CmdError::usage(format!(
+            "the sign-in settings in {source} are {}, not one object in the shape the management API answers for a \
+             project's auth configuration (`{{}}` for the server's defaults)",
+            match &value {
+                Value::Array(_) => "an array",
+                Value::String(_) => "a string",
+                Value::Number(_) => "a number",
+                Value::Bool(_) => "a boolean",
+                _ => "null",
+            }
+        )));
+    }
+    Ok(value)
 }

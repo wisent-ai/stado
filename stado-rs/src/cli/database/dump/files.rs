@@ -202,13 +202,16 @@ pub(super) fn digest(archive: &Path) -> Result<(u64, String), CmdError> {
 }
 
 /// The backup kept in `directory`, proved before anything is restored from
-/// it: a migration whose source is gone (a provider that paused or deleted
-/// the project, so no new backup can be taken) restores the one this machine
-/// kept. Its manifest must name `name`, and its archive must hash to the
-/// SHA-256 the manifest recorded when the backup was read back; a directory
-/// that is no backup of `name`, an archive that is missing, and one whose
-/// bytes changed are each refused naming the file.
+/// it: a migration whose source no longer answers (so no new backup can be
+/// taken) restores the one this machine kept. Its manifest must name `name`,
+/// its archive must hash to the SHA-256 the manifest recorded when the backup
+/// was read back, and it must be the newest complete backup `stado database
+/// backups NAME` lists, since an older one would silently drop the writes a
+/// newer one holds; a directory that is no backup of `name`, an archive that
+/// is missing, one whose bytes changed, and an older backup are each refused
+/// naming the file.
 pub(super) fn kept_backup(name: &str, directory: &Path) -> Result<super::Backup, CmdError> {
+    let newest = kept(name)?.into_iter().find(|(_, manifest)| manifest.is_ok()).map(|(newest, _)| newest);
     let manifest_path = directory.join(super::MANIFEST);
     let text = std::fs::read_to_string(&manifest_path).map_err(|error| {
         CmdError::click(format!(
@@ -249,6 +252,14 @@ pub(super) fn kept_backup(name: &str, directory: &Path) -> Result<super::Backup,
             archive.display()
         ))
         .stating(FailureCode::Config));
+    }
+    let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Some(newest) = newest.filter(|newest| canonical(newest) != canonical(directory)) {
+        return Err(CmdError::usage(format!(
+            "{} is not the newest complete backup of {name}: {} is newer and holds writes this one does not, so restore that one (`stado database backups {name}` lists them)",
+            directory.display(),
+            newest.display()
+        )));
     }
     Ok(super::Backup { directory: directory.to_path_buf(), manifest })
 }
