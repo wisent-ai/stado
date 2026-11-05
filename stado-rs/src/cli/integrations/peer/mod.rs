@@ -32,7 +32,7 @@ pub(crate) fn cmd(error: PeerError) -> CmdError {
         PeerError::Usage(message) => CmdError::usage(message),
         PeerError::NotFound(message) => CmdError::missing(message),
         PeerError::Refused(message) => CmdError::refused(message),
-        PeerError::Credential(message) => CmdError::click(message).stating(FailureCode::Config),
+        PeerError::Credential(message, failure) => CmdError::click(message).stating(failure),
         PeerError::Storage(error) => CmdError::from(error),
         PeerError::Local(message) => CmdError::declaration(message),
     }

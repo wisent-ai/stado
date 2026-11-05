@@ -39,15 +39,18 @@ pub fn bearer_file(peer: &str) -> PathBuf {
 pub async fn install_bearer(peer: &PeerDeclaration) -> Result<PathBuf, PeerError> {
     let reading = read_role_field(&peer.credential_role, TOKEN_FIELD).await;
     let Some(token) = reading.key.clone() else {
-        return Err(PeerError::Credential(format!(
-            "no bearer for peer {} on this host: {}. `stado market readiness --provider stado \
-             --peer {}` reports whether the vault declares the item playing {} and which grant \
-             is missing",
-            peer.name,
-            reading.cause(),
-            peer.name,
-            peer.credential_role
-        )));
+        return Err(PeerError::Credential(
+            format!(
+                "no bearer for peer {} on this host: {}. `stado market readiness --provider \
+                 stado --peer {}` reports whether the vault declares the item playing {} and \
+                 which grant is missing",
+                peer.name,
+                reading.cause(),
+                peer.name,
+                peer.credential_role
+            ),
+            reading.failure_code(),
+        ));
     };
     let path = bearer_file(&peer.name);
     // Owner-only, whole and flushed with its directory, so the queue client

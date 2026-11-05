@@ -349,3 +349,8 @@ The version bump gathers them into the release's own file and removes this one.
   `bin_backups` cleaner takes, at the disk-full rule, every backup but each binary's newest, never
   the binary, its `.previous` rollback target or its coordinate. Test:
   `tests/space_reclaim/bin_backups.rs`.
+- **A credential that did not resolve states the class the vault answered with:** `stado market
+  status|list|unlist --provider vast` without a key, a peer fleet's bearer and the `stado data
+  export` key were always refused as `config`, so a vault that was down read as a setting to fix;
+  each now carries the credential channel's own class (`infra_down`, `refused`, `not_found`,
+  `config`), and readiness prints it as `skarbiec_failure`, shown on Stado Desktop's Earning screen.

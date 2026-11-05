@@ -13,6 +13,14 @@ pub enum VastError {
     /// Missing or malformed configuration: the key, the machine, a variable.
     #[error("{0}")]
     Config(String),
+    /// The API key did not resolve: the sentence, and the class of what the
+    /// credential channel answered (an unreachable vault is an outage, a
+    /// refused grant a refusal, only a missing item or channel is config).
+    #[error("{detail}")]
+    Credential {
+        detail: String,
+        failure: crate::primitives::failure::FailureCode,
+    },
     /// Vast.ai answered, and the answer is not usable: `status` is the HTTP
     /// status of a refusal, unset for a body that could not be read or is
     /// not JSON.
@@ -35,7 +43,7 @@ impl VastError {
     /// {error}" log line.
     pub(super) fn kind(&self) -> &'static str {
         match self {
-            VastError::Config(_) => "VastConfigError",
+            VastError::Config(_) | VastError::Credential { .. } => "VastConfigError",
             VastError::Api { .. } => "RuntimeError",
             VastError::Http(_) => "URLError",
             VastError::Storage(_) => "StorageError",
@@ -52,6 +60,7 @@ impl VastError {
         use crate::primitives::failure::FailureCode;
         match self {
             VastError::Config(_) => Some(FailureCode::Config),
+            VastError::Credential { failure, .. } => Some(*failure),
             VastError::Http(error) if error.is_timeout() => Some(FailureCode::Timeout),
             VastError::Http(_) | VastError::Api { status: None, .. } => {
                 Some(FailureCode::InfraDown)

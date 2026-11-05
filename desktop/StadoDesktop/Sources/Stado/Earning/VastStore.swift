@@ -48,6 +48,9 @@ struct VastReadiness: Decodable, Equatable, Sendable {
     let field: String
     let channel: Channel
     let skarbiecError: String?
+    /// The class of `skarbiecError`: `infra_down` for a vault that did not
+    /// answer, `refused`, `not_found`, or `config`.
+    let skarbiecFailure: String?
     let vaultHost: String?
     let vaultItemState: String?
     let vaultError: String?
@@ -78,6 +81,7 @@ struct VastReadiness: Decodable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case document, verdict, item, field, channel, remedy, isolation
         case skarbiecError = "skarbiec_error"
+        case skarbiecFailure = "skarbiec_failure"
         case vaultHost = "vault_host"
         case vaultItemState = "vault_item_state"
         case vaultError = "vault_error"

@@ -29,9 +29,10 @@ pub enum PeerError {
     /// The request contradicts what is already declared or running.
     #[error("{0}")]
     Refused(String),
-    /// The bearer for the peer did not resolve on this host.
+    /// The bearer for the peer did not resolve on this host: the sentence,
+    /// and the class of what the credential channel answered.
     #[error("{0}")]
-    Credential(String),
+    Credential(String, crate::primitives::failure::FailureCode),
     /// This fleet's store, or the peer's, did not answer.
     #[error("{0}")]
     Storage(#[from] StorageError),

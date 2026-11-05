@@ -360,9 +360,14 @@ async fn prices(
 async fn export_key(role: &str) -> Result<ring::hmac::Key, CmdError> {
     let reading = crate::providers::host_credential::read_role_field(role, KEY_FIELD).await;
     let Some(secret) = reading.key.as_deref().filter(|secret| secret.len() >= 32) else {
-        let cause = match &reading.key {
-            Some(_) => "it is shorter than 32 characters".to_string(),
-            None => reading.cause(),
+        // A key too short is this deployment's to replace; a key that did
+        // not resolve is classed by what the channel answered.
+        let (cause, failure) = match &reading.key {
+            Some(_) => (
+                "it is shorter than 32 characters".to_string(),
+                FailureCode::Config,
+            ),
+            None => (reading.cause(), reading.failure_code()),
         };
         return Err(CmdError::click(format!(
             "the export key {role}/{KEY_FIELD} cannot be used: {cause}; store a random key of at \
@@ -375,7 +380,7 @@ async fn export_key(role: &str) -> Result<ring::hmac::Key, CmdError> {
                 "<random key>"
             )
         ))
-        .stating(FailureCode::Config));
+        .stating(failure));
     };
     Ok(ring::hmac::Key::new(
         ring::hmac::HMAC_SHA256,

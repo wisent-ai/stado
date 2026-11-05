@@ -64,6 +64,9 @@ struct EarningView: View {
                 LabeledContent("Channel", value: readiness.channel.summary)
                 if let error = readiness.skarbiecError {
                     LabeledContent("Skarbiec", value: error)
+                    if let failure = readiness.skarbiecFailure {
+                        LabeledContent("Failure class", value: failure)
+                    }
                 }
                 if let host = readiness.vaultHost {
                     if let state = readiness.vaultItemState {

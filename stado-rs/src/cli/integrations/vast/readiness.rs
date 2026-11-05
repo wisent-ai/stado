@@ -110,6 +110,10 @@ pub(super) struct Readiness {
     pub field: &'static str,
     pub channel: HostCredentialChannel,
     pub skarbiec_error: Option<String>,
+    /// The class of `skarbiec_error`: `infra_down` for a vault that did not
+    /// answer, `refused` for a grant it refused, `not_found` for no item,
+    /// `config` for a bearer or setting of this host.
+    pub skarbiec_failure: Option<&'static str>,
     pub vault_host: Option<String>,
     pub vault_item_state: Option<crate::cli::host::VaultItemState>,
     pub vault_error: Option<String>,
@@ -147,6 +151,7 @@ pub(super) async fn assess(vault_host: Option<String>, ask_vault: bool) -> Readi
         field: FIELD,
         channel: reading.channel.clone(),
         skarbiec_error: reading.error.clone(),
+        skarbiec_failure: reading.failure.map(|failure| failure.as_str()),
         vault_host: None,
         vault_item_state: None,
         vault_error: None,

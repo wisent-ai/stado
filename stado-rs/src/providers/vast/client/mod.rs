@@ -63,12 +63,16 @@ impl VastClient {
     /// Resolve the key from `vast/api_key` in Skarbiec. The refusal names
     /// the channel that answered and what it said, because an empty key has
     /// three different causes and the operator needs the one in front of
-    /// them.
+    /// them, and states the class of what it said: a vault that did not
+    /// answer is an outage to wait out, not a configuration to change.
     pub async fn from_env() -> Result<Self, VastError> {
         let reading = read_vast_api_key().await;
         match reading.key.clone() {
             Some(key) => Ok(Self::new(key)),
-            None => Err(VastError::config(vast_refusal(&reading))),
+            None => Err(VastError::Credential {
+                detail: vast_refusal(&reading),
+                failure: reading.failure_code(),
+            }),
         }
     }
 

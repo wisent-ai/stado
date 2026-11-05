@@ -72,6 +72,27 @@ pub struct HostCredentialReading {
     pub field: String,
     pub channel: HostCredentialChannel,
     pub error: Option<String>,
+    /// The failure class of `error`, as the vault's own error states it:
+    /// an unreachable vault is `infra_down`, a refused grant `refused`, an
+    /// absent item `not_found`, a broken bearer or setting `config`. `None`
+    /// with no error. A command that needs the value refuses with this class,
+    /// so a vault that is down never reads as a configuration to fix.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "failure_name"
+    )]
+    pub failure: Option<crate::primitives::failure::FailureCode>,
+}
+
+/// A failure class by the name the fleet's vocabulary gives it.
+fn failure_name<S: serde::Serializer>(
+    failure: &Option<crate::primitives::failure::FailureCode>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match failure {
+        Some(code) => serializer.serialize_str(code.as_str()),
+        None => serializer.serialize_none(),
+    }
 }
 
 impl HostCredentialReading {
@@ -89,6 +110,14 @@ impl HostCredentialReading {
                 self.field
             ),
         }
+    }
+
+    /// The class a command that needed the value refuses with: the vault
+    /// error's own, or `config` when this host has no channel or the vault
+    /// holds no value, both of which are this deployment's to provision.
+    pub fn failure_code(&self) -> crate::primitives::failure::FailureCode {
+        self.failure
+            .unwrap_or(crate::primitives::failure::FailureCode::Config)
     }
 }
 
@@ -109,13 +138,27 @@ pub async fn read_role_field(role: &str, field: &str) -> HostCredentialReading {
     // as absent, the other channel answered, or the value read as missing.
     let control_plane_usable = match bearer_file(control_plane_bearer) {
         Ok(usable) => usable,
-        Err(cause) => return reading(role, field, control_plane_channel(), None, Some(cause)),
+        Err(cause) => {
+            return reading(
+                role,
+                field,
+                control_plane_channel(),
+                None,
+                Some((cause, crate::primitives::failure::FailureCode::Config)),
+            )
+        }
     };
     if control_plane_usable {
         let channel = control_plane_channel();
         return match crate::skarbiec::read_string(role, field).await {
             Ok(value) => reading(role, field, channel, value, None),
-            Err(err) => reading(role, field, channel, None, Some(err.to_string())),
+            Err(err) => reading(
+                role,
+                field,
+                channel,
+                None,
+                Some((err.to_string(), err.failure_code())),
+            ),
         };
     }
     let url = crate::config::agent_skarbiec_url();
@@ -127,7 +170,13 @@ pub async fn read_role_field(role: &str, field: &str) -> HostCredentialReading {
             let channel = HostCredentialChannel::None {
                 control_plane_token_file: control_plane_bearer.to_string(),
             };
-            return reading(role, field, channel, None, Some(cause));
+            return reading(
+                role,
+                field,
+                channel,
+                None,
+                Some((cause, crate::primitives::failure::FailureCode::Config)),
+            );
         }
     };
     if url.is_empty() || consumer.is_empty() || !agent_usable {
@@ -139,7 +188,10 @@ pub async fn read_role_field(role: &str, field: &str) -> HostCredentialReading {
             },
             None,
             crate::config::agent_skarbiec_url_absent().map(|cause| {
-                format!("agent.skarbiec.url names a service this host cannot resolve: {cause}")
+                (
+                    format!("agent.skarbiec.url names a service this host cannot resolve: {cause}"),
+                    crate::primitives::failure::FailureCode::Config,
+                )
             }),
         );
     }
@@ -162,7 +214,13 @@ pub async fn read_role_field(role: &str, field: &str) -> HostCredentialReading {
     .await
     {
         Ok(value) => reading(role, field, channel, value, None),
-        Err(err) => reading(role, field, channel, None, Some(err.to_string())),
+        Err(err) => reading(
+            role,
+            field,
+            channel,
+            None,
+            Some((err.to_string(), err.failure_code())),
+        ),
     }
 }
 
@@ -189,13 +247,18 @@ fn reading(
     field: &str,
     channel: HostCredentialChannel,
     value: Option<String>,
-    error: Option<String>,
+    error: Option<(String, crate::primitives::failure::FailureCode)>,
 ) -> HostCredentialReading {
+    let (error, failure) = match error {
+        Some((error, failure)) => (Some(error), Some(failure)),
+        None => (None, None),
+    };
     HostCredentialReading {
         key: value.filter(|key| !key.is_empty()),
         role: role.to_string(),
         field: field.to_string(),
         channel,
         error,
+        failure,
     }
 }
