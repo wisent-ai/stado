@@ -179,9 +179,14 @@ pub fn parse_board_samples(stdout: &str) -> Result<Vec<BoardSample>, String> {
     Ok(samples)
 }
 
-/// The boards' readings now: none on a host without `nvidia-smi`, the
+/// The boards' readings now: the NVIDIA boards `nvidia-smi` reports, and on
+/// macOS the package's draw from the declared power helper
+/// ([`package_sample`]); none on another host without `nvidia-smi`, the
 /// driver's refusal when it is installed and fails.
 async fn board_samples() -> Result<Vec<BoardSample>, String> {
+    if cfg!(target_os = "macos") {
+        return package_sample().await.map(|sample| vec![sample]);
+    }
     let output = match crate::wait::output_async(tokio::process::Command::new("nvidia-smi").args([
         "--query-gpu=uuid,utilization.gpu,power.draw",
         "--format=csv,noheader,nounits",
@@ -200,6 +205,88 @@ async fn board_samples() -> Result<Vec<BoardSample>, String> {
         ));
     }
     parse_board_samples(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// The board key a Mac's whole package is kept under: CPU, GPU and Neural
+/// Engine share one power domain, so the package is the one board an hour
+/// prices.
+pub const MACOS_PACKAGE: &str = "macos-package";
+
+/// One sample of a Mac's package from the declared power helper
+/// (`host.power_helper`): its combined draw (`processor.combined_power`,
+/// milliwatts) and, from the graphics sampler, whether the GPU was busy
+/// (`gpu.idle_ratio` below one). The helper is declared because
+/// `powermetrics` reads power only as root; an undeclared helper, a helper
+/// that fails, and a sample without those keys are each refused naming what
+/// is missing, so the hour says why this Mac's draw is absent.
+async fn package_sample() -> Result<BoardSample, String> {
+    let field = &crate::capabilities::HOST_POWER_HELPER_CONFIG;
+    let words: Vec<String> = match crate::config_file::field_value(field) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        Some(Value::String(text)) => text.split_whitespace().map(str::to_string).collect(),
+        Some(other) => {
+            return Err(format!(
+                "{} is {other}, not the helper's command words",
+                field.path
+            ))
+        }
+        None => Vec::new(),
+    };
+    let Some((program, args)) = words.split_first() else {
+        return Err(format!(
+            "{} ({}) is not declared, so this Mac's power is not read: declare the privileged helper \
+             that prints one `powermetrics --samplers cpu_power,gpu_power -n 1 -f plist` sample",
+            field.path, field.env
+        ));
+    };
+    let output = crate::wait::output_async(tokio::process::Command::new(program).args(args))
+        .await
+        .map_err(|error| format!("the power helper {program} could not run: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "the power helper {program} exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    parse_package_sample(&output.stdout)
+}
+
+/// One `powermetrics -f plist` sample as [`package_sample`] reads it.
+pub fn parse_package_sample(stdout: &[u8]) -> Result<BoardSample, String> {
+    // powermetrics ends each plist sample with a NUL byte.
+    let end = stdout
+        .iter()
+        .rposition(|byte| *byte != 0 && !byte.is_ascii_whitespace())
+        .map_or(0, |at| at + 1);
+    let sample = plist::Value::from_reader(std::io::Cursor::new(&stdout[..end]))
+        .map_err(|error| format!("the power helper printed no plist sample: {error}"))?;
+    let dict = sample
+        .as_dictionary()
+        .ok_or("the power helper's sample is not a dictionary")?;
+    let number = |section: &str, key: &str| -> Result<f64, String> {
+        let value = dict
+            .get(section)
+            .and_then(plist::Value::as_dictionary)
+            .and_then(|inner| inner.get(key))
+            .ok_or_else(|| format!("the power helper's sample has no {section}.{key}"))?;
+        value
+            .as_real()
+            .or_else(|| value.as_signed_integer().map(|integer| integer as f64))
+            .or_else(|| value.as_unsigned_integer().map(|integer| integer as f64))
+            .ok_or_else(|| format!("the power helper's {section}.{key} is not a number"))
+    };
+    let milliwatts = number("processor", "combined_power")?;
+    let idle_ratio = number("gpu", "idle_ratio")?;
+    Ok(BoardSample {
+        uuid: MACOS_PACKAGE.to_string(),
+        utilization_percent: ((1.0 - idle_ratio) * 100.0).max(0.0),
+        power_watts: milliwatts / 1000.0,
+    })
 }
 
 fn hour_of(at: DateTime<Utc>) -> Result<String, String> {

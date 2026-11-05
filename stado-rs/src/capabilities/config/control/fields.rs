@@ -142,6 +142,19 @@ pub const HOST_SWAP_CEILING_PCT_CONFIG: ConfigField = ConfigField::scalar(
     "host.swap_ceiling_pct",
 );
 
+/// The command words of this host's privileged power helper: a program the
+/// operator installs with the right to run `powermetrics` (macOS reads
+/// package power only as root) that prints one plist sample of the
+/// `cpu_power` and `gpu_power` samplers, such as `powermetrics --samplers
+/// cpu_power,gpu_power -n 1 -i 1000 -f plist`. Host hours read the package's
+/// draw and its graphics busy share from it; a macOS host without it states
+/// in each hour that its power was not read.
+pub const HOST_POWER_HELPER_CONFIG: ConfigField = ConfigField::list(
+    "host-power-helper",
+    "STADO_HOST_POWER_HELPER",
+    "host.power_helper",
+);
+
 /// The paths this host's Tailscale client may be at, first file wins, in place
 /// of the platform paths `remote::tailnet` lists.
 pub const TAILNET_CLIENTS_CONFIG: ConfigField = ConfigField::list(

@@ -278,3 +278,7 @@ The version bump gathers them into the release's own file and removes this one.
   `MarketAdapter` interface (list, unlist, status, earnings, maintenance, measure, serve-or-rent,
   readiness, monitor, follow, and the readiness rows of `stado capabilities market`), with Vast.ai
   and Stado peer fleets ported to it. A new marketplace is a catalog row and one adapter.
+- **A Mac host's hours carry its power:** host hours on macOS read the package's draw and GPU busy
+  share from the declared privileged helper `host.power_helper` (one `powermetrics` plist sample),
+  kept as the board `macos-package`, so `stado cost host` prices a Mac at its tariff; an undeclared
+  or failing helper is named in each hour's `unread`.
