@@ -195,6 +195,7 @@ pub async fn run_agent(
                 &store,
                 &sizing,
                 &consumer_id,
+                registry_target.as_ref().map(|target| target.name.as_str()),
                 kind,
                 &gpu_type,
                 total_vram_gb,

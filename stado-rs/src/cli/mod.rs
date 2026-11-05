@@ -29,6 +29,7 @@ pub mod contributions;
 pub mod cost;
 pub mod data;
 pub mod database;
+pub mod demand;
 pub mod directory;
 pub mod dns;
 pub mod doctor;

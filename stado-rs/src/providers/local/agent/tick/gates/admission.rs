@@ -20,6 +20,7 @@ pub(crate) async fn publish_and_admit(
     store: &JobStorage,
     sizing: &Sizing,
     consumer_id: &str,
+    target_name: Option<&str>,
     kind: &str,
     gpu_type: &str,
     total_vram_gb: i64,
@@ -130,8 +131,27 @@ pub(crate) async fn publish_and_admit(
             agent_diag.remove("swap_ceiling");
         }
     }
+    // A demand-response event naming this host: it claims nothing until the
+    // window ends, and its yieldable jobs go back to the queue below. An
+    // event list that cannot be read is said and does not shed load.
+    let demand = match target_name {
+        Some(host) => match crate::queue::demand::active_for(store, host).await {
+            Ok(event) => event,
+            Err(error) => {
+                log_fn(&format!("demand events unreadable, not shedding: {error}"));
+                agent_diag.insert(
+                    "demand_events_unread".into(),
+                    Value::from(error.to_string()),
+                );
+                None
+            }
+        },
+        None => None,
+    };
     let policy_reason = if queue_control.paused {
         Some("queue_paused")
+    } else if demand.is_some() {
+        Some("demand_response")
     } else if drain.is_some() {
         Some("drain_requested")
     } else if pressure_active {
@@ -178,6 +198,50 @@ pub(crate) async fn publish_and_admit(
             self_terminate(kind, log_fn).await;
             return Ok(Step::Stop);
         }
+        return Ok(Step::Done);
+    }
+    if let Some(event) = &demand {
+        agent_diag.insert(
+            "demand_event".into(),
+            Value::from(format!(
+                "{} ({}) until {}",
+                event.id, event.program, event.ends_at
+            )),
+        );
+        // Yieldable work is the interruptible load: each such slot runs its
+        // yield hook and goes back to the queue. Other work keeps running,
+        // since cutting it would lose it.
+        let mut index = 0;
+        while index < slots.len() {
+            if !slots[index].slot.job.yieldable {
+                index += 1;
+                continue;
+            }
+            let slot = slots.remove(index);
+            let job_id = slot.slot.job.job_id.clone();
+            match crate::providers::local::slots::request_yield(slot, store, log_fn).await {
+                Ok(true) => log_fn(&format!(
+                    "demand response {}: yielded {job_id} back to the queue",
+                    event.id
+                )),
+                Ok(false) => log_fn(&format!(
+                    "demand response {}: {job_id} did not yield",
+                    event.id
+                )),
+                Err(error) => log_fn(&format!(
+                    "demand response {}: yield of {job_id} failed: {error}",
+                    event.id
+                )),
+            }
+        }
+        log_fn(&format!(
+            "demand response {} ({}) until {}: claiming nothing, {} job(s) that do not yield keep \
+             running",
+            event.id,
+            event.program,
+            event.ends_at,
+            slots.len()
+        ));
         return Ok(Step::Done);
     }
     if let Some(reason) = drain {

@@ -201,6 +201,34 @@ pub async fn auto_list_loop(
                 "an inference reservation that cannot be read ({error})"
             )),
         };
+        // A demand-response event naming this host sheds the rental too: the
+        // machine is unlisted for the window. An event list or registry that
+        // cannot be read is said and does not unlist.
+        let held = match held {
+            Some(held) => Some(held),
+            None => match crate::providers::local::agent::lookup_self_auto(hostname).await {
+                Ok(Some(target)) => {
+                    match crate::queue::demand::active_for(store, &target.name).await {
+                        Ok(Some(event)) => Some(format!(
+                            "demand-response event {} ({}) until {}",
+                            event.id, event.program, event.ends_at
+                        )),
+                        Ok(None) => None,
+                        Err(error) => {
+                            log(&format!("demand events unreadable, not unlisting: {error}"));
+                            None
+                        }
+                    }
+                }
+                Ok(None) => None,
+                Err(error) => {
+                    log(&format!(
+                        "this host's registry target unreadable, demand events not read: {error}"
+                    ));
+                    None
+                }
+            },
+        };
         if let Some(held) = held {
             idle_since = None;
             if listed {

@@ -146,6 +146,32 @@ enum NativeRegistryOperations {
                   .init(id: "out", label: "Empty or new output directory", option: "--out", required: true),
                   .init(id: "key-role", label: "Credential role holding the export key", option: "--key-role", required: true),
               ], jsonOutput: false),
+        .init(id: "demand-event-list", title: "Grid demand-response events, newest first",
+              path: ["demand", "event", "list"], hostPlacement: .none, fields: [], mutates: false, jsonOutput: false),
+        .init(id: "demand-event-add", title: "Record a demand-response event: named hosts shed interruptible load in its window",
+              path: ["demand", "event", "add"], hostPlacement: .none, fields: [
+                  .init(id: "id", label: "Event id", required: true),
+                  .init(id: "program", label: "Program", option: "--program", required: true),
+                  .init(id: "host", label: "Registry target that sheds load", option: "--host", required: true, multiple: true),
+                  .init(id: "starts-at", label: "Window start (RFC 3339)", option: "--starts-at", required: true),
+                  .init(id: "ends-at", label: "Window end (RFC 3339)", option: "--ends-at", required: true),
+                  .init(id: "source", label: "Where the event was read", option: "--source", required: true),
+              ], jsonOutput: false),
+        .init(id: "demand-event-withdraw", title: "Withdraw a demand-response event",
+              path: ["demand", "event", "withdraw"], hostPlacement: .none, fields: [
+                  .init(id: "id", label: "Event id", required: true),
+              ], jsonOutput: false),
+        .init(id: "demand-event-paid", title: "Record what a demand-response program paid for an event",
+              path: ["demand", "event", "paid"], hostPlacement: .none, fields: [
+                  .init(id: "id", label: "Event id", required: true),
+                  .init(id: "amount", label: "Amount", option: "--amount", required: true),
+                  .init(id: "currency", label: "Currency", option: "--currency", required: true),
+                  .init(id: "source", label: "Where the payment was read", option: "--source", required: true),
+              ], jsonOutput: false),
+        .init(id: "demand-event-report", title: "What a demand-response event shed per host, and what it paid",
+              path: ["demand", "event", "report"], hostPlacement: .none, fields: [
+                  .init(id: "id", label: "Event id", required: true),
+              ], mutates: false, jsonOutput: false),
         .init(id: "inference-callers-list", title: "Outside callers of an inference deployment, with their limits and prices",
               path: ["inference", "callers", "list"], hostPlacement: .none, fields: [
                   .init(id: "deployment", label: "Deployment", required: true),

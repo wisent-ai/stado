@@ -251,3 +251,8 @@ The version bump gathers them into the release's own file and removes this one.
   start the job on an owned host at the cheapest hour that still finishes before the deadline,
   recorded as `deferred_start` with the cost of starting now beside it; no worker claims the job
   before its `not_before`.
+- **`stado demand event` sheds a host's interruptible load for a grid program:** a host could not
+  take part in demand response: nothing stopped its claims or rentals in a program's window. An
+  event recorded from the program's notice makes each named host claim nothing, yield its yieldable
+  jobs back to the queue and drop its Vast listing for the window; `report` reads the load shed from
+  the beacon hours and `paid` records the payment. Desktop's Registry screen manages events.

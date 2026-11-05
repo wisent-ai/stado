@@ -89,6 +89,11 @@ pub(crate) enum PlatformCommands {
     #[command(subcommand)]
     Data(crate::cli::data::DataCommands),
 
+    /// Grid demand-response events: hosts that shed their interruptible
+    /// load in a program's window, and what each event shed and paid.
+    #[command(subcommand)]
+    Demand(crate::cli::demand::DemandCommands),
+
     /// Manage the canonical compute-target registry in configured Stado storage.
     #[command(subcommand)]
     Registry(RegistryCommands),

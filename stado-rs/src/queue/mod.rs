@@ -41,6 +41,7 @@ pub mod capacity;
 mod contract;
 pub mod control;
 pub mod copy;
+pub mod demand;
 pub(crate) mod failover;
 pub mod gcs;
 pub mod leases;
