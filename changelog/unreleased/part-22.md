@@ -259,3 +259,8 @@ The version bump gathers them into the release's own file and removes this one.
 - **`stado capabilities select market --order` orders the sellers:** the market family's sellers
   were read in the catalog's order only. `capabilities.market.order` now sets which seller is read
   and offered first; an undeclared or repeated seller is refused.
+- **Only a service the catalog marks public gets a public origin:** nothing stopped a public origin,
+  edge route or Funnel being declared for any service, a model gateway or the vault among them. A
+  product's `service.public.reason` now states why a service is public (only the release channel
+  does); `stado web origin declare` and `converge` refuse any other service's origin naming it, and
+  `list` prints each origin's justification or `NOT JUSTIFIED`.

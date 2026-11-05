@@ -27,6 +27,9 @@ pub(crate) async fn converge(name: &str, apply: bool, json_output: bool) -> Resu
             "no public origin {name:?} is declared; declare it with `stado web origin declare`"
         ))
     })?;
+    // An origin declared before the catalog said which services may be
+    // public is held to the same rule before it is published again.
+    super::declare::refuse_unless_public(&origin).await?;
     if origin.publication == WEB_EDGE {
         return converge_web_edge(&origin, apply, json_output).await;
     }

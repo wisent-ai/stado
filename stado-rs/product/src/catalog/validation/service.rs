@@ -147,6 +147,25 @@ pub(super) fn validate(
             }
         }
     }
+    // A service with a public entry point says why: the public origin
+    // commands read this reason and refuse every other service.
+    if let Some(public) = service.get("public") {
+        public
+            .get("reason")
+            .and_then(Value::as_str)
+            .filter(|reason| !reason.trim().is_empty() && !reason.contains('\n'))
+            .with_context(|| {
+                format!(
+                    "{id}.service.public.reason must state, on one line, why the service is public"
+                )
+            })?;
+        if public
+            .as_object()
+            .is_some_and(|map| map.keys().any(|key| key != "reason"))
+        {
+            bail!("{id}.service.public: the one field is reason");
+        }
+    }
     // One service per repository, named for it: a product runs one
     // service per host, labelled com.wisent.<product>. A renamed product
     // keeps the label of a former id, which its hosts still run, until the

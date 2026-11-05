@@ -35,13 +35,36 @@ pub(crate) async fn list(json_output: bool) -> Result<(), CmdError> {
     })?;
     let origins = public_origin::declarations(&document);
     let authors = last_changed(&origins).await;
+    // Each origin's service and the catalog's reason it may be public; an
+    // origin the catalog does not allow is listed as such, so a public entry
+    // point nobody justified is seen, not hidden.
+    let registry = crate::targets::load_registry_from_value(&document);
+    let justified: Vec<Value> = origins
+        .iter()
+        .map(|origin| match &registry {
+            Ok(registry) => {
+                match public_origin::allowed::allowance(registry, &origin.target, &origin.upstream)
+                {
+                    Ok(allowance) => json!({
+                        "service": allowance.service,
+                        "reason": allowance.reason,
+                        "allowed": allowance.allowed(),
+                    }),
+                    Err(cause) => json!({"allowed": false, "unread": cause}),
+                }
+            }
+            Err(error) => json!({"allowed": false, "unread": error.to_string()}),
+        })
+        .collect();
     if json_output {
         let rows: Vec<Value> = origins
             .iter()
             .zip(&authors)
-            .map(|(origin, author)| {
+            .zip(&justified)
+            .map(|((origin, author), justification)| {
                 let mut row = declaration_row(origin);
                 row["last_changed"] = author.clone();
+                row["justification"] = justification.clone();
                 row
             })
             .collect();
@@ -52,9 +75,24 @@ pub(crate) async fn list(json_output: bool) -> Result<(), CmdError> {
         println!("no public origins are declared");
         return Ok(());
     }
-    for (origin, author) in origins.iter().zip(&authors) {
+    for ((origin, author), justification) in origins.iter().zip(&authors).zip(&justified) {
+        let why = match (
+            justification["allowed"].as_bool(),
+            justification["reason"].as_str(),
+            justification["unread"].as_str(),
+        ) {
+            (Some(true), Some(reason), _) => format!(
+                "public because: {reason} ({})",
+                justification["service"].as_str().unwrap_or("?")
+            ),
+            (_, _, Some(cause)) => format!("NOT JUSTIFIED: {cause}"),
+            _ => format!(
+                "NOT JUSTIFIED: the catalog does not mark {} public",
+                justification["service"].as_str().unwrap_or("its service")
+            ),
+        };
         println!(
-            "{} {} target={} publication={} upstream={} paths={} last_changed={}",
+            "{} {} target={} publication={} upstream={} paths={} last_changed={}; {why}",
             origin.name,
             origin.origin(),
             origin.target,

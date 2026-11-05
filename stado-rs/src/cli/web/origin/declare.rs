@@ -45,6 +45,7 @@ pub(crate) async fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError>
         upstream: request.upstream.to_string(),
         paths: request.paths.to_vec(),
     };
+    refuse_unless_public(&origin).await?;
     // A `web-edge` origin is published by the web declaration that owns its
     // hostname, through the fleet's edge host; declaring the origin while
     // either is missing would record a public claim no edge carries.
@@ -230,4 +231,28 @@ pub(crate) async fn remove(name: &str, json_output: bool) -> Result<(), CmdError
         println!("  the target's publication is unchanged; withdraw it with its own operation if that is what you meant");
     }
     Ok(())
+}
+
+/// Refuse an origin whose service the product catalog does not mark public
+/// (`service.public.reason`), naming the service and the field; the
+/// registry is read to find which service owns the upstream port.
+pub(super) async fn refuse_unless_public(origin: &PublicOrigin) -> Result<(), CmdError> {
+    let registry = crate::deploy::host_channel::canonical_registry()
+        .await
+        .map_err(|error| {
+            CmdError::from(error).within(format!(
+                "the service directory that says which service public origin {:?} would publish \
+                 could not be read",
+                origin.name
+            ))
+        })?;
+    let allowance = public_origin::allowed::allowance(&registry, &origin.target, &origin.upstream)
+        .map_err(|cause| {
+            CmdError::click(format!("refusing public origin {:?}: {cause}", origin.name))
+                .stating(FailureCode::Config)
+        })?;
+    match allowance.refusal(&origin.name) {
+        Some(refusal) => Err(CmdError::click(refusal).stating(FailureCode::Refused)),
+        None => Ok(()),
+    }
 }

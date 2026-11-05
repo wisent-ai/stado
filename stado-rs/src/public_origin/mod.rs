@@ -42,6 +42,7 @@
 
 use serde_json::Value;
 
+pub mod allowed;
 pub mod funnel;
 pub mod resolve;
 mod validate;
