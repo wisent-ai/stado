@@ -398,3 +398,8 @@ The version bump gathers them into the release's own file and removes this one.
   least what that work is worth per GPU-hour; the weighing is one function
   (`allocate::offer_or_queue`) shared with the Vast loop, each decision kept for `stado market
   decisions`.
+- **A network node runs only while the host meets its network's connection requirements:**
+  `stado market node add|edit --min-download-mbps --min-upload-mbps --requirements-source PAGE`
+  keeps what the network's own page requires; `follow` starts the node only while the host's
+  measured bandwidth is current and at or above it, naming the shortfall otherwise. Desktop's
+  Registry node operations take the fields. Test `tests/market/node_requirements.mjs`.

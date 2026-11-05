@@ -138,6 +138,21 @@ fn print_node(
     if let Some(deployment) = &declared.deployment {
         println!("  serves inference deployment {deployment} to its network");
     }
+    let wants = &declared.requirements;
+    if !wants.is_empty() {
+        let mut said = Vec::new();
+        if let Some(mbps) = wants.min_download_mbps {
+            said.push(format!("{mbps} Mbit/s down"));
+        }
+        if let Some(mbps) = wants.min_upload_mbps {
+            said.push(format!("{mbps} Mbit/s up"));
+        }
+        println!(
+            "  the network requires {} ({})",
+            said.join(", "),
+            wants.source.as_deref().unwrap_or("no source")
+        );
+    }
     if let Some(run) = run {
         println!("  last: {} ({})", run.state, run.changed_at);
     }
@@ -158,6 +173,7 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
             vram_gb,
             disk_gb,
             deployment,
+            requirements,
             json,
         } => {
             if node::load(&store, name).await.map_err(cmd)?.is_some() {
@@ -187,6 +203,7 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
                         disk_gb: *disk_gb,
                     },
                     deployment: deployment.clone(),
+                    requirements: requirements.given().unwrap_or_default(),
                     // Declaring is not offering: the operator offers the node
                     // with `edit --listed true` once it is ready to run.
                     listed: false,
@@ -206,20 +223,26 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
             vram_gb,
             disk_gb,
             deployment,
+            requirements,
             json,
         } => {
             let mut declared = node::require(&store, name).await.map_err(cmd)?;
+            let new_requirements = requirements.given();
             if listed.is_none()
                 && cpu_cores.is_none()
                 && ram_gb.is_none()
                 && vram_gb.is_none()
                 && disk_gb.is_none()
                 && deployment.is_none()
+                && new_requirements.is_none()
             {
                 return Err(CmdError::usage(
-                    "edit changes --listed, --cpu-cores, --ram-gb, --vram-gb, --disk-gb or \
-                     --deployment; none was given",
+                    "edit changes --listed, --cpu-cores, --ram-gb, --vram-gb, --disk-gb, \
+                     --deployment or the network requirements; none was given",
                 ));
+            }
+            if let Some(new_requirements) = new_requirements {
+                declared.requirements = new_requirements;
             }
             if let Some(listed) = listed {
                 declared.listed = *listed;
@@ -538,6 +561,8 @@ async fn follow(
             None => None,
         } {
             Some(cause)
+        } else if let Err(cause) = meets_requirements(store, &target, &current).await {
+            Some(cause)
         } else if let Err(cause) = earns_most(store, &current).await? {
             Some(cause)
         } else {
@@ -697,4 +722,43 @@ async fn earns_most(
     };
     let values = source_value::values(store, &declared.target, since).await?;
     Ok(source_value::may_run(&values, &declared.source))
+}
+
+/// Whether the node's host measures up to what its network requires of the
+/// connection: the host's latest beacon carries a current bandwidth
+/// measurement in both directions at or above the declared floors. A node
+/// that declares none needs nothing measured.
+async fn meets_requirements(
+    store: &JobStorage,
+    target: &crate::targets::ComputeTarget,
+    declared: &NodeDeclaration,
+) -> Result<(), String> {
+    let wants = &declared.requirements;
+    if wants.min_download_mbps.is_none() && wants.min_upload_mbps.is_none() {
+        return Ok(());
+    }
+    let beacons = crate::cli::registry::beacon_bodies(store)
+        .await
+        .map_err(|error| {
+            format!(
+                "{}'s beacon cannot be read for its bandwidth: {error}",
+                target.name
+            )
+        })?;
+    let block = crate::monitor::host_health::beacon_slugs(target, &target.name)
+        .iter()
+        .find_map(|slug| beacons.get(slug))
+        .and_then(|beacon| beacon.get("bandwidth"))
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "{}'s beacon carries no bandwidth block, so the connection {} requires is \
+                 unmeasured; declare host.bandwidth_probe",
+                target.name,
+                wants.source.as_deref().unwrap_or("the network")
+            )
+        })?;
+    let (download, upload) = crate::deploy::host_bandwidth::current(&block)
+        .map_err(|cause| format!("{}'s bandwidth is not current: {cause}", target.name))?;
+    wants.met_by(download, upload)
 }

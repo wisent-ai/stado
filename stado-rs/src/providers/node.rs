@@ -80,11 +80,89 @@ pub struct NodeDeclaration {
     /// carries no fleet work and the model's license chain is declared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment: Option<String>,
+    /// What the network requires of a host, as its own documentation states
+    /// it: the follow loop starts the node only while the host measures up,
+    /// naming the requirement it misses.
+    #[serde(default, skip_serializing_if = "NodeRequirements::is_empty")]
+    pub requirements: NodeRequirements,
     /// Whether the operator offers the node: the follow loop runs it only
     /// while this is true and the fleet's own queue is idle.
     pub listed: bool,
     pub declared_at: String,
     pub changed_at: String,
+}
+
+/// A network's published requirements of the host's connection, with the
+/// page that states them. Each is optional: a network that states none is
+/// held to none, and nothing here is a default Stado chose. Board memory is
+/// not one: the node's own `vram_gb` reservation is admitted through
+/// capacity, which refuses it where it does not fit.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeRequirements {
+    /// Download and upload the host's measured connection must carry, in
+    /// megabits per second.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_download_mbps: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_upload_mbps: Option<f64>,
+    /// The page of the network's documentation the figures were read from;
+    /// required with any of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+impl NodeRequirements {
+    pub fn is_empty(&self) -> bool {
+        self.min_download_mbps.is_none() && self.min_upload_mbps.is_none() && self.source.is_none()
+    }
+
+    fn validate(&self) -> Result<(), NodeError> {
+        let stated = self.min_download_mbps.is_some() || self.min_upload_mbps.is_some();
+        match (stated, self.source.as_deref().map(str::trim)) {
+            (true, None | Some("")) => {
+                return Err(NodeError::Usage(
+                    "a network requirement needs --requirements-source, the page of the \
+                     network's documentation that states it"
+                        .to_string(),
+                ))
+            }
+            (false, Some(_)) => {
+                return Err(NodeError::Usage(
+                    "--requirements-source names where requirements were read, and none was \
+                     given"
+                        .to_string(),
+                ))
+            }
+            _ => {}
+        }
+        let positive = |mbps: Option<f64>| mbps.is_none_or(|mbps| mbps.is_finite() && mbps > 0.0);
+        if !(positive(self.min_download_mbps) && positive(self.min_upload_mbps)) {
+            return Err(NodeError::Usage(
+                "--min-download-mbps and --min-upload-mbps must be above zero".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether a measured connection meets the requirements, or which one
+    /// it misses.
+    pub fn met_by(&self, download_mbps: f64, upload_mbps: f64) -> Result<(), String> {
+        let source = self.source.as_deref().unwrap_or("the network");
+        if let Some(need) = self.min_download_mbps.filter(|need| download_mbps < *need) {
+            return Err(format!(
+                "the host's measured download is {download_mbps:.1} Mbit/s, below the \
+                 {need} Mbit/s {source} requires"
+            ));
+        }
+        if let Some(need) = self.min_upload_mbps.filter(|need| upload_mbps < *need) {
+            return Err(format!(
+                "the host's measured upload is {upload_mbps:.1} Mbit/s, below the {need} \
+                 Mbit/s {source} requires"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// The follow loop's last transition for one node.
@@ -135,6 +213,7 @@ impl NodeDeclaration {
                     .to_string(),
             ));
         }
+        self.requirements.validate()?;
         Ok(())
     }
 }
