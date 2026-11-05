@@ -218,3 +218,8 @@ The version bump gathers them into the release's own file and removes this one.
   fleet object API hung, the check refused every commit with infra_down, because the last-known-good
   registry copy was past the resolver's max-stale. That bound guards placement, not a list of names
   to keep out of a commit, so the check now reads the copy however old, and says how old.
+- **`stado data export` publishes the fleet's measurements without naming hosts or customers:** the
+  hours, capacity publications and market prices Stado measures could only be shared as they are,
+  with host names, consumer ids and holders in them. The export writes one kind as JSON lines with a
+  manifest, hosts and boards replaced by keyed pseudonyms, times kept to the hour, and refuses a
+  field it declares neither kept nor dropped. Desktop's Registry screen runs it.

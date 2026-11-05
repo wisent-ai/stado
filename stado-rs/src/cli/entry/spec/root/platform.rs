@@ -84,6 +84,11 @@ pub(crate) enum PlatformCommands {
     #[command(subcommand)]
     Cost(CostCommands),
 
+    /// Publish the fleet's own measurements as a dataset that names no
+    /// host, customer or job.
+    #[command(subcommand)]
+    Data(crate::cli::data::DataCommands),
+
     /// Manage the canonical compute-target registry in configured Stado storage.
     #[command(subcommand)]
     Registry(RegistryCommands),

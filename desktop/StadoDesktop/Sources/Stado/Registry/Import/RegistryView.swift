@@ -139,6 +139,13 @@ enum NativeRegistryOperations {
                   .init(id: "target", label: "Registry target", required: true),
                   .init(id: "since-hours", label: "Hours back (the beacon keeps the last day)", option: "--since-hours", initial: "24"),
               ], mutates: false, jsonOutput: false),
+        .init(id: "data-export", title: "Export the fleet's measurements as a dataset naming no host, customer or job",
+              path: ["data", "export"], hostPlacement: .none, fields: [
+                  .init(id: "kind", label: "Kind", option: "--kind", required: true, choices: ["hours", "capacity", "prices"]),
+                  .init(id: "since-days", label: "Days back", option: "--since-days", initial: "30"),
+                  .init(id: "out", label: "Empty or new output directory", option: "--out", required: true),
+                  .init(id: "key-role", label: "Credential role holding the export key", option: "--key-role", required: true),
+              ], jsonOutput: false),
         .init(id: "market-earnings", title: "What a host earned on Vast.ai per day, beside its cost and margin",
               path: ["market", "earnings"], hostPlacement: .none, fields: [
                   .init(id: "target", label: "Registry target", option: "--target", required: true),
