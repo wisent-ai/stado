@@ -413,6 +413,12 @@ pub(crate) enum NodeCommands {
         /// the disk-full rule's threshold.
         #[arg(long = "disk-gb", default_value_t = 0)]
         disk_gb: i64,
+        /// The fleet's inference deployment an inference network's node
+        /// serves: declared on the same host, desired running, its license
+        /// chain declared; the node runs only while those hold and the board
+        /// carries no fleet work.
+        #[arg(long)]
+        deployment: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -431,6 +437,9 @@ pub(crate) enum NodeCommands {
         vram_gb: Option<i64>,
         #[arg(long = "disk-gb")]
         disk_gb: Option<i64>,
+        /// The inference deployment it serves; empty stops it serving one.
+        #[arg(long)]
+        deployment: Option<String>,
         #[arg(long)]
         json: bool,
     },

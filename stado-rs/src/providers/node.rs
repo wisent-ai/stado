@@ -70,6 +70,12 @@ pub struct NodeDeclaration {
     /// The service, as `stado service declare` named it on that host.
     pub service: String,
     pub reservation: NodeReservation,
+    /// The fleet's own inference deployment this node serves to its
+    /// network, when it is an inference network's node: the same engine,
+    /// model and board the registry declares, offered only while the board
+    /// carries no fleet work and the model's license chain is declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment: Option<String>,
     /// Whether the operator offers the node: the follow loop runs it only
     /// while this is true and the fleet's own queue is idle.
     pub listed: bool,

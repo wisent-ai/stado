@@ -306,3 +306,7 @@ The version bump gathers them into the release's own file and removes this one.
   --disk-gb` declares what a storage, RPC or indexing node's data may take; the beacon publishes
   `disk_headroom_gb` (what may be written before the 80 % rule), and `follow` starts the node only
   while its disk fits, naming why when it does not. Desktop's node operations take it.
+- **An inference network's node serves a fleet deployment:** `stado market node add|edit
+  --deployment NAME` names the fleet's own inference deployment the node serves; it is refused for a
+  deployment on another host, not desired running or under an unread or undeclared license, and
+  `follow` holds the node off while any of those fails or the board has fleet work.

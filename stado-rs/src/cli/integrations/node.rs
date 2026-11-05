@@ -62,6 +62,49 @@ async fn declared_service(target: &str, service: &str) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Whether the node may serve inference deployment `deployment` to its
+/// network now, or why not: it must be declared on the node's own host,
+/// desired running, and its model's license chain read and declared, since
+/// a model is never offered outside the fleet under an unread license.
+async fn served_deployment(target: &str, deployment: &str) -> Result<(), String> {
+    let document = crate::cli::registry::fetch_document()
+        .await
+        .map_err(|error| {
+            format!("the registry cannot be read for deployment {deployment}: {error}")
+        })?;
+    let registry = crate::inference::schema::parse(&document)
+        .map_err(|error| format!("the registry's inference section does not parse: {error}"))?;
+    let declared = registry
+        .deployments
+        .iter()
+        .find(|candidate| candidate.name == deployment)
+        .ok_or_else(|| format!("inference deployment {deployment} is not declared"))?;
+    if declared.target != target {
+        return Err(format!(
+            "inference deployment {deployment} runs on {}, not on the node's host {target}",
+            declared.target
+        ));
+    }
+    if declared.desired_state != crate::inference::schema::STATE_RUNNING {
+        return Err(format!(
+            "inference deployment {deployment} is not desired running"
+        ));
+    }
+    match &declared.model.license {
+        None => Err(format!(
+            "inference deployment {deployment}'s model license was never read, so it is not \
+             offered outside the fleet; plan the deployment again to read it"
+        )),
+        Some(license) if !license.undeclared().is_empty() => Err(format!(
+            "inference deployment {deployment}'s model chain declares no license for {}, so it is \
+             not offered outside the fleet ({})",
+            license.undeclared().join(", "),
+            license.summary()
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
 fn print_node(
     verb: &str,
     declared: &NodeDeclaration,
@@ -92,6 +135,9 @@ fn print_node(
             "withdrawn"
         }
     );
+    if let Some(deployment) = &declared.deployment {
+        println!("  serves inference deployment {deployment} to its network");
+    }
     if let Some(run) = run {
         println!("  last: {} ({})", run.state, run.changed_at);
     }
@@ -111,6 +157,7 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
             ram_gb,
             vram_gb,
             disk_gb,
+            deployment,
             json,
         } => {
             if node::load(&store, name).await.map_err(cmd)?.is_some() {
@@ -120,6 +167,11 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
             }
             known_source(source)?;
             declared_service(target, service).await?;
+            if let Some(deployment) = deployment {
+                served_deployment(target, deployment)
+                    .await
+                    .map_err(CmdError::refused)?;
+            }
             let now = chrono::Utc::now().to_rfc3339();
             let stored = node::save(
                 &store,
@@ -134,6 +186,7 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
                         vram_gb: *vram_gb,
                         disk_gb: *disk_gb,
                     },
+                    deployment: deployment.clone(),
                     // Declaring is not offering: the operator offers the node
                     // with `edit --listed true` once it is ready to run.
                     listed: false,
@@ -152,6 +205,7 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
             ram_gb,
             vram_gb,
             disk_gb,
+            deployment,
             json,
         } => {
             let mut declared = node::require(&store, name).await.map_err(cmd)?;
@@ -160,10 +214,11 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
                 && ram_gb.is_none()
                 && vram_gb.is_none()
                 && disk_gb.is_none()
+                && deployment.is_none()
             {
                 return Err(CmdError::usage(
-                    "edit changes --listed, --cpu-cores, --ram-gb, --vram-gb or --disk-gb; none \
-                     was given",
+                    "edit changes --listed, --cpu-cores, --ram-gb, --vram-gb, --disk-gb or \
+                     --deployment; none was given",
                 ));
             }
             if let Some(listed) = listed {
@@ -180,6 +235,17 @@ pub(crate) async fn dispatch(command: &NodeCommands) -> Result<(), CmdError> {
             }
             if let Some(disk_gb) = disk_gb {
                 declared.reservation.disk_gb = *disk_gb;
+            }
+            // An empty --deployment stops the node serving one.
+            if let Some(deployment) = deployment {
+                if deployment.is_empty() {
+                    declared.deployment = None;
+                } else {
+                    served_deployment(&declared.target, deployment)
+                        .await
+                        .map_err(CmdError::refused)?;
+                    declared.deployment = Some(deployment.clone());
+                }
             }
             declared.changed_at = chrono::Utc::now().to_rfc3339();
             let stored = node::save(&store, &declared).await.map_err(cmd)?;
@@ -458,6 +524,11 @@ async fn follow(
                 current.target, state.queued, state.running_here
             ))
         } else if let Err(cause) = disk_fits(store, &target, current.reservation.disk_gb).await {
+            Some(cause)
+        } else if let Some(Err(cause)) = match &current.deployment {
+            Some(deployment) => Some(served_deployment(&current.target, deployment).await),
+            None => None,
+        } {
             Some(cause)
         } else {
             None
