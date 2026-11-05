@@ -62,6 +62,20 @@ pub enum FleetCommands {
     /// Read what the running sandbox has used since its last start: CPU
     /// time, peak and current memory, processes and workspace size.
     Usage(Named),
+    /// Prove from inside the running sandbox that it reaches nothing of its
+    /// host: no address of the host's interfaces or gateway on any port the
+    /// host listens on; and that it runs under runsc, read-only, with every
+    /// capability dropped and only its own workspace mounted. Exits non-zero
+    /// naming every route or setting that fails. A sandbox sold to anyone
+    /// outside the fleet must pass it first.
+    Prove {
+        #[command(flatten)]
+        named: Named,
+        /// Seconds each connection attempt may take; one that times out did
+        /// not connect.
+        #[arg(long)]
+        connect_seconds: NonZeroU32,
+    },
     /// Execute inside the sandbox, optionally detached with retained output.
     Exec {
         #[command(flatten)]
@@ -148,6 +162,15 @@ async fn prepare(command: FleetCommands) -> Result<run::Request, CmdError> {
             Some(named.name),
             "usage",
             programs::usage().to_string(),
+        ),
+        FleetCommands::Prove {
+            named,
+            connect_seconds,
+        } => (
+            named.host.host,
+            Some(named.name),
+            "prove",
+            programs::prove(connect_seconds),
         ),
         FleetCommands::Exec {
             named,

@@ -1,0 +1,42 @@
+managed
+[ "$(docker inspect --format '{{.State.Running}}' "$container")" = true ] || fail "sandbox $name is not running; start it before proving its isolation"
+command -v ip >/dev/null || fail 'ip is missing; the host addresses cannot be read and nothing was proven'
+command -v ss >/dev/null || fail 'ss is missing; the host listeners cannot be read and nothing was proven'
+problems=()
+[ "$(docker inspect --format '{{.HostConfig.Runtime}}' "$container")" = runsc ] || problems+=("runtime is not runsc")
+[ "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$container")" = true ] || problems+=("root file system is writable")
+caps=$(docker inspect --format '{{json .HostConfig.CapDrop}}' "$container")
+case "$caps" in *'"ALL"'*) ;; *) problems+=("capabilities are not all dropped: $caps") ;; esac
+case "$(docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$container")" in *no-new-privileges*) ;; *) problems+=("no-new-privileges is not set") ;; esac
+while read -r kind source; do
+  [ -z "$kind" ] && continue
+  if [ "$kind" = tmpfs ]; then continue; fi
+  if [ "$kind" != volume ] || [ "$source" != "$volume" ]; then problems+=("mounts $kind $source from the host"); fi
+done < <(docker inspect --format '{{range .Mounts}}{{.Type}} {{.Name}}{{"\n"}}{{end}}' "$container")
+addresses=$(ip -4 -o addr show | while read -r _ _ _ cidr _; do printf '%s\n' "${cidr%%/*}"; done | sort -u)
+gateway=$(ip -4 route show default | while read -r _ _ via _; do printf '%s\n' "$via"; done | head -n 1)
+ports=$(ss -ltnH | while read -r _ _ _ local _; do printf '%s\n' "${local##*:}"; done | sort -un)
+[ -n "$addresses" ] || fail "the host's own addresses could not be read; nothing was proven"
+[ -n "$ports" ] || fail "the host's listening ports could not be read; nothing was proven"
+targets=()
+for address in $addresses $gateway; do
+  for port in $ports; do targets+=("$address:$port"); done
+done
+# An image without bash or timeout would answer "nothing reached" for
+# every target; the proof needs both, and says so instead.
+docker exec "$container" /bin/bash -c 'command -v timeout >/dev/null' \
+  || fail "the sandbox has no bash with timeout, so no connection could be tried from inside it; nothing was proven"
+reached=$(printf '%s\n' "${targets[@]}" | docker exec -i "$container" /bin/bash -c '
+while read -r target; do
+  if timeout "$1" bash -c "exec 3<>/dev/tcp/${target%:*}/${target##*:}" 2>/dev/null; then printf "%s\n" "$target"; fi
+done' prove "$connect_seconds") || fail "the connection attempts inside the sandbox ended abnormally: $reached"
+for target in $reached; do problems+=("the sandbox opened a connection to the host's $target"); done
+checked=${#targets[@]}
+if [ ${#problems[@]} -eq 0 ]; then
+  receipt "{\"isolated\":true,\"connections_tried\":$checked}"
+else
+  printf '%s\n' "${problems[@]}" >&2
+  listed=$(printf '%s\n' "${problems[@]}" | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/' | paste -sd, -)
+  receipt "{\"isolated\":false,\"connections_tried\":$checked,\"problems\":[$listed]}"
+  exit 1
+fi

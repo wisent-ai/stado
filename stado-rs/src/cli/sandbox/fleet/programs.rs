@@ -246,3 +246,16 @@ started=$(docker inspect --format '{{.State.StartedAt}}' "$container")
 receipt "{\"since\":\"$started\",\"cpu_usage_usec\":$usage,\"memory_peak_bytes\":$peak,\"memory_current_bytes\":$current,\"processes\":$processes,\"workspace_kib\":$workspace}"
 "#
 }
+
+/// The isolation proof a sandbox passes before it is handed to anyone
+/// outside the fleet (`prove.txt`), run from inside the sandbox against
+/// what the host itself holds: every IPv4 address of the host's interfaces
+/// and its default gateway, on every TCP port the host listens on; a
+/// connection that opens is a route out of the sandbox and fails the proof,
+/// naming it. It also requires runsc, a read-only root, every capability
+/// dropped, no-new-privileges, and no host mount but the sandbox's own
+/// workspace volume. `seconds` bounds each attempt; one that times out did
+/// not connect.
+pub fn prove(seconds: NonZeroU32) -> String {
+    format!("connect_seconds={seconds}\n{}", include_str!("prove.txt"))
+}

@@ -233,3 +233,9 @@ The version bump gathers them into the release's own file and removes this one.
   were charged for the host's deployments was kept but never added to the host's day. It now joins
   the day's income at each caller's declared price, and a caller with no price leaves the day
   without a margin.
+- **`stado sandbox fleet prove` proves a sandbox reaches nothing of its host:** a fleet sandbox ran
+  under gVisor with no network or a filtered one, but nothing showed, before handing one to an
+  outside party, that it could not reach the host's own services. `prove` tries from inside the
+  sandbox every host address and gateway on every port the host listens on, checks the runtime and
+  confinement settings, and fails naming each route or setting. Desktop's Fleet sandboxes screen
+  runs it.

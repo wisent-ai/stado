@@ -45,6 +45,12 @@ enum NativeFleetSandboxOperations {
                 .init(id: "name", label: "Sandbox name", required: true),
                 .init(id: "host", label: "Registered Linux host (empty: Stado chooses it)", option: "--host"),
             ], mutates: false, jsonOutput: false),
+        .init(id: "fleet-sandbox-prove", title: "Prove a running sandbox reaches nothing of its host before it is sold",
+            path: ["sandbox", "fleet", "prove"], hostPlacement: .none, fields: [
+                .init(id: "name", label: "Sandbox name", required: true),
+                .init(id: "host", label: "Registered Linux host (empty: Stado finds it)", option: "--host"),
+                .init(id: "connectSeconds", label: "Seconds each connection attempt may take", option: "--connect-seconds", required: true),
+            ], mutates: false, jsonOutput: false),
         .init(id: "fleet-sandbox-exec", title: "Execute inside a fleet sandbox",
             path: ["sandbox", "fleet", "exec"], hostPlacement: .none, fields: [
                 .init(id: "name", label: "Sandbox name", required: true),
