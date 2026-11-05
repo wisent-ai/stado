@@ -8,6 +8,61 @@ use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
 use crate::inference::{reservation::Reservation, schema::Deployment};
 use crate::targets::ComputeTarget;
 
+/// The environment variable the engine reads its bearer from: vLLM's own,
+/// or the one the declared engine names.
+pub(crate) fn key_variable(deployment: &Deployment) -> String {
+    match &deployment.engine.declared {
+        Some(declared) => declared.key_variable.clone(),
+        None => "VLLM_API_KEY".to_string(),
+    }
+}
+
+/// The image and arguments `docker run` is given, each word quoted. vLLM is
+/// started as Stado always started it; a declared engine gets its declared
+/// arguments, with `{model}`, `{revision}`, `{name}`, `{host}` and `{port}`
+/// replaced by the deployment's values.
+fn engine_command(deployment: &Deployment, max_model_len: u64, kv_cache: &str) -> String {
+    let port = deployment.endpoint.port.to_string();
+    let words: Vec<String> = match &deployment.engine.declared {
+        Some(declared) => std::iter::once(deployment.engine.image.clone())
+            .chain(declared.args.iter().map(|arg| {
+                arg.replace("{model}", &deployment.model.repository)
+                    .replace("{revision}", &deployment.model.revision)
+                    .replace("{name}", &deployment.name)
+                    .replace("{host}", &deployment.endpoint.host)
+                    .replace("{port}", &port)
+            }))
+            .collect(),
+        None => {
+            let mut words = vec![
+                deployment.engine.image.clone(),
+                "--model".to_string(),
+                deployment.model.repository.clone(),
+                "--revision".to_string(),
+                deployment.model.revision.clone(),
+                "--served-model-name".to_string(),
+                deployment.name.clone(),
+                "--host".to_string(),
+                deployment.endpoint.host.clone(),
+                "--port".to_string(),
+                port,
+                "--max-model-len".to_string(),
+                max_model_len.to_string(),
+            ];
+            words.extend(kv_cache.split_whitespace().map(str::to_string));
+            words.extend(
+                ["--enable-auto-tool-choice", "--tool-call-parser", "hermes"].map(str::to_string),
+            );
+            words
+        }
+    };
+    words
+        .iter()
+        .map(|word| shlex_quote(word))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub async fn install(
     target: &ComputeTarget,
     deployment: &Deployment,
@@ -121,7 +176,7 @@ fi
 printf '%s' {secret} | base64 --decode > "$root/api-key"
 printf '\n' >> "$root/api-key"
 chmod 600 "$root/api-key"
-printf 'VLLM_API_KEY=' > "$root/runtime.env"
+printf '%s=' {key_variable} > "$root/runtime.env"
 cat "$root/api-key" >> "$root/runtime.env"
 printf 'HF_HOME=/data/huggingface\n' >> "$root/runtime.env"
 chmod 600 "$root/runtime.env"
@@ -132,15 +187,12 @@ systemctl --user disable --now "$unit" || true
 rm -f "$HOME/.config/systemd/user/$unit"
 systemctl --user daemon-reload || true
 docker rm -f "stado-inference-$name" || true
-container=$(docker run --detach --restart unless-stopped --name "stado-inference-$name" --gpus {gpus} --network host --ipc host --env-file "$root/runtime.env" -v {cache_mount} {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len}{kv_cache_argument} --enable-auto-tool-choice --tool-call-parser hermes)
+container=$(docker run --detach --restart unless-stopped --name "stado-inference-$name" --gpus {gpus} --network host --ipc host --env-file "$root/runtime.env" -v {cache_mount} {engine_command})
 printf 'CONTAINER\t%s\n' "$container"
 printf 'STATUS\tstarted\n'
 "#,
-        raw_name = deployment.name,
-        raw_image = deployment.engine.image,
-        raw_repository = deployment.model.repository,
-        raw_revision = deployment.model.revision,
-        raw_endpoint_host = deployment.endpoint.host,
+        key_variable = shlex_quote(&key_variable(deployment)),
+        engine_command = engine_command(deployment, max_model_len, &kv_cache_argument),
     );
     let output = host_channel::run_script(target, &script, runner).await?;
     Ok(report(target, &output, "started"))

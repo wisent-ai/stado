@@ -55,6 +55,15 @@ pub enum InferenceCommands {
         /// Persistent host directory for the Hugging Face model cache.
         #[arg(long)]
         cache_dir: Option<String>,
+        /// What the deployment generates. text runs vLLM; image, video and
+        /// speech need --engine-file.
+        #[arg(long, value_enum, default_value_t = crate::inference::schema::Kind::Text)]
+        kind: crate::inference::schema::Kind,
+        /// JSON declaring the engine that serves a non-text kind:
+        /// {"name", "args", "key_variable", "ready_path", "generate_path",
+        /// "generate_body"}; Stado assumes no image, video or speech engine.
+        #[arg(long)]
+        engine_file: Option<std::path::PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -261,6 +270,8 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
             max_model_len,
             kv_cache_memory_gb,
             cache_dir,
+            kind,
+            engine_file,
             json,
         } => {
             lifecycle::plan(lifecycle::PlanOptions {
@@ -276,6 +287,8 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                 max_model_len,
                 kv_cache_memory_gb,
                 cache_dir,
+                kind,
+                engine_file,
                 json,
             })
             .await

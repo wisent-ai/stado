@@ -10,6 +10,55 @@ use serde::{Deserialize, Serialize};
 pub struct Engine {
     pub name: String,
     pub image: String,
+    /// How a declared engine (any engine but vLLM) is started and asked:
+    /// the operator's own declaration, since Stado assumes no image, video
+    /// or speech engine. Absent for vLLM, whose start Stado knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared: Option<DeclaredEngine>,
+}
+
+/// What Stado needs to run an engine it does not know by name: the
+/// arguments after the image, where the engine reads its bearer, the path
+/// that answers when it is ready, and the request that proves it generates.
+/// `{model}`, `{revision}`, `{name}`, `{host}` and `{port}` in an argument
+/// are replaced with the deployment's values.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DeclaredEngine {
+    pub args: Vec<String>,
+    /// The environment variable the engine reads its bearer from.
+    pub key_variable: String,
+    /// A GET path that answers 2xx with the bearer once the engine serves.
+    pub ready_path: String,
+    /// A POST path and body that make one generation of the deployment's
+    /// kind; a 2xx answer proves it generates.
+    pub generate_path: String,
+    pub generate_body: serde_json::Value,
+}
+
+/// What a deployment generates. A text deployment answers OpenAI
+/// chat-completions through vLLM; the others answer what their declared
+/// engine answers.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[value(rename_all = "lowercase")]
+pub enum Kind {
+    #[default]
+    Text,
+    Image,
+    Video,
+    Speech,
+}
+
+impl Kind {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Speech => "speech",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,6 +101,9 @@ pub struct Deployment {
     pub name: String,
     pub target: String,
     pub desired_state: String,
+    /// What it generates; a deployment declared before kinds is text.
+    #[serde(default)]
+    pub kind: Kind,
     pub engine: Engine,
     pub model: Model,
     pub resources: Resources,

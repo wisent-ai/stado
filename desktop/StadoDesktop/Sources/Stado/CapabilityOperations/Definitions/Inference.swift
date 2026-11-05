@@ -19,6 +19,8 @@ enum NativeInferenceOperations {
             .init(id: "gpu-mode", label: "GPU mode", option: "--gpu-mode", required: true, choices: ["exclusive", "yieldable"], initial: "exclusive"),
             .init(id: "kv-cache-memory-gb", label: "Fixed KV-cache GiB (blank uses the image policy)", option: "--kv-cache-memory-gb"),
             .init(id: "cache-dir", label: "Persistent model cache directory (blank uses the default)", option: "--cache-dir"),
+            .init(id: "kind", label: "What it generates: text runs vLLM; image, video and speech need an engine file", option: "--kind", choices: ["text", "image", "video", "speech"], initial: "text"),
+            .init(id: "engine-file", label: "Engine declaration JSON for image, video or speech (blank for text)", option: "--engine-file"),
         ]),
         .init(id: "inference-apply", title: "Apply a saved inference plan", path: ["inference", "apply"], hostPlacement: .none, fields: [
             .init(id: "plan-id", label: "Plan id the plan printed", required: true),

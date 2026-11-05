@@ -10,8 +10,8 @@ use super::names::{
     gateway_selector, identifier, immutable_revision, route_alias, safe_reference, sha256_image,
 };
 use super::{
-    parse, Visibility, ENGINE_VLLM, LOCAL_PROVIDER_CREDENTIAL, PROTOCOL_OPENAI_CHAT, STATE_RETIRED,
-    STATE_RUNNING,
+    parse, Visibility, ENGINE_VLLM, LOCAL_PROVIDER_CREDENTIAL, PROTOCOL_DECLARED,
+    PROTOCOL_OPENAI_CHAT, STATE_RETIRED, STATE_RUNNING,
 };
 
 pub fn validate(document: &Value) -> Result<(), String> {
@@ -61,10 +61,70 @@ pub fn validate(document: &Value) -> Result<(), String> {
         if deployment.desired_state == STATE_RUNNING {
             running_names.insert(deployment.name.as_str());
         }
-        if deployment.engine.name != ENGINE_VLLM || !sha256_image(&deployment.engine.image) {
+        if !sha256_image(&deployment.engine.image) {
             return Err(format!(
-                "{location}.engine: vllm image must be pinned by sha256 digest"
+                "{location}.engine.image: must be pinned by sha256 digest"
             ));
+        }
+        // A text deployment is served by vLLM, whose start Stado knows; any
+        // other kind is served by the engine the operator declares, and
+        // Stado assumes none.
+        match (deployment.kind, &deployment.engine.declared) {
+            (super::Kind::Text, None) if deployment.engine.name == ENGINE_VLLM => {}
+            (super::Kind::Text, None) => {
+                return Err(format!(
+                    "{location}.engine: a text deployment without a declared engine runs vllm"
+                ))
+            }
+            (_, None) => {
+                return Err(format!(
+                    "{location}.engine.declared: a {} deployment needs its engine declared (args, \
+                     key_variable, ready_path, generate_path, generate_body); Stado assumes no \
+                     {} engine",
+                    deployment.kind.word(),
+                    deployment.kind.word()
+                ))
+            }
+            (_, Some(declared)) => {
+                if !identifier(&deployment.engine.name) || deployment.engine.name == ENGINE_VLLM {
+                    return Err(format!(
+                        "{location}.engine.name: a declared engine is named by a lowercase \
+                         identifier other than vllm"
+                    ));
+                }
+                let variable = declared
+                    .key_variable
+                    .chars()
+                    .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_');
+                if declared.key_variable.is_empty() || !variable {
+                    return Err(format!(
+                        "{location}.engine.declared.key_variable: must be an upper-case \
+                         environment variable name"
+                    ));
+                }
+                for (field, path) in [
+                    ("ready_path", &declared.ready_path),
+                    ("generate_path", &declared.generate_path),
+                ] {
+                    if !path.starts_with('/')
+                        || path.chars().any(|ch| ch.is_whitespace() || ch == '\'')
+                    {
+                        return Err(format!(
+                            "{location}.engine.declared.{field}: must be an absolute URL path \
+                             with no space or quote"
+                        ));
+                    }
+                }
+                if declared
+                    .args
+                    .iter()
+                    .any(|arg| arg.chars().any(char::is_control))
+                {
+                    return Err(format!(
+                        "{location}.engine.declared.args: an argument holds a control character"
+                    ));
+                }
+            }
         }
         if !safe_reference(&deployment.model.repository, "/")
             || !immutable_revision(&deployment.model.revision)
@@ -149,10 +209,12 @@ pub fn validate(document: &Value) -> Result<(), String> {
                 ))
             }
         }
-        if endpoint.protocol != PROTOCOL_OPENAI_CHAT {
-            return Err(format!(
-                "{location}.endpoint.protocol: must be {PROTOCOL_OPENAI_CHAT}"
-            ));
+        let protocol = match &deployment.engine.declared {
+            Some(_) => PROTOCOL_DECLARED,
+            None => PROTOCOL_OPENAI_CHAT,
+        };
+        if endpoint.protocol != protocol {
+            return Err(format!("{location}.endpoint.protocol: must be {protocol}"));
         }
         if !ports.insert((endpoint.host.as_str(), endpoint.port)) {
             return Err(format!(

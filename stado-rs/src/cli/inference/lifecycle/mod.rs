@@ -17,6 +17,8 @@ pub struct PlanOptions {
     pub max_model_len: u64,
     pub kv_cache_memory_gb: Option<u64>,
     pub cache_dir: Option<String>,
+    pub kind: crate::inference::schema::Kind,
+    pub engine_file: Option<std::path::PathBuf>,
     pub json: bool,
 }
 
@@ -128,6 +130,7 @@ pub(super) fn mode_only_change(
         && current.name == candidate.name
         && current.target == candidate.target
         && current.desired_state == candidate.desired_state
+        && current.kind == candidate.kind
         && current.engine == candidate.engine
         && current.model == candidate.model
         && current.resources.max_model_len == candidate.resources.max_model_len

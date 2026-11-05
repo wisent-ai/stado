@@ -75,9 +75,13 @@ if [ "$state" != running ]; then
   printf 'ERROR\tinference container is %s\n' "$state"; false
 fi
 endpoint_host={endpoint_host}
-curl --fail --silent --show-error -H "Authorization: Bearer $token" "http://$endpoint_host:{port}/v1/models" >/dev/null
+curl --fail --silent --show-error -H "Authorization: Bearer $token" "http://$endpoint_host:{port}"{ready_path} >/dev/null
 printf 'READY\tauthenticated\n'
-"#
+"#,
+        ready_path = shlex_quote(match &deployment.engine.declared {
+            Some(declared) => declared.ready_path.as_str(),
+            None => "/v1/models",
+        })
     );
     let output = host_channel::run_script(target, &script, runner).await?;
     Ok(report(target, &output, "ready"))
@@ -91,20 +95,39 @@ pub async fn verify_completion(
 ) -> Result<Value, DeployError> {
     safe_runtime(deployment)?;
     let secret = shlex_quote(&STANDARD.encode(api_key));
-    let payload = shlex_quote(
-        &json!({
-            "model": deployment.name,
-            "messages": [{"role": "user", "content": "Reply with the single word ready."}],
-        })
-        .to_string(),
-    );
+    // One generation of the deployment's own kind: a chat completion from
+    // vLLM, or the request the declared engine names for its image, video
+    // or speech.
+    let (path, body) = match &deployment.engine.declared {
+        Some(declared) => (
+            declared.generate_path.clone(),
+            declared.generate_body.clone(),
+        ),
+        None => (
+            "/v1/chat/completions".to_string(),
+            json!({
+                "model": deployment.name,
+                "messages": [{"role": "user", "content": "Reply with the single word ready."}],
+            }),
+        ),
+    };
+    let payload = shlex_quote(&body.to_string());
+    let path = shlex_quote(&path);
     let port = deployment.endpoint.port;
     let endpoint_host = shlex_quote(&deployment.endpoint.host);
+    // A text answer is printed, so the operator reads what the model said;
+    // an image, video or audio answer is binary, so its status and size are.
+    let output_flags = match &deployment.engine.declared {
+        Some(_) => {
+            "--output /dev/null --write-out 'GENERATED\\t%{http_code}\\t%{size_download} bytes\\n'"
+        }
+        None => "",
+    };
     let script = format!(
         r#"set -euo pipefail
 token=$(printf '%s' {secret} | base64 --decode)
 endpoint_host={endpoint_host}
-curl --fail --silent --show-error -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data {payload} "http://$endpoint_host:{port}/v1/chat/completions"
+curl --fail --silent --show-error {output_flags} -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data {payload} "http://$endpoint_host:{port}"{path}
 printf '\n'
 "#
     );

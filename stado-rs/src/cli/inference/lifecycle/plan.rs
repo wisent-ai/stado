@@ -148,13 +148,69 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
             Ok(license) => (Some(license), None),
             Err(cause) => (None, Some(cause)),
         };
+    // A text deployment runs vLLM; any other kind runs the engine the
+    // operator declares in --engine-file, read here and checked with the
+    // rest of the registry below.
+    let (engine_name, declared) = match (&options.kind, &options.engine_file) {
+        (schema::Kind::Text, None) => (schema::ENGINE_VLLM.to_string(), None),
+        (_, Some(path)) => {
+            let text = std::fs::read_to_string(path).map_err(|error| {
+                CmdError::usage(format!(
+                    "--engine-file {} cannot be read: {error}",
+                    path.display()
+                ))
+            })?;
+            let document: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+                CmdError::usage(format!(
+                    "--engine-file {} is not JSON: {error}",
+                    path.display()
+                ))
+            })?;
+            let name = document["name"]
+                .as_str()
+                .ok_or_else(|| {
+                    CmdError::usage(format!(
+                        "--engine-file {} names no engine (\"name\")",
+                        path.display()
+                    ))
+                })?
+                .to_string();
+            let mut fields = document.clone();
+            if let Some(object) = fields.as_object_mut() {
+                object.remove("name");
+            }
+            let declared: schema::DeclaredEngine =
+                serde_json::from_value(fields).map_err(|error| {
+                    CmdError::usage(format!(
+                        "--engine-file {} is not an engine declaration (args, key_variable, \
+                     ready_path, generate_path, generate_body): {error}",
+                        path.display()
+                    ))
+                })?;
+            (name, Some(declared))
+        }
+        (kind, None) => {
+            return Err(CmdError::usage(format!(
+                "a {} deployment needs --engine-file declaring the engine that serves it; Stado \
+                 assumes no {} engine",
+                kind.word(),
+                kind.word()
+            )))
+        }
+    };
+    let protocol = match &declared {
+        Some(_) => schema::PROTOCOL_DECLARED,
+        None => schema::PROTOCOL_OPENAI_CHAT,
+    };
     let deployment = schema::Deployment {
         name: options.name,
         target: options.host,
         desired_state: schema::STATE_RUNNING.to_string(),
+        kind: options.kind,
         engine: schema::Engine {
-            name: schema::ENGINE_VLLM.to_string(),
+            name: engine_name,
             image: options.image,
+            declared,
         },
         model: schema::Model {
             repository: options.model,
@@ -172,7 +228,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
             host: endpoint_host,
             visibility: options.visibility.word().to_string(),
             port: options.port,
-            protocol: schema::PROTOCOL_OPENAI_CHAT.to_string(),
+            protocol: protocol.to_string(),
         },
         credential_item: schema::LOCAL_PROVIDER_CREDENTIAL.to_string(),
         previous: previous.map(Box::new),

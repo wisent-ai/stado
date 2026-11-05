@@ -26,7 +26,7 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
         println!("no inference deployments");
         return Ok(());
     }
-    println!("NAME\tHOST\tMODEL\tSTATE\tPORT\tLICENSE");
+    println!("NAME\tKIND\tENGINE\tHOST\tMODEL\tSTATE\tPORT\tLICENSE");
     for deployment in registry.deployments {
         // A deployment planned before the plan read licenses says so, apart
         // from one whose model declares none.
@@ -35,8 +35,10 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
             None => "not read; plan the deployment again".to_string(),
         };
         println!(
-            "{}\t{}\t{}@{}\t{}\t{}\t{license}",
+            "{}\t{}\t{}\t{}\t{}@{}\t{}\t{}\t{license}",
             deployment.name,
+            deployment.kind.word(),
+            deployment.engine.name,
             deployment.target,
             deployment.model.repository,
             deployment.model.revision,

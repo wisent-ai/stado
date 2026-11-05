@@ -239,3 +239,8 @@ The version bump gathers them into the release's own file and removes this one.
   sandbox every host address and gateway on every port the host listens on, checks the runtime and
   confinement settings, and fails naming each route or setting. Desktop's Fleet sandboxes screen
   runs it.
+- **Inference deployments serve image, video and speech models:** a deployment could only be a
+  vLLM text model. `stado inference plan --kind image|video|speech --engine-file FILE` declares the
+  engine that serves the kind (its arguments, bearer variable, readiness path and one generation
+  request); install, readiness, verify, routes, the license gate and outside callers work for every
+  kind. Desktop's inference plan takes both.

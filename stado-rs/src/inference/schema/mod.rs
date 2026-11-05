@@ -13,7 +13,7 @@ mod shapes;
 mod validate;
 
 pub use names::gateway_selector;
-pub use shapes::{Deployment, Endpoint, Engine, Model, Registry, Resources};
+pub use shapes::{DeclaredEngine, Deployment, Endpoint, Engine, Kind, Model, Registry, Resources};
 pub use validate::validate;
 
 pub const SECTION: &str = "inference";
@@ -92,6 +92,9 @@ impl std::fmt::Display for Visibility {
 }
 
 pub const PROTOCOL_OPENAI_CHAT: &str = "openai-chat";
+/// The protocol of a deployment whose declared engine answers its own
+/// request shape, named by the engine's declaration.
+pub const PROTOCOL_DECLARED: &str = "declared";
 pub const LOCAL_PROVIDER_CREDENTIAL: &str = "provider:local-openai";
 
 pub fn parse(document: &Value) -> Result<Registry, String> {
