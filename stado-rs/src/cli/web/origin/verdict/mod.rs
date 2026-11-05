@@ -94,7 +94,7 @@ pub(crate) async fn examine(
         "diagnostic-incomplete"
     };
     let problem = if complete {
-        origin_error(&resolution, &publication, edge, selection)
+        origin_error(origin, &resolution, &publication, edge, selection)
     } else {
         [
             &dns_read,
@@ -245,6 +245,7 @@ fn verdict_for(
 }
 
 fn origin_error(
+    origin: &PublicOrigin,
     resolution: &Resolution,
     publication: &PublicationReading,
     edge: &'static str,
@@ -253,20 +254,27 @@ fn origin_error(
     match resolution.state {
         // A name the node publishes with Funnel granted, which no public
         // resolver knows, is the tailnet's half that is missing — not this
-        // fleet's. Saying only "no public A or AAAA record" sent a reader to
-        // re-run `origin converge` against a host already doing everything it
-        // can, while every push to the stado repository stayed red on a 503
-        // from the release object route.
+        // fleet's, and nothing in this product can create that record. The
+        // way out the product owns is its own edge: the sentence names the
+        // exact declaration that moves the origin there, so a red push is
+        // answered with the command that ends it.
         ResolutionState::Unresolved if matches!(publication, PublicationReading::Read(read) if read.state() == "published") =>
         {
             format!(
-            "{} publishes every declared path with funnel enabled, and no public resolver knows \
-             that name: a ts.net name is served by the tailnet, so the grant this node holds is \
-             not the half that is missing. Repair it in the tailnet policy, or declare the \
-             origin the tailnet does serve. Detail: {}",
-            resolution.hostname, resolution.detail
+                "{} publishes every declared path with funnel enabled, and no public resolver \
+                 knows that name: a ts.net name is published by the tailnet's own control plane, \
+                 and no command of this product creates that record. Move the origin to the \
+                 fleet's own web edge: {}. Detail: {}",
+                resolution.hostname,
+                web_edge_way_out(origin),
+                resolution.detail
             )
         }
+        ResolutionState::Unresolved if origin.publication != WEB_EDGE => format!(
+            "{}; the fleet's own web edge serves it instead: {}",
+            resolution.detail,
+            web_edge_way_out(origin)
+        ),
         ResolutionState::Unavailable | ResolutionState::Unresolved => resolution.detail.clone(),
         ResolutionState::Resolved => match publication.state() {
             "published"
@@ -292,4 +300,30 @@ fn origin_error(
             _ => publication.detail(),
         },
     }
+}
+
+/// The commands that publish `origin` through the fleet's own web edge: a
+/// declared edge on a host the registry holds, a `stado web` declaration
+/// owning the new hostname, then the origin declared with `--publication
+/// web-edge` and converged.
+fn web_edge_way_out(origin: &PublicOrigin) -> String {
+    let paths = origin
+        .paths
+        .iter()
+        .map(|path| format!("--path {path}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let edge = match crate::config::web_api_edge() {
+        Ok(edge) => format!("the web edge is declared on {}", edge.target()),
+        Err(_) => "declare a web edge first with `stado web edge provision` or `stado web edge \
+                   declare`"
+            .to_string(),
+    };
+    format!(
+        "{edge}; `stado web declare <name> --hostname <hostname> --upstream-service <the service \
+         serving the paths>` and `stado web route <name>` put <hostname> behind it; then `stado \
+         web origin declare {} --hostname <hostname> --target {} --publication web-edge \
+         --upstream {} {paths}` and `stado web origin converge {} --apply`",
+        origin.name, origin.target, origin.upstream, origin.name
+    )
 }

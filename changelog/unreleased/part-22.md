@@ -354,3 +354,8 @@ The version bump gathers them into the release's own file and removes this one.
   export` key were always refused as `config`, so a vault that was down read as a setting to fix;
   each now carries the credential channel's own class (`infra_down`, `refused`, `not_found`,
   `config`), and readiness prints it as `skarbiec_failure`, shown on Stado Desktop's Earning screen.
+- **A public origin that does not resolve names the way to the fleet's own edge:** `stado web
+  origin status` for an origin whose name no public resolver knows (a Funnel `*.ts.net` name
+  included) now names the declared web edge, or the command that declares one, and the exact
+  `stado web declare`, `stado web route`, `web origin declare --publication web-edge` and
+  `converge` commands for that origin's own name, target, upstream and paths.
