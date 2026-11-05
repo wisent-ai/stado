@@ -99,6 +99,8 @@ pub struct CleanupReport {
     pub docker: CleanerReport,
     /// Build source snapshots under the store's `sources/` nothing names.
     pub source_snapshots: CleanerReport,
+    /// Backups of installed binaries under `~/.stado/bin`.
+    pub bin_backups: CleanerReport,
     /// Scratch trees their creators registered as the fleet's to remove.
     pub registered_scratch: CleanerReport,
     /// Xcode's per-project build directories under DerivedData.

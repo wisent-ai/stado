@@ -13,9 +13,10 @@ use crate::providers::local::space_reclaim::janitor::state::report::{
 use crate::providers::local::space_reclaim::janitor::STATE_VERSION;
 use crate::providers::local::space_reclaim::rule::{self, VolumeReading};
 use crate::providers::local::space_reclaim::{
-    agent_logs, backup_twins, build_caches, chromium_clones, compiler_cache, delivered_releases,
-    docker, job_outputs, local_snapshots, margin, object_evidence, package_caches, queue_workdirs,
-    registered_scratch, release_store, source_snapshots, xcode_derived_data,
+    agent_logs, backup_twins, bin_backups, build_caches, chromium_clones, compiler_cache,
+    delivered_releases, docker, job_outputs, local_snapshots, margin, object_evidence,
+    package_caches, queue_workdirs, registered_scratch, release_store, source_snapshots,
+    xcode_derived_data,
 };
 use crate::targets;
 
@@ -60,6 +61,7 @@ impl CleanupReport {
             package_caches: CleanerReport::default(),
             docker: CleanerReport::default(),
             source_snapshots: CleanerReport::default(),
+            bin_backups: CleanerReport::default(),
             largest_cargo_build: None,
             margin: None,
             lock_busy: false,
@@ -219,6 +221,7 @@ impl CleanupReport {
                 package_caches::CLEANER: cleaner(&self.package_caches),
                 docker::CLEANER: cleaner(&self.docker),
                 source_snapshots::CLEANER: cleaner(&self.source_snapshots),
+                bin_backups::CLEANER: cleaner(&self.bin_backups),
             })
         } else {
             Value::Null

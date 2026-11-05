@@ -21,8 +21,8 @@ use crate::providers::local::space_reclaim::janitor::policy::ownership;
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 use crate::providers::local::space_reclaim::janitor::state::report::CleanupReport;
 use crate::providers::local::space_reclaim::{
-    agent_logs, chromium_clones, compiler_cache, delivered_releases, docker, hf, local_snapshots,
-    object_evidence, weles,
+    agent_logs, bin_backups, chromium_clones, compiler_cache, delivered_releases, docker, hf,
+    local_snapshots, object_evidence, weles,
 };
 
 /// What one pass needs from outside the host's own filesystem.
@@ -95,6 +95,9 @@ pub(crate) async fn run_cleaners(
     // The copies release delivery stages for attestation; the installed and
     // newest version of each product stay.
     delivered_releases::scan_delivered_releases(home, enforcing, report);
+    // The backups installs leave beside each binary in ~/.stado/bin; the
+    // newest of each and the `.previous` rollback target stay.
+    bin_backups::scan_bin_backups(home, enforcing, report);
     // The compiler cache's store, which the next build reuses, the harness
     // logs running agents still append to, and the local snapshots pinning
     // blocks: taken only under pressure. A cache stays while a job runs,

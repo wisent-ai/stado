@@ -91,6 +91,11 @@ pub const CLEANERS: &[Cleaner] = &[
         sweeps: "delivered release copies no installed coordinate or binary names, keeping each product's newest",
     },
     Cleaner {
+        name: super::bin_backups::CLEANER,
+        root: super::bin_backups::BIN_ROOT,
+        sweeps: "backup copies installs leave beside each binary, keeping the newest of each and the .previous rollback target",
+    },
+    Cleaner {
         name: super::source_snapshots::CLEANER,
         root: ".stado/local-storage/ecosystem/sources",
         sweeps: "build source snapshots no catalog entry, live job or unfinished run names, keeping each product's newest",

@@ -344,3 +344,8 @@ The version bump gathers them into the release's own file and removes this one.
   catalog entry, live job or unfinished release, build or quality record names, keeping each
   product's newest and every pinned dependency input, and keeping everything while a record
   cannot be read. Test: `tests/space_reclaim/source_snapshots.rs`.
+- **The janitor removes old backups of installed binaries:** the backups an install leaves beside
+  each binary in `~/.stado/bin` were swept only by the hand-run `delivery_leftovers` stage; the new
+  `bin_backups` cleaner takes, at the disk-full rule, every backup but each binary's newest, never
+  the binary, its `.previous` rollback target or its coordinate. Test:
+  `tests/space_reclaim/bin_backups.rs`.

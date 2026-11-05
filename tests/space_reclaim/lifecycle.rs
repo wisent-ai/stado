@@ -5,6 +5,7 @@
 //! `hdiutil`, which needs no privileges there.
 #![cfg(target_os = "macos")]
 
+mod bin_backups;
 #[path = "guards/build_lock.rs"]
 mod build_lock;
 mod candidates;

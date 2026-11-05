@@ -18,6 +18,7 @@
 
 pub mod agent_logs;
 pub mod backup_twins;
+pub mod bin_backups;
 pub mod build_caches;
 pub mod candidates;
 pub mod chromium_clones;
