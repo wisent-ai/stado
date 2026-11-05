@@ -13,6 +13,7 @@ pub struct WebApiEdge {
     address: String,
     contact: String,
     registrar_credential: Option<String>,
+    probe_seconds: Option<u64>,
 }
 
 impl WebApiEdge {
@@ -35,6 +36,14 @@ impl WebApiEdge {
     pub fn registrar_credential(&self) -> Option<&str> {
         self.registrar_credential.as_deref()
     }
+
+    /// How long `stado web edge status` waits for one port to answer from
+    /// here before it reports no answer: the operator's, written by
+    /// `provision` and `declare`, so no operating-system timeout decides it.
+    /// Absent in a declaration written before it existed.
+    pub fn probe_seconds(&self) -> Option<u64> {
+        self.probe_seconds
+    }
 }
 
 pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Vec<String>> {
@@ -52,6 +61,7 @@ pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Ve
         address: Option<serde::de::IgnoredAny>,
         contact: Option<serde::de::IgnoredAny>,
         registrar_credential: Option<serde::de::IgnoredAny>,
+        probe_seconds: Option<serde::de::IgnoredAny>,
     }
     crate::config::boundaries::declared_fields::<Fields>(object, "web_api.edge", &mut problems);
     // Each required field is read as itself: absent, not a string, and a
@@ -101,12 +111,25 @@ pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Ve
             None
         }
     };
+    let probe_seconds = match entry.get("probe_seconds") {
+        None => None,
+        Some(value) => match value.as_u64() {
+            Some(seconds) if seconds > 0 => Some(seconds),
+            _ => {
+                problems.push(format!(
+                    "web_api.edge.probe_seconds must be a whole number of seconds above zero, not {value}"
+                ));
+                None
+            }
+        },
+    };
     match (target, address, contact, problems.is_empty()) {
         (Some(target), Some(address), Some(contact), true) => Ok(WebApiEdge {
             target,
             address,
             contact,
             registrar_credential,
+            probe_seconds,
         }),
         _ => Err(problems),
     }

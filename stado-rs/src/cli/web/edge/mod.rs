@@ -70,7 +70,7 @@ pub(in crate::cli::web) use declaring::{declared, registered};
 pub(in crate::cli::web) use serving::{deliver, mount, stado_routes};
 
 use declaring::declare;
-use provider::{provision, remove};
+use provider::{provision, remove, repair};
 use serving::{hostnames, status};
 
 /// The VM's `customData`, and deliberately inert.
@@ -109,22 +109,38 @@ pub(crate) async fn dispatch(command: EdgeCommands) -> Result<(), CmdError> {
             image,
             disk_gb,
             contact,
+            probe_seconds,
             json,
-        } => provision(&name, &region, &size, &image, disk_gb, &contact, json).await,
+        } => {
+            provision(
+                &name,
+                &region,
+                &size,
+                &image,
+                disk_gb,
+                &contact,
+                probe_seconds,
+                json,
+            )
+            .await
+        }
         EdgeCommands::Declare {
             target,
             address,
             contact,
             registrar_credential,
+            probe_seconds,
             json,
         } => declare(
             &target,
             &address,
             &contact,
             registrar_credential.as_deref(),
+            probe_seconds,
             json,
         ),
         EdgeCommands::Status { json } => status(json).await,
+        EdgeCommands::Repair { name, json } => repair(&name, json).await,
         EdgeCommands::Hostnames { json } => hostnames(json).await,
         EdgeCommands::Remove {
             orphan_hostnames,

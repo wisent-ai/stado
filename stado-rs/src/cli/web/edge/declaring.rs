@@ -64,6 +64,7 @@ pub(super) fn record(
     address: &str,
     contact: &str,
     registrar_credential: Option<&str>,
+    probe_seconds: Option<u64>,
 ) -> Result<(&'static str, Option<String>), CmdError> {
     let existing = crate::config_file::get("web_api.edge");
     let existed = existing.is_some();
@@ -73,6 +74,14 @@ pub(super) fn record(
             .and_then(|edge| edge.get("registrar_credential"))
             .and_then(|value| value.as_str())
             .map(str::to_string)
+    });
+    // The probe deadline is carried over like the credential: declaring the
+    // same edge again does not change how long its ports are waited for.
+    let probe_seconds = probe_seconds.or_else(|| {
+        existing
+            .as_ref()
+            .and_then(|edge| edge.get("probe_seconds"))
+            .and_then(|value| value.as_u64())
     });
     let target = target.to_string();
     let address = address.to_string();
@@ -84,6 +93,9 @@ pub(super) fn record(
         map.insert("contact".to_string(), json!(contact));
         if let Some(item) = &registrar_credential {
             map.insert("registrar_credential".to_string(), json!(item));
+        }
+        if let Some(seconds) = probe_seconds {
+            map.insert("probe_seconds".to_string(), json!(seconds));
         }
         Ok(())
     })?;
@@ -119,6 +131,7 @@ pub(super) fn declare(
     address: &str,
     contact: &str,
     registrar_credential: Option<&str>,
+    probe_seconds: Option<u64>,
     json_output: bool,
 ) -> Result<(), CmdError> {
     checked_declaration(target, contact)?;
@@ -133,7 +146,14 @@ pub(super) fn declare(
             "--registrar-credential must name a Skarbiec item".to_string(),
         ));
     }
-    let (change, registrar_credential) = record(target, address, contact, registrar_credential)?;
+    checked_probe(probe_seconds)?;
+    let (change, registrar_credential) = record(
+        target,
+        address,
+        contact,
+        registrar_credential,
+        probe_seconds,
+    )?;
     let report = json!({
         "target": target,
         "address": address,
@@ -145,6 +165,17 @@ pub(super) fn declare(
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!("{target} at {address}: {change} as the fleet's web edge");
+    }
+    Ok(())
+}
+
+/// A probe deadline of zero would report every port unanswered at once.
+pub(super) fn checked_probe(probe_seconds: Option<u64>) -> Result<(), CmdError> {
+    if probe_seconds == Some(0) {
+        return Err(CmdError::usage(
+            "--probe-seconds must be above zero: it is how long edge status waits for 80 and 443 \
+             to answer from here",
+        ));
     }
     Ok(())
 }

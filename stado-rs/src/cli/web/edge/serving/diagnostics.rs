@@ -1,5 +1,6 @@
-//! What the edge reports: whether its ports answer from the public internet,
-//! and how what it terminates compares with what the declarations ask for.
+//! What the edge reports: every security group between the Internet and it,
+//! whether its ports answer from the public internet, and how what it
+//! terminates compares with what the declarations ask for.
 
 use serde_json::{json, Value};
 
@@ -17,23 +18,68 @@ const HTTP_PORT: u16 = 80;
 /// https://www.rfc-editor.org/rfc/rfc9110#section-4.2.2
 const HTTPS_PORT: u16 = 443;
 
-/// Whether the edge answers a TCP connection on one port, from here.
+/// Whether the edge answers a TCP connection on one port, from here, within
+/// the edge's declared `probe_seconds`.
 ///
 /// From this machine deliberately: the operator's laptop is on the same public
 /// internet a visitor is, so an answer here is the fact that matters. A
 /// loopback check on the edge itself would pass with the security group shut.
-async fn answers(address: &str, port: u16) -> (bool, String) {
+/// The deadline is the declaration's, so a dropped packet is reported after
+/// the time the operator chose, not whenever the operating system gives up.
+async fn answers(address: &str, port: u16, probe_seconds: u64) -> (bool, String) {
     let endpoint = format!("{address}:{port}");
     let connected = crate::wait::until(
         crate::wait::Kind::Network,
         "a TCP connection to the edge from this machine",
         endpoint.as_str(),
-        tokio::net::TcpStream::connect(&endpoint),
+        async {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(probe_seconds),
+                tokio::net::TcpStream::connect(&endpoint),
+            )
+            .await
+            {
+                Ok(connected) => connected,
+                Err(_) => Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("no answer within {probe_seconds}s, the edge's declared probe_seconds"),
+                )),
+            }
+        },
     )
     .await;
     match connected {
         Ok(_) => (true, String::new()),
         Err(error) => (false, error.to_string()),
+    }
+}
+
+/// The security groups between the Internet and the edge, read before any
+/// connection: a group that drops a port names the cause before a probe
+/// waits out its deadline. An edge Stado did not provision, or an Azure
+/// scope that is not configured, is reported unread with why.
+async fn layers(edge: &WebApiEdge) -> Value {
+    let (client, resource_group) = match crate::cli::web::edge::provider::azure_scope() {
+        Ok(scope) => scope,
+        Err(error) => return json!({ "read": false, "detail": error.to_string() }),
+    };
+    match crate::cli::web::edge::provider::edge_path(&client, resource_group, edge.target()).await {
+        Ok(path) => {
+            let dropping: Vec<Value> = path
+                .layers
+                .iter()
+                .filter(|layer| !layer.drops().is_empty())
+                .map(|layer| {
+                    json!({
+                        "group": layer.group_name(),
+                        "level": layer.level,
+                        "ports": layer.drops(),
+                    })
+                })
+                .collect();
+            json!({ "read": true, "path": path.report(), "dropping": dropping })
+        }
+        Err(error) => json!({ "read": false, "detail": error.to_string() }),
     }
 }
 
@@ -77,8 +123,20 @@ async fn on_edge(edge: &WebApiEdge) -> Value {
 
 pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), CmdError> {
     let edge = declared()?;
-    let (http, http_detail) = answers(edge.address(), HTTP_PORT).await;
-    let (https, https_detail) = answers(edge.address(), HTTPS_PORT).await;
+    let Some(probe_seconds) = edge.probe_seconds() else {
+        return Err(CmdError::usage(format!(
+            "the edge {} declares no probe_seconds, so how long to wait for 80 and 443 is \
+             nobody's choice; `stado web edge declare --target {} --address {} --contact {} \
+             --probe-seconds N` records it",
+            edge.target(),
+            edge.target(),
+            edge.address(),
+            edge.contact()
+        )));
+    };
+    let network = layers(edge).await;
+    let (http, http_detail) = answers(edge.address(), HTTP_PORT, probe_seconds).await;
+    let (https, https_detail) = answers(edge.address(), HTTPS_PORT, probe_seconds).await;
     let routes = stado_routes().await?;
     let terminating: Vec<&String> = routes.iter().map(|(hostname, _)| hostname).collect();
     let local = if http && https {
@@ -91,6 +149,8 @@ pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), C
         "address": edge.address(),
         "contact": edge.contact(),
         "unit": HOST_UNIT,
+        "probe_seconds": probe_seconds,
+        "network": network,
         "http": { "port": HTTP_PORT, "answers": http, "detail": http_detail },
         "https": { "port": HTTPS_PORT, "answers": https, "detail": https_detail },
         "on_edge": local,
@@ -113,6 +173,23 @@ pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), C
             word(http, &http_detail),
             word(https, &https_detail),
         );
+        if network["read"] == true {
+            for layer in network["dropping"].as_array().into_iter().flatten() {
+                println!(
+                    "the {} security group {} drops {}: `stado web edge repair {}` allows them to \
+                     the edge's address only",
+                    layer["level"].as_str().unwrap_or_default(),
+                    layer["group"].as_str().unwrap_or_default(),
+                    layer["ports"],
+                    edge.target()
+                );
+            }
+        } else {
+            println!(
+                "security groups: not read: {}",
+                network["detail"].as_str().unwrap_or("no detail")
+            );
+        }
         if local["read"] == true {
             println!(
                 "on {} itself: {HOST_UNIT} {} — {}",
@@ -168,7 +245,13 @@ pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), C
             );
         }
     }
-    Ok(())
+    // A status that succeeds while the edge is unreachable cannot be used as
+    // a gate; the report above says why, and the exit says that it failed.
+    if http && https {
+        Ok(())
+    } else {
+        Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE))
+    }
 }
 
 /// The reconcile, read-only.

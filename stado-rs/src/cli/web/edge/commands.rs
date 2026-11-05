@@ -28,6 +28,10 @@ pub(crate) enum EdgeCommands {
         /// Address Let's Encrypt sends certificate-expiry mail to.
         #[arg(long)]
         contact: String,
+        /// Seconds `edge status` waits for 80 and 443 to answer from the
+        /// machine it runs on before reporting no answer.
+        #[arg(long)]
+        probe_seconds: u64,
         /// Emit machine-readable output.
         #[arg(long)]
         json: bool,
@@ -52,12 +56,33 @@ pub(crate) enum EdgeCommands {
         /// Kept from the earlier declaration when omitted.
         #[arg(long)]
         registrar_credential: Option<String>,
+        /// Seconds `edge status` waits for 80 and 443 to answer before
+        /// reporting no answer. Kept from the earlier declaration when
+        /// omitted; `edge status` refuses an edge that declares none.
+        #[arg(long)]
+        probe_seconds: Option<u64>,
         /// Emit machine-readable output.
         #[arg(long)]
         json: bool,
     },
-    /// The declared edge, whether it answers, and what it terminates.
+    /// The declared edge, every security group between the Internet and it,
+    /// whether its ports answer, and what it terminates.
     Status {
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Open 80 and 443 in every security group between the Internet and
+    /// the edge that drops them, to the edge's own private address only.
+    ///
+    /// Azure applies the subnet's group before the interface's and each
+    /// must allow a connection; a group with no allow ends in its default
+    /// deny. The allow names the edge interface's address, never the subnet,
+    /// so no other machine of the subnet is opened. A group outside
+    /// AZURE_RESOURCE_GROUP is refused, naming the rule it needs.
+    Repair {
+        /// The edge's name, as `provision` created it.
+        name: String,
         /// Emit machine-readable output.
         #[arg(long)]
         json: bool,

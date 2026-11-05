@@ -314,3 +314,11 @@ The version bump gathers them into the release's own file and removes this one.
   --provider vast` and the follow loop no longer list a host while an inference reservation or any
   process holds board memory, naming the holder; `list` also refuses a host that is not isolated,
   as the loop already did.
+- **The web edge's whole path from the Internet is read and opened:** `stado web edge status` reads
+  every security group between the Internet and the edge's interface (the subnet's first, as Azure
+  applies them) and names one that drops 80 or 443 before it connects; `stado web edge repair NAME`
+  writes an allow to the edge interface's private address only into each such group, refusing a
+  group outside `AZURE_RESOURCE_GROUP` with the rule it needs; `provision` runs the same step. Each
+  probe waits the edge's declared `probe_seconds` (`provision|declare --probe-seconds`), and status
+  exits non-zero while a port does not answer. Stado Desktop's Network operations carry every
+  `web edge` verb. Test: `tests/web/edge_rules.mjs` against real Azure groups it creates and deletes.

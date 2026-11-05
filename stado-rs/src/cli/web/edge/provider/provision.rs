@@ -21,9 +21,11 @@ pub(in crate::cli::web::edge) async fn provision(
     image: &str,
     disk_gb: i64,
     contact: &str,
+    probe_seconds: u64,
     json_output: bool,
 ) -> Result<(), CmdError> {
     checked_declaration(name, contact)?;
+    super::super::declaring::checked_probe(Some(probe_seconds))?;
     let subscription = config::azure_subscription_id();
     if subscription.is_empty() {
         return Err(CmdError::click(
@@ -263,7 +265,19 @@ pub(in crate::cli::web::edge) async fn provision(
         ));
     }
 
-    let (change, _) = record(name, &address, contact, None)?;
+    let (change, _) = record(name, &address, contact, None, Some(probe_seconds))?;
+    // The interface's own group allows 80 and 443, and the subnet's group,
+    // applied first, may not: every layer is opened to this interface alone
+    // before provision answers. A failure leaves the edge recorded, since
+    // `stado web edge repair` finishes it without a new VM.
+    let opened = match super::repair::edge_path(&client, resource_group, name).await {
+        Ok(path) => super::repair::open_path(&client, resource_group, name, &path).await,
+        Err(error) => Err(error),
+    };
+    let (opened, open_refusal) = match opened {
+        Ok((written, _)) => (written, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
     let report = json!({
         "target": name,
         "address": address,
@@ -272,13 +286,26 @@ pub(in crate::cli::web::edge) async fn provision(
         "size": size,
         "image": image,
         "disk_gb": disk_gb,
+        "probe_seconds": probe_seconds,
         "subscription": subscription,
         "resource_group": resource_group,
         "public_ip": address_name,
         "security_group": group_name,
         "network_interface": interface_name,
+        "opened": opened,
+        "open_refusal": open_refusal,
         "change": change,
     });
+    if let Some(cause) = &open_refusal {
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        return Err(CmdError::refused(format!(
+            "{name} at {address} was created and {change} as the fleet's web edge, but its path \
+             from the Internet is not open: {cause}; `stado web edge repair {name}` opens it once \
+             that is resolved"
+        )));
+    }
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {

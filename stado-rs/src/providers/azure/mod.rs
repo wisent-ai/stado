@@ -50,6 +50,7 @@ mod arm;
 mod builders;
 pub mod cloud_host;
 pub(crate) mod credit;
+pub mod layers;
 pub mod network;
 mod power;
 mod provider;

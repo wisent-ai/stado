@@ -7,9 +7,11 @@ use super::{mutate_web, CmdError};
 
 mod provision;
 mod removal;
+mod repair;
 
 pub(in crate::cli::web::edge) use provision::provision;
 pub(in crate::cli::web::edge) use removal::remove;
+pub(in crate::cli::web::edge) use repair::{azure_scope, edge_path, repair};
 
 /// The `wisent_role` tag every edge resource carries.
 const EDGE_ROLE_TAG: &str = "web-edge";
