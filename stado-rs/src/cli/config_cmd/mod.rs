@@ -16,11 +16,16 @@ use document::{init, migrate_identities, validate};
 use keys::{set, unset};
 use show::{get, show};
 
-pub fn run(sub: &str, key: Option<&str>, value: Option<&str>, json: bool) -> Result<(), CmdError> {
+pub async fn run(
+    sub: &str,
+    key: Option<&str>,
+    value: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
     match sub {
         "init" => init(),
         "migrate" => migrate_identities(),
-        "validate" => validate(),
+        "validate" => validate().await,
         "show" => show(json),
         "get" => match key {
             Some(key) => get(key),

@@ -16,7 +16,13 @@ use crate::cli::CmdError;
 /// state file whose publisher no longer runs is no resolver: it is said in a
 /// `NOTE ...` line, which the install relays, and asks nothing of the
 /// configuration.
-pub(in crate::cli::config_cmd) fn validate() -> Result<(), CmdError> {
+///
+/// A declared public edge must sit on a host the registry holds, since every
+/// hostname it terminates is delivered to that host's Stado. The registry is
+/// read without its authority (the store on this disk, else this host's
+/// last-known-good copy), so an install's validation never waits on a remote
+/// read; a host that holds neither says so in a `NOTE` and is not refused.
+pub(in crate::cli::config_cmd) async fn validate() -> Result<(), CmdError> {
     let data = config_file::load_config_file().map_err(CmdError::from)?;
     let mut problems = config_file::validate(&Value::Object(data.clone()));
     match crate::cli::resolver::host_resolver() {
@@ -28,6 +34,19 @@ pub(in crate::cli::config_cmd) fn validate() -> Result<(), CmdError> {
             "NOTE {said}; the long-lived SSH session a resolver holds is not asked of this \
              configuration"
         ),
+    }
+    if let Ok(edge) = crate::config::web_api_edge() {
+        match crate::targets::registry_without_authority("checking the public edge's host").await {
+            Ok((registry, _)) => {
+                if matches!(registry.lookup_identity(edge.target()), Ok(None)) {
+                    problems.push(crate::cli::web::unregistered_edge_refusal(edge.target()));
+                }
+            }
+            Err(cause) => println!(
+                "NOTE the public edge's host {} was not checked against the registry: {cause}",
+                edge.target()
+            ),
+        }
     }
     if !problems.is_empty() {
         for problem in problems {

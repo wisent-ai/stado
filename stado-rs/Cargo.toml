@@ -503,6 +503,10 @@ name = "web-declared-override"
 path = "../tests/web/declared_override.rs"
 
 [[test]]
+name = "web-edge-target"
+path = "../tests/web/edge_target.rs"
+
+[[test]]
 name = "directory-connect-not-serving"
 path = "../tests/directory_connect/not_serving.rs"
 

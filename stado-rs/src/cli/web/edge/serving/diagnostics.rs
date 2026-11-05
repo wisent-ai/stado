@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 
-use super::super::{declared, registered, HOST_UNIT};
+use super::super::{registered, HOST_UNIT};
 use super::{deliver, stado_routes, CmdError};
 use crate::config::WebApiEdge;
 use crate::deploy::{production_runner, service_serving};
@@ -122,7 +122,9 @@ async fn on_edge(edge: &WebApiEdge) -> Value {
 }
 
 pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), CmdError> {
-    let edge = declared()?;
+    // An edge on a host the registry does not hold is refused here, as route
+    // and hostnames refuse it, with the commands that register or create it.
+    let edge = registered().await?;
     let Some(probe_seconds) = edge.probe_seconds() else {
         return Err(CmdError::usage(format!(
             "the edge {} declares no probe_seconds, so how long to wait for 80 and 443 is \

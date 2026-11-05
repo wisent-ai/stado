@@ -322,3 +322,7 @@ The version bump gathers them into the release's own file and removes this one.
   probe waits the edge's declared `probe_seconds` (`provision|declare --probe-seconds`), and status
   exits non-zero while a port does not answer. Stado Desktop's Network operations carry every
   `web edge` verb. Test: `tests/web/edge_rules.mjs` against real Azure groups it creates and deletes.
+- **An edge on a host the registry does not hold is refused where it is read:** `stado config
+  validate` (from the registry the store or this host's last-known-good copy holds) and `stado web
+  edge status` refuse it as route, hostnames and origin declare already did, with one sentence
+  naming the host and the full provision and declare commands. Test: `tests/web/edge_target.rs`.

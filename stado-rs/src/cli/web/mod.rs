@@ -49,6 +49,7 @@ use super::CmdError;
 
 pub(crate) use builds::PLATFORM as WEB_PLATFORM;
 pub(crate) use edge::role::run as edge_role;
+pub(crate) use edge::unregistered_refusal as unregistered_edge_refusal;
 pub(crate) use plane::{
     declare, list, mutate_web, product, remove, DeclareRequest, Upstream, WebCommands,
 };

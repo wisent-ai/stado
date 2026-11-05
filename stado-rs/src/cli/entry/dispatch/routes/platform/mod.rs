@@ -24,7 +24,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
             key,
             value,
             json,
-        } => config_cmd::run(&sub, key.as_deref(), value.as_deref(), json),
+        } => config_cmd::run(&sub, key.as_deref(), value.as_deref(), json).await,
         PlatformCommands::Schedule(sub) => match sub {
             ScheduleCommands::Create(args) => schedule::create(&args).await,
             ScheduleCommands::List { json } => schedule::list(json).await,

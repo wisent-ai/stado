@@ -16,13 +16,31 @@ pub(in crate::cli::web) fn declared() -> Result<&'static WebApiEdge, CmdError> {
     config::web_api_edge().map_err(|problems| {
         CmdError::click(format!(
             "no public edge is declared, so nothing can terminate TLS for a fleet hostname \
-             ({}); create one with `stado web edge provision <name> --contact <mail>`, or \
-             record a host Stado did not create with `stado web edge declare --target <host> \
-             --address <ipv4> --contact <mail>`",
+             ({}); create one with `{PROVISION_HINT}`, or record a host Stado did not create \
+             with `{DECLARE_HINT}`",
             problems.join("; ")
         ))
         .stating(crate::primitives::failure::FailureCode::Config)
     })
+}
+
+/// The two commands that produce an edge, with every flag each requires.
+const PROVISION_HINT: &str = "stado web edge provision <name> --region <region> --size <size> \
+                              --image <urn> --disk-gb <GiB> --contact <mail> --probe-seconds <s>";
+const DECLARE_HINT: &str = "stado web edge declare --target <registered host> --address <ipv4> \
+                            --contact <mail> --probe-seconds <s>";
+
+/// The sentence for an edge declared on `target`, a name the canonical
+/// registry does not hold. One sentence for every command that refuses it:
+/// `stado config validate`, `stado web edge status`, `stado web route`,
+/// `stado web edge hostnames` and `stado web origin declare --publication
+/// web-edge`.
+pub(crate) fn unregistered_refusal(target: &str) -> String {
+    format!(
+        "the public edge is declared on {target}, which the canonical registry does not hold, so \
+         no hostname can be published through it; create the edge with `{PROVISION_HINT}`, or \
+         register the host and record it with `{DECLARE_HINT}`"
+    )
 }
 
 /// The declared edge, refused when the canonical registry does not hold its
@@ -38,15 +56,10 @@ pub(in crate::cli::web) async fn registered() -> Result<&'static WebApiEdge, Cmd
     crate::cli::canonical_host(edge.target())
         .await
         .map_err(|error| match error.failure {
-            Some(crate::primitives::failure::FailureCode::NotFound) => CmdError::click(format!(
-                "the public edge is declared on {}, which the canonical registry does not hold, \
-                 so no hostname can be published through it; create the edge with `stado web \
-                 edge provision <name> --contact <mail>`, or register the host and record it \
-                 with `stado web edge declare --target <registered host> --address <ipv4> \
-                 --contact <mail>`",
-                edge.target()
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config),
+            Some(crate::primitives::failure::FailureCode::NotFound) => {
+                CmdError::click(unregistered_refusal(edge.target()))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            }
             _ => error,
         })?;
     Ok(edge)

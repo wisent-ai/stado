@@ -66,6 +66,7 @@ pub(crate) mod role;
 mod serving;
 
 pub(crate) use commands::EdgeCommands;
+pub(crate) use declaring::unregistered_refusal;
 pub(in crate::cli::web) use declaring::{declared, registered};
 pub(in crate::cli::web) use serving::{deliver, mount, stado_routes};
 
