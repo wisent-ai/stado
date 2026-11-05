@@ -9,6 +9,7 @@
 
 mod feedback;
 mod scoring;
+pub use scoring::DeferredStart;
 mod shapes;
 
 use crate::autonomy::cost::PriceBook;

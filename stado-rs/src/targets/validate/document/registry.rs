@@ -165,8 +165,85 @@ pub(crate) fn validate_registry_body(
                     return Err(verr(&format!("{rate_at}.{unknown}"), "is not a rate field"));
                 }
             }
+            if let Some(bands) = object.get("bands") {
+                let bands_at = format!("{at}.bands");
+                let bands = bands
+                    .as_array()
+                    .filter(|bands| !bands.is_empty())
+                    .ok_or_else(|| verr(&bands_at, "must be a non-empty list of bands"))?;
+                let zone = object.get("timezone").and_then(Value::as_str);
+                if !zone.is_some_and(|zone| zone.parse::<chrono_tz::Tz>().is_ok()) {
+                    return Err(verr(
+                        &format!("{at}.timezone"),
+                        "must be an IANA time zone (e.g. Europe/Warsaw) when bands are declared, \
+                         since a band's hours are read in it",
+                    ));
+                }
+                let mut covered = [false; 24];
+                for (index, band) in bands.iter().enumerate() {
+                    let band_at = format!("{bands_at}[{index}]");
+                    let band = band.as_object().ok_or_else(|| {
+                        verr(&band_at, "must be {from_hour, to_hour, price_per_kwh}")
+                    })?;
+                    let hour = |field: &str| {
+                        band.get(field)
+                            .and_then(Value::as_u64)
+                            .filter(|hour| *hour <= 23)
+                            .ok_or_else(|| {
+                                verr(&format!("{band_at}.{field}"), "must be an hour 0 to 23")
+                            })
+                    };
+                    let (from, to) = (hour("from_hour")?, hour("to_hour")?);
+                    if from == to {
+                        return Err(verr(
+                            &band_at,
+                            "from_hour and to_hour are equal; a band covers at least one hour",
+                        ));
+                    }
+                    if !band
+                        .get("price_per_kwh")
+                        .and_then(Value::as_f64)
+                        .is_some_and(|price| price.is_finite() && price >= 0.0)
+                    {
+                        return Err(verr(
+                            &format!("{band_at}.price_per_kwh"),
+                            "must be a number at or above zero",
+                        ));
+                    }
+                    if let Some(unknown) = band.keys().find(|key| {
+                        !["from_hour", "to_hour", "price_per_kwh"].contains(&key.as_str())
+                    }) {
+                        return Err(verr(&format!("{band_at}.{unknown}"), "is not a band field"));
+                    }
+                    let mut at_hour = from;
+                    while at_hour != to {
+                        let slot = &mut covered[at_hour as usize];
+                        if *slot {
+                            return Err(verr(
+                                &band_at,
+                                &format!("hour {at_hour} is already covered by another band"),
+                            ));
+                        }
+                        *slot = true;
+                        at_hour = (at_hour + 1) % 24;
+                    }
+                }
+            } else if object.get("timezone").is_some() {
+                return Err(verr(
+                    &format!("{at}.timezone"),
+                    "is read only with bands; declare the bands or remove it",
+                ));
+            }
             if let Some(unknown) = object.keys().find(|key| {
-                !["price_per_kwh", "currency", "source", "usd_rate"].contains(&key.as_str())
+                ![
+                    "price_per_kwh",
+                    "currency",
+                    "source",
+                    "usd_rate",
+                    "timezone",
+                    "bands",
+                ]
+                .contains(&key.as_str())
             }) {
                 return Err(verr(&format!("{at}.{unknown}"), "is not a tariff field"));
             }

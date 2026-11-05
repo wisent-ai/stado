@@ -224,11 +224,32 @@ impl ComputeTarget {
             }),
             None => None,
         };
+        // Validation guarantees each band's fields; a band that does not read
+        // makes the whole tariff unread, never a tariff without that band.
+        let bands = match tariff.get("bands") {
+            Some(bands) => bands
+                .as_array()?
+                .iter()
+                .map(|band| {
+                    Some(TariffBand {
+                        from_hour: u32::try_from(band.get("from_hour")?.as_u64()?).ok()?,
+                        to_hour: u32::try_from(band.get("to_hour")?.as_u64()?).ok()?,
+                        price_per_kwh: band.get("price_per_kwh")?.as_f64()?,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?,
+            None => Vec::new(),
+        };
         Some(PowerTariff {
             price_per_kwh: tariff.get("price_per_kwh")?.as_f64()?,
             currency: tariff.get("currency")?.as_str()?.to_string(),
             source: tariff.get("source")?.as_str()?.to_string(),
             usd_rate,
+            timezone: tariff
+                .get("timezone")
+                .and_then(|zone| zone.as_str())
+                .map(str::to_string),
+            bands,
         })
     }
 
@@ -282,6 +303,34 @@ pub struct PowerTariff {
     /// and for one whose rate nobody declared.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usd_rate: Option<DeclaredRate>,
+    /// The IANA time zone the bands' hours are read in; required with bands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    /// Prices for hours of the local day that differ from `price_per_kwh`
+    /// (a night or peak rate), in the declared time zone; an hour no band
+    /// covers costs `price_per_kwh`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub bands: Vec<TariffBand>,
+}
+
+/// One band of a time-of-use tariff: from `from_hour` (inclusive) to
+/// `to_hour` (exclusive) of the local day, wrapping past midnight when
+/// `to_hour` is not above `from_hour`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct TariffBand {
+    pub from_hour: u32,
+    pub to_hour: u32,
+    pub price_per_kwh: f64,
+}
+
+impl TariffBand {
+    fn covers(&self, hour: u32) -> bool {
+        if self.from_hour < self.to_hour {
+            (self.from_hour..self.to_hour).contains(&hour)
+        } else {
+            hour >= self.from_hour || hour < self.to_hour
+        }
+    }
 }
 
 /// One currency's value in US dollars, as of a date, from a named source.
@@ -297,11 +346,43 @@ impl PowerTariff {
     /// converted at its declared rate; refused naming the currency when no
     /// rate is declared, so no hour is priced at a rate nobody stated.
     pub fn usd_per_kwh(&self) -> Result<f64, String> {
-        if self.currency == "USD" {
+        self.to_usd(self.price_per_kwh)
+    }
+
+    /// The price of one kWh drawn in the hour starting at `at`, in US
+    /// dollars: [`Self::price_per_kwh_at`] converted at the declared rate.
+    pub fn usd_per_kwh_at(&self, at: chrono::DateTime<chrono::Utc>) -> Result<f64, String> {
+        self.to_usd(self.price_per_kwh_at(at)?)
+    }
+
+    /// The price of one kWh drawn in the hour starting at `at`, in the
+    /// tariff's currency: the band covering that local hour, else the flat
+    /// price. A tariff with bands and no readable time zone is refused,
+    /// since the hour cannot be placed in its day.
+    pub fn price_per_kwh_at(&self, at: chrono::DateTime<chrono::Utc>) -> Result<f64, String> {
+        if self.bands.is_empty() {
             return Ok(self.price_per_kwh);
         }
+        let zone: chrono_tz::Tz = self
+            .timezone
+            .as_deref()
+            .ok_or("the tariff declares bands and no timezone")?
+            .parse()
+            .map_err(|error| format!("the tariff's timezone is not an IANA zone: {error}"))?;
+        let hour = chrono::Timelike::hour(&at.with_timezone(&zone));
+        Ok(self
+            .bands
+            .iter()
+            .find(|band| band.covers(hour))
+            .map_or(self.price_per_kwh, |band| band.price_per_kwh))
+    }
+
+    fn to_usd(&self, price: f64) -> Result<f64, String> {
+        if self.currency == "USD" {
+            return Ok(price);
+        }
         match &self.usd_rate {
-            Some(rate) => Ok(self.price_per_kwh * rate.usd_per_unit),
+            Some(rate) => Ok(price * rate.usd_per_unit),
             None => Err(format!(
                 "the tariff is in {} and declares no usd_rate (usd_per_unit, as_of, source), so \
                  its kWh has no US-dollar price",

@@ -50,6 +50,11 @@ pub struct SubmitArgs {
     /// Hard RFC 3339 completion deadline used by autonomous placement.
     #[arg(long, default_value = "")]
     deadline_at: String,
+    /// Let placement start the job later, at the cheapest hour of an owned
+    /// host's tariff that still finishes it before --deadline-at; refused
+    /// without one.
+    #[arg(long)]
+    deferrable: bool,
     /// Optional git URL to clone before running command (no auth).
     #[arg(long, default_value = "")]
     repo: String,

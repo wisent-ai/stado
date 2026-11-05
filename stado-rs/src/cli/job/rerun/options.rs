@@ -37,6 +37,7 @@ pub(super) fn rerun_options(original: &Job, retry_token: &str) -> SubmitOptions 
         pin_to_provider: original.pin_to_provider,
         priority: original.priority,
         deadline_at: original.deadline_at.clone(),
+        deferrable: original.deferrable,
         repo: original.repo.clone(),
         repo_ref: original.repo_ref.clone(),
         repo_workdir: original.repo_workdir.clone(),

@@ -130,6 +130,12 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         }
         Some(parsed.to_rfc3339())
     };
+    if args.deferrable && deadline_at.is_none() {
+        return Err(CmdError::usage(
+            "--deferrable needs --deadline-at: a job is deferred only to a start that still \
+             finishes before its deadline",
+        ));
+    }
 
     let pinned_host = resolve_pinned_host(&args.pinned_host).await?;
     if !pinned_host.is_empty() {
@@ -156,6 +162,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         pin_to_provider: !any_provider,
         priority,
         deadline_at: deadline_at.clone(),
+        deferrable: args.deferrable,
         repo,
         repo_ref,
         repo_workdir,
@@ -207,6 +214,9 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     flags.push(format!("priority={}", options.priority));
     if let Some(deadline) = &options.deadline_at {
         flags.push(format!("deadline={deadline}"));
+    }
+    if options.deferrable {
+        flags.push("deferrable".to_string());
     }
     if !options.gpu_type.is_empty() {
         flags.push(format!("gpu={}", options.gpu_type));

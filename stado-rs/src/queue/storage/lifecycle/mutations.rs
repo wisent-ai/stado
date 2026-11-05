@@ -120,6 +120,7 @@ impl JobStorage {
         job_id: &str,
         provider: &str,
         assigned_to: Option<&str>,
+        not_before: Option<&str>,
     ) -> Result<Option<Job>, StorageError> {
         self.rewrite_queued_job(job_id, |job| {
             job.provider = provider.to_string();
@@ -128,6 +129,7 @@ impl JobStorage {
                 Some(target) => job.assigned_to = target.to_string(),
                 None => job.assigned_to.clear(),
             }
+            job.not_before = not_before.map(str::to_string);
         })
         .await
     }

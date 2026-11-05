@@ -46,24 +46,38 @@ pub(super) fn candidate(
     // host's declared tariff; a host with no tariff or no measured hour has
     // no price, and the offer is refused below with that cause rather than
     // priced as free. A local offer is `local-<hostname>`.
-    let owned = (offer.provider == ProviderId::Local && quote.is_none()).then(|| {
-        let host = offer
+    let owned_host = (offer.provider == ProviderId::Local && quote.is_none()).then(|| {
+        offer
             .target_id
             .strip_prefix("local-")
-            .unwrap_or(&offer.target_id);
-        match context.energy {
-            Ok(energy) => energy.hourly(host),
-            Err(cause) => Err(cause.clone()),
-        }
+            .unwrap_or(&offer.target_id)
     });
-    let hourly = match &owned {
-        Some(priced) => priced.as_ref().ok().copied(),
-        None => quote.map(|price| price.hourly_usd),
+    let owned = owned_host.map(|host| match context.energy {
+        Ok(energy) => energy.hourly(host),
+        Err(cause) => Err(cause.clone()),
+    });
+    // A deferrable job on owned hardware may start later, in the hours its
+    // tariff prices lowest, so long as it still finishes before its
+    // deadline: each whole hour from now to the last start that meets it is
+    // priced at the hour-by-hour tariff over the run, and the cheapest start
+    // is kept with the cost of starting now beside it. Rented capacity costs
+    // the same whenever it starts, so only owned hosts are deferred.
+    let deferred = match (owned_host, context.energy, runtime) {
+        (Some(host), Ok(energy), Some(runtime)) if job.deferrable => {
+            cheapest_start(job, energy, host, runtime + startup, context.now)
+        }
+        _ => None,
+    };
+    let hourly = match (&deferred, &owned) {
+        (Some(start), _) => Some(start.hourly_usd),
+        (None, Some(priced)) => priced.as_ref().ok().copied(),
+        (None, None) => quote.map(|price| price.hourly_usd),
     };
     // Without a stated or measured run time the run cannot be priced or held
     // to a deadline; the offer is refused by name below, as the makespan
     // matcher refuses to guess.
-    let expected_finish = runtime.map(|runtime| runtime + startup);
+    let delay = deferred.as_ref().map_or(0.0, |start| start.delay_seconds);
+    let expected_finish = runtime.map(|runtime| delay + runtime + startup);
     let mut deadline_rejection = None;
     let slo_penalty = job
         .deadline_at
@@ -89,9 +103,12 @@ pub(super) fn candidate(
             },
         )
         .unwrap_or_default();
-    let compute = hourly.zip(runtime).map(|(rate, runtime)| {
-        rate * (runtime + startup) / crate::monitor::billing::SECONDS_PER_HOUR as f64
-    });
+    let compute = match &deferred {
+        Some(start) => Some(start.cost_usd),
+        None => hourly.zip(runtime).map(|(rate, runtime)| {
+            rate * (runtime + startup) / crate::monitor::billing::SECONDS_PER_HOUR as f64
+        }),
+    };
     let retry = compute.map(|cost| cost * failure_probability);
     let egress =
         if policy.placement.account_for_egress && crosses_provider_boundary(job, offer.provider) {
@@ -246,5 +263,75 @@ pub(super) fn candidate(
         price_source: quote.map(|price| price.source.clone()),
         eligible: rejected.is_empty() && total.is_some(),
         rejected_reasons: rejected,
+        deferred_start: deferred,
     }
+}
+
+/// Where a deferrable job on an owned host is best started.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DeferredStart {
+    /// The chosen start, RFC 3339 UTC.
+    pub start_at: String,
+    pub delay_seconds: f64,
+    /// What the run costs started then, and the mean hourly rate over it.
+    pub cost_usd: f64,
+    pub hourly_usd: f64,
+    /// What the same run costs started now, the alternative it beat.
+    pub now_cost_usd: f64,
+}
+
+/// The cheapest whole-hour start, from now to the last one that still
+/// finishes `seconds` of work before the job's deadline; `None` when the
+/// job states no deadline that reads, no later start is cheaper than now,
+/// or the host cannot be priced at some hour of the run.
+fn cheapest_start(
+    job: &Job,
+    energy: &crate::scheduler::cost::Energy,
+    host: &str,
+    seconds: f64,
+    now: chrono::DateTime<Utc>,
+) -> Option<DeferredStart> {
+    let deadline = chrono::DateTime::parse_from_rfc3339(job.deadline_at.as_deref()?)
+        .ok()?
+        .with_timezone(&Utc);
+    let slack = (deadline - now).num_seconds() as f64 - seconds;
+    if slack < 0.0 {
+        return None;
+    }
+    let per_hour = crate::monitor::billing::SECONDS_PER_HOUR as f64;
+    // The run's cost started at `start`: each hour it overlaps, at that
+    // hour's tariff, for the share of the hour it runs.
+    let run_cost = |start: chrono::DateTime<Utc>| -> Option<f64> {
+        let end = start + chrono::Duration::milliseconds((seconds * 1000.0) as i64);
+        let mut hour =
+            chrono::DurationRound::duration_trunc(start, chrono::Duration::hours(1)).ok()?;
+        let mut cost = 0.0;
+        while hour < end {
+            let next = hour + chrono::Duration::hours(1);
+            let covered =
+                (end.min(next) - start.max(hour)).num_milliseconds().max(0) as f64 / 1000.0;
+            cost += energy.hourly_at(host, hour).ok()? * covered / per_hour;
+            hour = next;
+        }
+        Some(cost)
+    };
+    let now_cost = run_cost(now)?;
+    let mut best: Option<(chrono::DateTime<Utc>, f64)> = None;
+    let mut start = chrono::DurationRound::duration_trunc(now, chrono::Duration::hours(1)).ok()?
+        + chrono::Duration::hours(1);
+    while (start - now).num_seconds() as f64 <= slack {
+        let cost = run_cost(start)?;
+        if cost < best.map_or(now_cost, |(_, best)| best) {
+            best = Some((start, cost));
+        }
+        start += chrono::Duration::hours(1);
+    }
+    let (start, cost) = best?;
+    Some(DeferredStart {
+        start_at: start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        delay_seconds: (start - now).num_seconds() as f64,
+        cost_usd: cost,
+        hourly_usd: cost * per_hour / seconds,
+        now_cost_usd: now_cost,
+    })
 }

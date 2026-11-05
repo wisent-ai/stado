@@ -75,10 +75,15 @@ pub(super) async fn update_job_placement(
     } else {
         current.assigned_to.is_empty()
     };
+    let not_before = selected
+        .deferred_start
+        .as_ref()
+        .map(|start| start.start_at.as_str());
     if current.provider == selected.provider.as_str()
         && current.pin_to_provider
         && assignment_matches
         && current.pinned_host.is_empty()
+        && current.not_before.as_deref() == not_before
     {
         return Ok(false);
     }
@@ -95,7 +100,12 @@ pub(super) async fn update_job_placement(
         .existing_capacity
         .then_some(selected.target_id.as_str());
     Ok(store
-        .update_queued_placement(&original.job_id, selected.provider.as_str(), assigned)
+        .update_queued_placement(
+            &original.job_id,
+            selected.provider.as_str(),
+            assigned,
+            not_before,
+        )
         .await?
         .is_some())
 }

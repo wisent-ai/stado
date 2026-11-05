@@ -131,6 +131,7 @@ pub(super) fn build_planned_job(
     job.pin_to_provider = options.pin_to_provider;
     job.priority = options.priority;
     job.deadline_at = options.deadline_at.clone();
+    job.deferrable = options.deferrable;
     job.submitted_by = provenance.submitted_by.clone();
     job.submitted_from = provenance.submitted_from.clone();
     job.submitted_via = "cli".into();

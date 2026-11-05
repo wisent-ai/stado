@@ -31,28 +31,33 @@ fn day_cost(
     day: i64,
 ) -> Result<f64, String> {
     let tariff = tariff.as_ref().ok_or("the host declares no power_tariff")?;
-    // Vast states US dollars; the tariff is converted at its declared rate.
-    let usd_per_kwh = tariff.usd_per_kwh()?;
     let hours = hours.ok_or("the host's beacon carries no measured hours")?;
     let idle = crate::deploy::host_hours::idle_watts(hours);
-    let mut kwh = 0.0;
+    let mut usd = 0.0;
     for hour in 0..24 {
-        let start = chrono::DateTime::from_timestamp(day * SECONDS_PER_DAY + hour * 3600, 0)
-            .ok_or("the day cannot be written as a time")?
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let at = chrono::DateTime::from_timestamp(day * SECONDS_PER_DAY + hour * 3600, 0)
+            .ok_or("the day cannot be written as a time")?;
+        let start = at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let measured = hours
             .get(&start)
             .and_then(|bucket| bucket["boards"].as_object())
             .filter(|boards| !boards.is_empty())
             .ok_or_else(|| format!("hour {start} was not measured (the beacon keeps one day)"))?;
+        // Vast states US dollars: each hour at the tariff band covering it,
+        // converted at the declared rate.
+        let usd_per_kwh = tariff.usd_per_kwh_at(at)?;
         for (uuid, board) in measured {
-            kwh +=
-                crate::deploy::host_hours::kwh_above_idle(uuid, board, &idle).ok_or_else(|| {
-                    format!("board {uuid} has no measured idle draw, so hour {start} is unpriced")
-                })?;
+            usd += usd_per_kwh
+                * crate::deploy::host_hours::kwh_above_idle(uuid, board, &idle).ok_or_else(
+                    || {
+                        format!(
+                            "board {uuid} has no measured idle draw, so hour {start} is unpriced"
+                        )
+                    },
+                )?;
         }
     }
-    Ok(kwh * usd_per_kwh)
+    Ok(usd)
 }
 
 pub(crate) async fn earnings(

@@ -244,3 +244,10 @@ The version bump gathers them into the release's own file and removes this one.
   engine that serves the kind (its arguments, bearer variable, readiness path and one generation
   request); install, readiness, verify, routes, the license gate and outside callers work for every
   kind. Desktop's inference plan takes both.
+- **Time-of-use tariffs and deferrable jobs:** a host's tariff had one price, so every hour cost
+  the same and a job with hours to spare started at once even when a night rate was half the price.
+  `power_tariff` may declare `bands` by hour of the local day in a declared `timezone`; every
+  measured hour is priced at its band. `stado submit --deferrable --deadline-at T` lets placement
+  start the job on an owned host at the cheapest hour that still finishes before the deadline,
+  recorded as `deferred_start` with the cost of starting now beside it; no worker claims the job
+  before its `not_before`.

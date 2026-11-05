@@ -99,6 +99,17 @@ impl JobStorage {
         {
             return Ok(false);
         }
+        // A deferrable job placement held to a cheaper hour is not claimed
+        // before it; a time that does not read holds nothing back, since the
+        // job's deadline still binds the placement that wrote it.
+        if current
+            .not_before
+            .as_deref()
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+            .is_some_and(|at| at.with_timezone(&Utc) > Utc::now())
+        {
+            return Ok(false);
+        }
         let cancellation = format!("cancellations/{}.json", job.job_id);
         let cancelled = format!("cancelled/{}.json", job.job_id);
         if self.backend.exists(&cancellation).await? || self.backend.exists(&cancelled).await? {

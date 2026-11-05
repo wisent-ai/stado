@@ -53,16 +53,25 @@ fn priced(
     let above_kwh = above_idle
         .filter(|_| measured)
         .map(|above| above / JOULES_PER_KWH);
+    // The hour's price is the tariff band covering it, in the tariff's own
+    // time zone; an hour key that does not read prices nothing.
+    let at = chrono::DateTime::parse_from_rfc3339(start)
+        .map(|at| at.with_timezone(&chrono::Utc))
+        .map_err(|error| format!("hour {start:?} is not a time: {error}"));
+    let price = at.clone().and_then(|at| tariff.price_per_kwh_at(at));
+    let usd = at.and_then(|at| tariff.usd_per_kwh_at(at));
     json!({
         "hour": start,
         "boards": boards,
         "cpu_busy_fraction": cpu_busy,
         "kwh": measured.then_some(kwh),
-        "cost": measured.then(|| kwh * tariff.price_per_kwh),
+        "price_per_kwh": price.as_ref().ok(),
+        "price_unread": price.as_ref().err(),
+        "cost": price.as_ref().ok().filter(|_| measured).map(|price| kwh * price),
         "kwh_above_idle": above_kwh,
-        "cost_above_idle": above_kwh.map(|above| above * tariff.price_per_kwh),
+        "cost_above_idle": above_kwh.zip(price.as_ref().ok()).map(|(above, price)| above * price),
         "currency": tariff.currency,
-        "cost_usd": tariff.usd_per_kwh().ok().filter(|_| measured).map(|usd| kwh * usd),
+        "cost_usd": usd.ok().filter(|_| measured).map(|usd| kwh * usd),
         "unread": hour["unread"],
     })
 }
@@ -245,7 +254,10 @@ pub(crate) async fn host(
                 "{cost:.4} {}, above idle unread: a board's idle draw was never measured",
                 tariff.currency
             ),
-            (None, _) => "unpriced: no board was sampled".to_string(),
+            (None, _) => match row["price_unread"].as_str() {
+                Some(cause) => format!("unpriced: {cause}"),
+                None => "unpriced: no board was sampled".to_string(),
+            },
         };
         println!(
             "{} cpu busy {}; {}; {cost}",

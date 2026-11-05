@@ -134,6 +134,7 @@ pub(crate) fn immutable_job_projection(job: &Job) -> Value {
         "peak_vram_per_gpu",
         "yield_count",
         "artifact_paths",
+        "not_before",
     ] {
         object.remove(field);
     }

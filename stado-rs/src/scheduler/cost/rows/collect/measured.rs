@@ -28,10 +28,23 @@ pub struct Energy {
 }
 
 struct Host {
-    price_per_kwh: Result<f64, String>,
+    /// The host's tariff, or why it has none; each hour is priced at the
+    /// band covering it, in US dollars.
+    tariff: Result<crate::targets::PowerTariff, String>,
     /// board UUID -> hour start -> kWh drawn above the board's idle draw in
     /// that hour, or why it cannot be told.
     boards: BTreeMap<String, BTreeMap<DateTime<Utc>, Result<f64, String>>>,
+}
+
+impl Host {
+    fn usd_per_kwh_at(&self, name: &str, at: DateTime<Utc>) -> Result<f64, String> {
+        match &self.tariff {
+            Ok(tariff) => tariff
+                .usd_per_kwh_at(at)
+                .map_err(|cause| format!("{name}: {cause}")),
+            Err(cause) => Err(cause.clone()),
+        }
+    }
 }
 
 /// A job's cost in USD, or why it is unpriced.
@@ -56,12 +69,9 @@ impl Energy {
             // The report is in US dollars: a tariff in another currency is
             // converted at the rate the registry declares for it, and one
             // with no declared rate is said, never priced at a guess.
-            let price_per_kwh = match target.power_tariff() {
-                Some(tariff) => tariff
-                    .usd_per_kwh()
-                    .map_err(|cause| format!("{}: {cause}", target.name)),
-                None => Err(format!("{} declares no power_tariff", target.name)),
-            };
+            let tariff = target
+                .power_tariff()
+                .ok_or_else(|| format!("{} declares no power_tariff", target.name));
             let slugs = crate::monitor::host_health::beacon_slugs(target, &target.name);
             let hours = slugs
                 .iter()
@@ -99,13 +109,7 @@ impl Energy {
             for slug in &slugs {
                 names.insert(slug.clone(), target.name.clone());
             }
-            hosts.insert(
-                target.name.clone(),
-                Host {
-                    price_per_kwh,
-                    boards,
-                },
-            );
+            hosts.insert(target.name.clone(), Host { tariff, boards });
         }
         Ok(Self { hosts, names })
     }
@@ -146,7 +150,6 @@ impl Energy {
             .as_deref()
             .ok_or_else(|| format!("job {} records no board it ran on", job.job_id))?;
         let (host, known) = self.host(host)?;
-        let price = known.price_per_kwh.clone()?;
         let hours = known
             .boards
             .get(board)
@@ -186,7 +189,7 @@ impl Energy {
                     .map(|(from, to)| covered(*from, *to))
                     .sum::<f64>();
             if all > 0.0 {
-                cost += kwh * (own / all) * price;
+                cost += kwh * (own / all) * known.usd_per_kwh_at(host, hour)?;
             }
             hour = next;
         }
@@ -194,15 +197,21 @@ impl Energy {
     }
 
     /// What one hour of `host` costs, for a placement that is about to use
-    /// it: the mean energy per hour its busiest board drew above its idle
-    /// draw over the hours its beacon measured, at its USD tariff. The
-    /// busiest board, because a job placed on the host will keep a board
-    /// busy; the mean of measured hours only, because an hour not measured is
-    /// not an hour that cost nothing. A board whose idle draw is unmeasured
-    /// is left out, and the host is unpriced when every board is.
+    /// it now: [`Self::hourly_at`] for the current hour.
     pub fn hourly(&self, identity: &str) -> Priced {
+        self.hourly_at(identity, Utc::now())
+    }
+
+    /// What the hour starting at `at` of `host` costs: the mean energy per
+    /// hour its busiest board drew above its idle draw over the hours its
+    /// beacon measured, at the tariff band covering `at`, in US dollars. The
+    /// busiest board, because a job placed on the host will keep a board
+    /// busy; the mean of measured hours only, because an hour not measured
+    /// is not an hour that cost nothing. A board whose idle draw is
+    /// unmeasured is left out, and the host is unpriced when every board is.
+    pub fn hourly_at(&self, identity: &str, at: DateTime<Utc>) -> Priced {
         let (host, known) = self.host(identity)?;
-        let price = known.price_per_kwh.clone()?;
+        let price = known.usd_per_kwh_at(host, at)?;
         known
             .boards
             .values()

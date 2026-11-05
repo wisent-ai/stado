@@ -35,6 +35,10 @@ pub struct SubmitOptions {
     pub pin_to_provider: bool,
     pub priority: i64,
     pub deadline_at: Option<String>,
+    /// Placement may start the job later, at the cheapest hour that still
+    /// finishes it before `deadline_at`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deferrable: bool,
     pub repo: String,
     pub repo_ref: String,
     pub repo_workdir: String,
@@ -117,6 +121,7 @@ impl Default for SubmitOptions {
             pin_to_provider: false,
             priority: 0,
             deadline_at: None,
+            deferrable: false,
             repo: String::new(),
             repo_ref: String::new(),
             repo_workdir: String::new(),

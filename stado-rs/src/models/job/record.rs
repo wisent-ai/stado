@@ -263,4 +263,12 @@ pub struct Job {
     /// Hard completion deadline for autonomous placement (RFC 3339 UTC).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline_at: Option<String>,
+    /// The submitter lets placement start the job later than now, at the
+    /// cheapest hour that still finishes it before `deadline_at`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deferrable: bool,
+    /// Set by placement for a deferrable job: no worker claims it before
+    /// this time (RFC 3339 UTC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<String>,
 }

@@ -39,6 +39,10 @@ pub struct PlacementCandidate {
     pub price_source: Option<String>,
     pub eligible: bool,
     pub rejected_reasons: Vec<String>,
+    /// For a deferrable job on an owned host: the later start that costs
+    /// least before the deadline, and the cost of starting now it beat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_start: Option<super::candidates::DeferredStart>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
