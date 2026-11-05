@@ -29,7 +29,7 @@ use crate::primitives::failure::FailureCode;
 use super::super::supabase::owner_vault::{self, Owner};
 use super::super::DatabaseProvider;
 use super::tools::Connection;
-use super::{item_fields, restore, take};
+use super::{files, item_fields, restore, take};
 
 /// `stado database migrate NAME --to fleet [--port PORT] [--host HOST] [--json]`.
 #[derive(Debug, clap::Args)]
@@ -46,6 +46,14 @@ pub(crate) struct MigrateArgs {
     /// out a free one and the placement reports it.
     #[arg(long)]
     pub(in crate::cli::database) port: Option<u16>,
+    /// Restore this kept backup (a directory `stado database backups NAME`
+    /// lists) instead of taking a new one: the move of a database whose
+    /// provider paused or deleted it, so nothing can be read from the source.
+    /// Its manifest must name NAME and its archive must still hash to the
+    /// SHA-256 recorded when it was read back. Writes the source took after
+    /// that backup are not in it, and the report says when it was taken.
+    #[arg(long)]
+    pub(in crate::cli::database) from_backup: Option<std::path::PathBuf>,
     /// Emit machine-readable output.
     #[arg(long)]
     pub(in crate::cli::database) json: bool,
@@ -61,7 +69,7 @@ pub(in crate::cli::database) async fn run(args: MigrateArgs) -> Result<(), CmdEr
             args.to, args.to
         )));
     }
-    migrate(&args.name, args.host.as_deref(), args.port, args.json).await
+    migrate(&args.name, args.host.as_deref(), args.port, args.from_backup.as_deref(), args.json).await
 }
 
 /// The provider an item records in `provider`, or none when it records none
@@ -101,6 +109,7 @@ pub(in crate::cli::database) async fn migrate(
     name: &str,
     host: Option<&str>,
     port: Option<u16>,
+    from_backup: Option<&std::path::Path>,
     json_output: bool,
 ) -> Result<(), CmdError> {
     let owner = owner_vault::locate().await?;
@@ -126,7 +135,10 @@ pub(in crate::cli::database) async fn migrate(
         .stating(FailureCode::Config));
     }
 
-    let backup = take(name, &owner).await?;
+    let backup = match from_backup {
+        Some(directory) => files::kept_backup(name, directory)?,
+        None => take(name, &owner).await?,
+    };
     let major = backup.manifest["server_major"]
         .as_str()
         .ok_or_else(|| {

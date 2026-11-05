@@ -78,8 +78,15 @@ pub(crate) struct AuthPlaceArgs {
     /// The hosted Supabase project whose sign-in settings the server takes,
     /// when the item does not record it (a database migrated before the
     /// item kept its project ref).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "settings_file")]
     pub(super) from_project: Option<String>,
+    /// A JSON object in the shape the management API answers for a project's
+    /// auth configuration (`GET /v1/projects/{ref}/config/auth`), read instead
+    /// of asking the provider: the sign-in of a database whose hosted project
+    /// the provider paused or deleted, so its management API answers nothing.
+    /// `{}` takes the server's defaults for every setting.
+    #[arg(long)]
+    pub(super) settings_file: Option<std::path::PathBuf>,
     /// Write the configuration again from the project and restart the unit,
     /// even when the server is already placed.
     #[arg(long)]
@@ -200,6 +207,7 @@ pub(in crate::cli::database) async fn place(args: AuthPlaceArgs) -> Result<(), C
         name,
         port,
         from_project,
+        settings_file,
         reconfigure,
         ready_within,
         json: json_output,
@@ -235,6 +243,12 @@ pub(in crate::cli::database) async fn place(args: AuthPlaceArgs) -> Result<(), C
             format!("database auth place {name} --port {port} --ready-within {ready_within} --json");
         if let Some(reference) = &from_project {
             remote.push_str(&format!(" --from-project {reference}"));
+        }
+        if settings_file.is_some() {
+            return Err(CmdError::usage(format!(
+                "--settings-file names a file on this machine, and {name}'s database runs on {host}: run \
+                 `stado database auth place` there with the file copied to it"
+            )));
         }
         if reconfigure {
             remote.push_str(" --reconfigure");
@@ -291,15 +305,17 @@ pub(in crate::cli::database) async fn place(args: AuthPlaceArgs) -> Result<(), C
             None => None,
         },
     };
-    let reference = match (&from_project, fields["project_ref"].as_str(), kept_reference) {
-        (Some(reference), _, _) => reference.clone(),
-        (None, Some(recorded), _) if !recorded.is_empty() => recorded.to_string(),
-        (None, _, Some(kept)) if !kept.is_empty() => kept,
-        (None, _, _) => {
+    let reference = match (&settings_file, &from_project, fields["project_ref"].as_str(), kept_reference) {
+        (Some(file), _, _, _) => format!("the settings file {}", file.display()),
+        (None, Some(reference), _, _) => reference.clone(),
+        (None, None, Some(recorded), _) if !recorded.is_empty() => recorded.to_string(),
+        (None, None, _, Some(kept)) if !kept.is_empty() => kept,
+        (None, None, _, _) => {
             return Err(CmdError::usage(format!(
                 "neither {item} nor {previous} records a Supabase project, so the sign-in settings cannot be read: \
                  name the project the accounts came from with --from-project <ref> (`stado database backups {name}` \
-                 shows the project_ref each backup was taken from)"
+                 shows the project_ref each backup was taken from), or give them with --settings-file FILE when the \
+                 project is gone"
             )))
         }
     };
@@ -327,11 +343,27 @@ pub(in crate::cli::database) async fn place(args: AuthPlaceArgs) -> Result<(), C
         CmdError::click(format!("the sign-in server of {name} cannot be installed: {error:#}"))
             .stating(FailureCode::InfraDown)
     })?;
-    let settings = super::supabase::auth_config(&reference).await.map_err(|error| {
-        error.within(format!(
-            "the sign-in settings of project {reference} are read so {name}'s accounts sign in as they did"
-        ))
-    })?;
+    let settings = match &settings_file {
+        Some(file) => {
+            let text = std::fs::read_to_string(file).map_err(|error| {
+                CmdError::click(format!("the settings file {} cannot be read: {error}", file.display()))
+                    .stating(FailureCode::NotFound)
+            })?;
+            serde_json::from_str::<Value>(&text).map_err(|error| {
+                CmdError::usage(format!(
+                    "the settings file {} is not JSON: {error}; it holds one object in the shape the management \
+                     API answers for a project's auth configuration, `{{}}` for the server's defaults",
+                    file.display()
+                ))
+            })?
+        }
+        None => super::supabase::auth_config(&reference).await.map_err(|error| {
+            error.within(format!(
+                "the sign-in settings of project {reference} are read so {name}'s accounts sign in as they did; when \
+                 the project is gone, give them with --settings-file FILE"
+            ))
+        })?,
+    };
     let from_project_lines = project_lines(&settings)?;
 
     let connection = Connection::from_item(&item, &fields)?;

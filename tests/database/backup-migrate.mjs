@@ -136,8 +136,25 @@ try {
   report.retention = { listed, second, after };
 
   refused(run(stado, ['database', 'migrate', name, '--to', 'supabase', '--port', port, '--json']), 'is not a destination migrate places');
-  const moved = JSON.parse(success(run(stado, ['database', 'migrate', name, '--to', 'fleet', '--port', port, '--json'])));
+  // A database whose provider deleted it is moved from the backup this
+  // machine kept, never from the source: the kept backup is proven first.
+  // Refused: a directory that holds no backup, a backup of another database,
+  // and an archive whose bytes changed since it was read back.
+  const fromBackup = directory => ['database', 'migrate', name, '--to', 'fleet', '--port', port, '--from-backup', directory, '--json'];
+  refused(run(stado, fromBackup(output)), 'is no kept backup');
+  const foreign = join(output, 'foreign-backup');
+  mkdirSync(foreign);
+  writeFileSync(join(foreign, 'manifest.json'), JSON.stringify({ ...manifest, database: `${name}-other` }));
+  refused(run(stado, fromBackup(foreign)), `not of ${name}`);
+  const altered = join(output, 'altered-backup');
+  mkdirSync(altered);
+  writeFileSync(join(altered, 'manifest.json'), JSON.stringify(manifest));
+  writeFileSync(join(altered, 'database.dump'), Buffer.concat([readFileSync(archive), Buffer.from('altered')]));
+  refused(run(stado, fromBackup(altered)), 'the archive changed and is not restored');
+  assert.equal(field(item, 'provider'), 'external', 'A refused migration must leave the item on the source');
+  const moved = JSON.parse(success(run(stado, fromBackup(second.backup))));
   assert.equal(moved.migrated, name);
+  assert.equal(moved.backup, second.backup, 'The move must restore the kept backup it was given');
   assert.deepEqual(moved.restore.mismatches, []);
   assert.equal(field(item, 'provider'), 'fleet', 'The item must point at the fleet copy');
   assert.equal(field(`${item}-previous`, 'provider'), 'external', 'The source coordinates must be kept');

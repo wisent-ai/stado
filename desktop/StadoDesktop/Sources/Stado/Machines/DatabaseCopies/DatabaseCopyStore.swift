@@ -31,9 +31,11 @@ final class DatabaseCopyStore: ObservableObject {
     }
 
     /// `stado database migrate NAME --to fleet [--port PORT] [--host HOST]
-    /// --json`. A blank host leaves the choice to the CLI (the vault owner);
-    /// a blank port leaves it to the fleet host, which hands out a free one.
-    nonisolated static func migrateArguments(name: String, host: String, port: String) -> [String] {
+    /// [--from-backup DIR] --json`. A blank host leaves the choice to the CLI
+    /// (the vault owner); a blank port leaves it to the fleet host, which hands
+    /// out a free one; a blank backup takes a new one from the source, and a
+    /// chosen one restores that kept backup (a database its provider deleted).
+    nonisolated static func migrateArguments(name: String, host: String, port: String, fromBackup: String) -> [String] {
         var arguments = ["database", "migrate", name, "--to", "fleet"]
         let port = port.trimmingCharacters(in: .whitespaces)
         if !port.isEmpty {
@@ -42,6 +44,10 @@ final class DatabaseCopyStore: ObservableObject {
         let host = host.trimmingCharacters(in: .whitespaces)
         if !host.isEmpty {
             arguments += ["--host", host]
+        }
+        let backup = fromBackup.trimmingCharacters(in: .whitespaces)
+        if !backup.isEmpty {
+            arguments += ["--from-backup", backup]
         }
         arguments.append("--json")
         return arguments
@@ -105,14 +111,14 @@ final class DatabaseCopyStore: ObservableObject {
         }
     }
 
-    func migrate(name: String, host: String, port: String) async -> Bool {
+    func migrate(name: String, host: String, port: String, fromBackup: String) async -> Bool {
         guard !isRunning else { return false }
         isRunning = true
         defer { isRunning = false }
         do {
             let moved = try await cli.json(
                 MigrationReport.self,
-                arguments: Self.migrateArguments(name: name, host: host, port: port),
+                arguments: Self.migrateArguments(name: name, host: host, port: port, fromBackup: fromBackup),
                 confirmsMutation: true
             )
             report = ["\(moved.migrated) moved to \(moved.to) on \(moved.host); backup \(moved.backup); previous item \(moved.previousItem)"]
@@ -204,11 +210,12 @@ final class DatabaseCopyStore: ObservableObject {
     }
 
     /// `stado database auth place NAME --port PORT --ready-within SECONDS
-    /// [--from-project REF] [--reconfigure] --json`; blank fields are passed
-    /// blank and the CLI refuses them by name; a blank project is left out,
-    /// so the CLI reads the one the item or its kept previous item records.
+    /// [--from-project REF | --settings-file FILE] [--reconfigure] --json`;
+    /// blank fields are passed blank and the CLI refuses them by name; a blank
+    /// project and settings file are left out, so the CLI reads the project the
+    /// item or its kept previous item records.
     nonisolated static func authPlaceArguments(
-        name: String, port: String, readyWithin: String, fromProject: String, reconfigure: Bool
+        name: String, port: String, readyWithin: String, fromProject: String, settingsFile: String, reconfigure: Bool
     ) -> [String] {
         var arguments = [
             "database", "auth", "place", name,
@@ -219,6 +226,10 @@ final class DatabaseCopyStore: ObservableObject {
         if !project.isEmpty {
             arguments += ["--from-project", project]
         }
+        let settings = settingsFile.trimmingCharacters(in: .whitespaces)
+        if !settings.isEmpty {
+            arguments += ["--settings-file", settings]
+        }
         if reconfigure {
             arguments.append("--reconfigure")
         }
@@ -226,7 +237,9 @@ final class DatabaseCopyStore: ObservableObject {
         return arguments
     }
 
-    func placeAuth(name: String, port: String, readyWithin: String, fromProject: String, reconfigure: Bool) async -> Bool {
+    func placeAuth(
+        name: String, port: String, readyWithin: String, fromProject: String, settingsFile: String, reconfigure: Bool
+    ) async -> Bool {
         guard !isRunning else { return false }
         isRunning = true
         defer { isRunning = false }
@@ -234,7 +247,8 @@ final class DatabaseCopyStore: ObservableObject {
             let placed = try await cli.json(
                 AuthReport.self,
                 arguments: Self.authPlaceArguments(
-                    name: name, port: port, readyWithin: readyWithin, fromProject: fromProject, reconfigure: reconfigure),
+                    name: name, port: port, readyWithin: readyWithin, fromProject: fromProject,
+                    settingsFile: settingsFile, reconfigure: reconfigure),
                 confirmsMutation: true
             )
             report = [placed.reused

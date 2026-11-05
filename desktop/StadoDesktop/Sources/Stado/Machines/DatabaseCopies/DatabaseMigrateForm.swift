@@ -12,6 +12,7 @@ struct DatabaseMigrateForm: View {
     @Environment(\.dismiss) private var dismiss
     @State private var host = ""
     @State private var port = ""
+    @State private var fromBackup = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
@@ -29,12 +30,16 @@ struct DatabaseMigrateForm: View {
                 TextField("empty: the vault owner", text: $host)
                     .textFieldStyle(.roundedBorder)
             }
+            LabeledContent("Kept backup") {
+                TextField("empty: a new backup from the source; a directory: restore that kept backup when the source is gone", text: $fromBackup)
+                    .textFieldStyle(.roundedBorder)
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button("Move") {
                     Task {
-                        if await store.migrate(name: database, host: host, port: port) { dismiss() }
+                        if await store.migrate(name: database, host: host, port: port, fromBackup: fromBackup) { dismiss() }
                     }
                 }
                 .disabled(store.isRunning)

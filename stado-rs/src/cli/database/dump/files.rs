@@ -200,3 +200,55 @@ pub(super) fn digest(archive: &Path) -> Result<(u64, String), CmdError> {
         .map_err(|error| CmdError::from(error).within("digest the dump archive".to_string()))?;
     Ok((digest.bytes, digest.sha256))
 }
+
+/// The backup kept in `directory`, proved before anything is restored from
+/// it: a migration whose source is gone (a provider that paused or deleted
+/// the project, so no new backup can be taken) restores the one this machine
+/// kept. Its manifest must name `name`, and its archive must hash to the
+/// SHA-256 the manifest recorded when the backup was read back; a directory
+/// that is no backup of `name`, an archive that is missing, and one whose
+/// bytes changed are each refused naming the file.
+pub(super) fn kept_backup(name: &str, directory: &Path) -> Result<super::Backup, CmdError> {
+    let manifest_path = directory.join(super::MANIFEST);
+    let text = std::fs::read_to_string(&manifest_path).map_err(|error| {
+        CmdError::click(format!(
+            "{} is no kept backup: {} cannot be read: {error}; `stado database backups {name}` lists the backups this machine keeps",
+            directory.display(),
+            manifest_path.display()
+        ))
+        .stating(FailureCode::NotFound)
+    })?;
+    let manifest: Value = serde_json::from_str(&text).map_err(|error| {
+        CmdError::click(format!("{} is not JSON: {error}", manifest_path.display()))
+            .stating(FailureCode::Config)
+    })?;
+    if manifest["database"].as_str() != Some(name) {
+        return Err(CmdError::usage(format!(
+            "{} is a backup of {}, not of {name}",
+            directory.display(),
+            manifest["database"]
+        )));
+    }
+    let recorded = manifest["sha256"].as_str().ok_or_else(|| {
+        CmdError::click(format!("{} records no sha256 of its archive", manifest_path.display()))
+            .stating(FailureCode::Config)
+    })?;
+    let archive = directory.join(super::ARCHIVE);
+    if !crate::primitives::presence::present(&archive)? {
+        return Err(CmdError::click(format!(
+            "{} holds no archive {}",
+            directory.display(),
+            super::ARCHIVE
+        ))
+        .stating(FailureCode::NotFound));
+    }
+    let (_, sha256) = digest(&archive)?;
+    if sha256 != recorded {
+        return Err(CmdError::click(format!(
+            "{} hashes to {sha256}, but its manifest recorded {recorded} when the backup was read back: the archive changed and is not restored",
+            archive.display()
+        ))
+        .stating(FailureCode::Config));
+    }
+    Ok(super::Backup { directory: directory.to_path_buf(), manifest })
+}

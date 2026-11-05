@@ -11,6 +11,7 @@ struct DatabaseAuthForm: View {
     @State private var port = ""
     @State private var readyWithin = ""
     @State private var fromProject = ""
+    @State private var settingsFile = ""
     @State private var reconfigure = false
 
     var body: some View {
@@ -33,6 +34,10 @@ struct DatabaseAuthForm: View {
                 TextField("only when the item and its previous item name none", text: $fromProject)
                     .textFieldStyle(.roundedBorder)
             }
+            LabeledContent("Settings file") {
+                TextField("when the project is gone: a JSON file of its sign-in settings, {} for the defaults", text: $settingsFile)
+                    .textFieldStyle(.roundedBorder)
+            }
             Toggle("Reconfigure: read the project's settings again and restart sign-in", isOn: $reconfigure)
             HStack {
                 Spacer()
@@ -41,7 +46,7 @@ struct DatabaseAuthForm: View {
                     Task {
                         if await store.placeAuth(
                             name: database, port: port, readyWithin: readyWithin, fromProject: fromProject,
-                            reconfigure: reconfigure)
+                            settingsFile: settingsFile, reconfigure: reconfigure)
                         {
                             dismiss()
                         }
