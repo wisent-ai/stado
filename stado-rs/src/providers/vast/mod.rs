@@ -31,6 +31,7 @@ mod bridge;
 mod client;
 mod error;
 pub mod failing;
+pub mod held;
 pub mod isolation;
 pub mod market_prices;
 

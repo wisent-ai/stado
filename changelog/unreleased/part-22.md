@@ -310,3 +310,7 @@ The version bump gathers them into the release's own file and removes this one.
   --deployment NAME` names the fleet's own inference deployment the node serves; it is refused for a
   deployment on another host, not desired running or under an unread or undeclared license, and
   `follow` holds the node off while any of those fails or the board has fleet work.
+- **A held board keeps a Vast host unlisted:** Vast.ai lists a machine whole, so `stado market list
+  --provider vast` and the follow loop no longer list a host while an inference reservation or any
+  process holds board memory, naming the holder; `list` also refuses a host that is not isolated,
+  as the loop already did.

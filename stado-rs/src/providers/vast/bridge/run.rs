@@ -290,6 +290,10 @@ pub async fn auto_list_loop(
                         // rule removed since the last one would hand the next
                         // renter a route to the host.
                         log(&format!("not listed: {refusal}"));
+                    } else if let Some(refusal) = crate::providers::vast::held::refusal().await {
+                        // Vast offers the machine whole: a board an engine
+                        // or job holds would be offered while it is held.
+                        log(&format!("not listed: {refusal}"));
                     } else if let Some(client) = client {
                         match client
                             .list_machine(&ListMachineParams {

@@ -236,6 +236,14 @@ async fn list(
     price_min_bid: Option<f64>,
     json_output: bool,
 ) -> Result<(), CmdError> {
+    // Vast lists the machine whole, so it is listed only when a renter's
+    // container would reach nothing of the host's and no board is held.
+    if let Some(refusal) = vast::isolation::measure().refusal() {
+        return Err(CmdError::refused(format!("not listed: {refusal}")));
+    }
+    if let Some(refusal) = vast::held::refusal().await {
+        return Err(CmdError::refused(format!("not listed: {refusal}")));
+    }
     let client = VastClient::from_env().await.map_err(cmd_err)?;
     let result = client
         .list_machine(&ListMachineParams {
