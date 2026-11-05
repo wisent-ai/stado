@@ -112,27 +112,39 @@ pub(crate) async fn socket_addrs(host: &str, port: u16) -> Result<Vec<SocketAddr
 
 /// The addresses the link's multicast DNS responders give for `host`: the
 /// answer this process already holds while it stands, else the link's.
+///
+/// The link is asked on a blocking thread ([`ask_link`]), so no future of
+/// this crate holds an `mdns_sd` daemon or its channel across an await. Held
+/// in a future, those types (each daemon command carries a sender whose
+/// events carry the resolved service) made proving the future `Send` exceed
+/// the compiler's recursion limit, and every `tokio::spawn` that reaches a
+/// host connection failed to build.
 async fn multicast(host: &str) -> Result<Vec<IpAddr>, String> {
     let name = format!("{}.", host.trim_end_matches('.').to_ascii_lowercase());
     if let Some(addresses) = answered(&name) {
         return Ok(addresses);
     }
+    let asked = name.clone();
+    let answer = tokio::task::spawn_blocking(move || ask_link(&asked))
+        .await
+        .map_err(|error| format!("could not be asked: the asking thread ended: {error}"))??;
+    keep(&name, &answer);
+    Ok(answer)
+}
+
+/// One multicast DNS question for `name`, on this thread: the addresses the
+/// first answer carries, or why none came within [`ANSWER_WINDOW`].
+fn ask_link(name: &str) -> Result<Vec<IpAddr>, String> {
     let daemon =
         mdns_sd::ServiceDaemon::new().map_err(|error| format!("could not be asked: {error}"))?;
     let window = u64::try_from(ANSWER_WINDOW.as_millis()).map_err(|error| {
         format!("could not be asked: the answer window is no duration: {error}")
     })?;
-    let events = daemon
-        .resolve_hostname(&name, Some(window))
-        .map_err(|error| format!("could not be asked: {error}"));
-    let answer = match events {
+    let answer = match daemon.resolve_hostname(name, Some(window)) {
         Ok(events) => loop {
-            match events.recv_async().await {
+            match events.recv() {
                 Ok(mdns_sd::HostnameResolutionEvent::AddressesFound(_, found)) => {
-                    let addresses: Vec<IpAddr> =
-                        found.iter().map(mdns_sd::ScopedIp::to_ip_addr).collect();
-                    keep(&name, &addresses);
-                    break Ok(addresses);
+                    break Ok(found.iter().map(mdns_sd::ScopedIp::to_ip_addr).collect());
                 }
                 Ok(mdns_sd::HostnameResolutionEvent::SearchTimeout(_)) => {
                     break Err(format!(
@@ -144,12 +156,12 @@ async fn multicast(host: &str) -> Result<Vec<IpAddr>, String> {
                 Err(error) => break Err(format!("stopped answering: {error}")),
             }
         },
-        Err(error) => Err(error),
+        Err(error) => Err(format!("could not be asked: {error}")),
     };
     // The daemon's thread ends with it; a shutdown it cannot send leaves
     // nothing behind that the answer depends on.
     if let Err(error) = daemon.shutdown() {
-        tracing::debug!("the multicast DNS daemon for {host} did not take its shutdown: {error}");
+        tracing::debug!("the multicast DNS daemon for {name} did not take its shutdown: {error}");
     }
     answer
 }

@@ -3,8 +3,6 @@
 
 use std::num::NonZeroUsize;
 
-use futures::StreamExt;
-
 use crate::models::Job;
 use crate::queue::storage::{is_transition_sentinel_state, JobStorage};
 use crate::queue::{Listing, StorageError};
@@ -53,13 +51,18 @@ pub async fn list_jobs(
     let mut jobs = Vec::new();
     let workers = crate::queue::migrations::bulk_workers()?;
     for paths in paths.chunks(workers) {
-        let texts: Vec<Option<String>> = futures::stream::iter(paths)
-            .map(move |path| store.download_text(path))
-            .buffered(workers)
-            .collect::<Vec<Result<Option<String>, StorageError>>>()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?;
+        // One chunk is fetched at once, at most `workers` reads in flight,
+        // in listing order. `join_all` over the chunk's futures, not a
+        // `buffered` stream of a closure that borrows each path: a stream
+        // of such a closure held across an await is `Send` only for one
+        // lifetime, and a caller behind `async_trait` (every market
+        // adapter's `status`) then fails to build with "implementation of
+        // `Send` is not general enough".
+        let texts: Vec<Option<String>> =
+            futures::future::join_all(paths.iter().map(|path| store.download_text(path)))
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?;
         for data in texts.into_iter().flatten() {
             let job = Job::from_json(&data)?;
             if is_transition_sentinel_state(&job.state) {
