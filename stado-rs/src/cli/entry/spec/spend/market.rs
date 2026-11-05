@@ -148,6 +148,19 @@ pub(crate) enum MarketCommands {
     /// declared rate is kept and printed as unpriced, never at a guess.
     #[command(subcommand)]
     Payout(PayoutCommands),
+    /// Each board decision a host's agent made: every candidate use with its
+    /// value per board-hour and where it was read (a queued job's stated
+    /// income or the policy's internal value, a deployment's paid earnings),
+    /// the use it held and the one it chose, and why. Names no provider.
+    Decisions {
+        /// The host whose agent decided (its worker name).
+        #[arg(long)]
+        target: String,
+        #[arg(long = "since-hours", default_value_t = 24)]
+        since_hours: u32,
+        #[arg(long)]
+        json: bool,
+    },
     /// Each of a host's uses per day beside the day's energy cost: Vast
     /// rentals kept by `market earnings`, inference sold to outside callers,
     /// and token payouts by source, each priced only from its own statement,

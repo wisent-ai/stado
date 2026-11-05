@@ -47,6 +47,10 @@ impl AutonomyPolicy {
             ("monthly_usd", self.budgets.monthly_usd),
             ("max_single_action_usd", self.budgets.max_single_action_usd),
             ("max_commitment_usd", self.budgets.max_commitment_usd),
+            (
+                "internal_usd_per_gpu_hour",
+                self.budgets.internal_usd_per_gpu_hour,
+            ),
         ] {
             if amount.is_some_and(|value| !value.is_finite() || value.is_sign_negative()) {
                 return Err(format!("{name} must be a finite non-negative number"));

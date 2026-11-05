@@ -286,3 +286,9 @@ The version bump gathers them into the release's own file and removes this one.
   running deployment that serves the model becomes the primary, the outside provider the first
   fallback, its other fallbacks kept — through `route set` with the alias's current destination as
   the condition. Stado Desktop's Inference screen runs it.
+- **A yieldable board goes to the use worth most:** a queued GPU job no longer pauses a paid
+  yieldable inference deployment by rule; the agent values the job at the income its submitter
+  states (`stado submit --income-usd-per-hour … --income-source …`) or the autonomy policy's new
+  `budgets.internal_usd_per_gpu_hour`, the deployment at what outside callers paid for it, and gives
+  the board to the larger; an unreadable value is a refused candidate, never zero. Every decision is
+  kept and `stado market decisions --target WORKER` prints them; Desktop's Registry screen runs it.

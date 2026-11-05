@@ -19,7 +19,7 @@ pub(crate) async fn queued_gpu_job_for_inference(
     consumer_id: &str,
     active_job_count: usize,
     pinned_only: bool,
-) -> Result<Option<(String, i64)>, StorageError> {
+) -> Result<Option<(crate::models::Job, i64)>, StorageError> {
     let listed = store
         .list_claimable_jobs(
             "queue",
@@ -76,7 +76,7 @@ pub(crate) async fn queued_gpu_job_for_inference(
         {
             continue;
         }
-        return Ok(Some((job.job_id, need)));
+        return Ok(Some((job, need)));
     }
     Ok(None)
 }

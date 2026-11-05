@@ -38,6 +38,11 @@ pub(crate) async fn provider_less(command: &MarketCommands) -> Option<Result<(),
             since_days,
             json,
         } => compare::compare(target, *since_days, *json).await,
+        MarketCommands::Decisions {
+            target,
+            since_hours,
+            json,
+        } => decisions(target, *since_hours, *json).await,
         MarketCommands::Payout(PayoutCommands::Record {
             source,
             host,
@@ -67,6 +72,61 @@ pub(crate) async fn provider_less(command: &MarketCommands) -> Option<Result<(),
         }
         _ => return None,
     })
+}
+
+/// `stado market decisions --target HOST`: the board decisions HOST's agent
+/// kept, oldest first.
+async fn decisions(target: &str, since_hours: u32, json_output: bool) -> Result<(), CmdError> {
+    use crate::providers::local::agent::allocate;
+    let store = JobStorage::new().await?;
+    let since = (chrono::Utc::now() - chrono::Duration::hours(i64::from(since_hours))).to_rfc3339();
+    // A host's agent keeps its decisions under its worker name, the name
+    // `--target` takes.
+    let kept = allocate::kept(&store, target, &since).await?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "schema": "stado.market-decisions.v1",
+                "target": target,
+                "decisions": kept,
+            }))?
+        );
+        return Ok(());
+    }
+    if kept.is_empty() {
+        println!("{target}'s agent kept no board decision in the last {since_hours} hour(s)");
+        return Ok(());
+    }
+    for decision in &kept {
+        let candidates: Vec<String> = decision
+            .candidates
+            .iter()
+            .map(
+                |candidate| match (&candidate.refused, candidate.usd_per_hour) {
+                    (Some(why), _) => format!("{} refused: {why}", candidate.what.said()),
+                    (None, Some(value)) => format!(
+                        "{} {value:.4} USD/h ({})",
+                        candidate.what.said(),
+                        candidate.source
+                    ),
+                    (None, None) => format!("{} unvalued", candidate.what.said()),
+                },
+            )
+            .collect();
+        println!(
+            "{} board of {}: {}; chose {}: {}",
+            decision.at,
+            decision.board,
+            candidates.join("; "),
+            decision
+                .chosen
+                .as_ref()
+                .map_or("no change".to_string(), allocate::Use::said),
+            decision.reason
+        );
+    }
+    Ok(())
 }
 
 /// Vast.ai: the host is listed through its host API with the key in the

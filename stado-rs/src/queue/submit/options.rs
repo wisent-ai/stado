@@ -39,6 +39,12 @@ pub struct SubmitOptions {
     /// finishes it before `deadline_at`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deferrable: bool,
+    /// What the submitter is paid per board-hour of the job, and the order
+    /// or entitlement that pays it; both or neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub income_usd_per_hour: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub income_source: Option<String>,
     pub repo: String,
     pub repo_ref: String,
     pub repo_workdir: String,
@@ -122,6 +128,8 @@ impl Default for SubmitOptions {
             priority: 0,
             deadline_at: None,
             deferrable: false,
+            income_usd_per_hour: None,
+            income_source: None,
             repo: String::new(),
             repo_ref: String::new(),
             repo_workdir: String::new(),

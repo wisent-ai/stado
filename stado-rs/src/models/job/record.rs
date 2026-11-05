@@ -271,4 +271,11 @@ pub struct Job {
     /// this time (RFC 3339 UTC).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_before: Option<String>,
+    /// What the job's submitter is paid per board-hour of it, in US dollars,
+    /// with `income_source` naming the order or entitlement that pays; the
+    /// board allocator weighs it against the board's other uses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub income_usd_per_hour: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub income_source: Option<String>,
 }

@@ -136,6 +136,23 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
              finishes before its deadline",
         ));
     }
+    if args
+        .income_usd_per_hour
+        .is_some_and(|income| !income.is_finite() || income.is_sign_negative())
+    {
+        return Err(CmdError::usage(
+            "--income-usd-per-hour must be a number at or above zero",
+        ));
+    }
+    if args
+        .income_source
+        .as_deref()
+        .is_some_and(|source| source.trim().is_empty())
+    {
+        return Err(CmdError::usage(
+            "--income-source must name the order or entitlement that pays the job",
+        ));
+    }
 
     let pinned_host = resolve_pinned_host(&args.pinned_host).await?;
     if !pinned_host.is_empty() {
@@ -163,6 +180,8 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         priority,
         deadline_at: deadline_at.clone(),
         deferrable: args.deferrable,
+        income_usd_per_hour: args.income_usd_per_hour,
+        income_source: args.income_source.clone(),
         repo,
         repo_ref,
         repo_workdir,
@@ -217,6 +236,9 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     }
     if options.deferrable {
         flags.push("deferrable".to_string());
+    }
+    if let (Some(income), Some(source)) = (options.income_usd_per_hour, &options.income_source) {
+        flags.push(format!("income_usd_per_hour={income} ({source})"));
     }
     if !options.gpu_type.is_empty() {
         flags.push(format!("gpu={}", options.gpu_type));

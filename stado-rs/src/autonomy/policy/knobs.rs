@@ -45,6 +45,10 @@ pub struct BudgetPolicy {
     pub monthly_usd: Option<f64>,
     pub max_single_action_usd: Option<f64>,
     pub max_commitment_usd: Option<f64>,
+    /// What one GPU-hour of the fleet's own work is worth, in US dollars:
+    /// the value the board allocator gives a queued job that states no
+    /// income. Undeclared, such a job is not weighed against paid uses.
+    pub internal_usd_per_gpu_hour: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

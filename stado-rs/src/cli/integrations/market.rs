@@ -250,7 +250,8 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
         | MarketCommands::Node(_)
         | MarketCommands::Sources { .. }
         | MarketCommands::Payout(_)
-        | MarketCommands::Compare { .. } => {
+        | MarketCommands::Compare { .. }
+        | MarketCommands::Decisions { .. } => {
             unreachable!("the provider-less verbs were answered above")
         }
     }

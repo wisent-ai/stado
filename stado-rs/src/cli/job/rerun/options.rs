@@ -38,6 +38,8 @@ pub(super) fn rerun_options(original: &Job, retry_token: &str) -> SubmitOptions 
         priority: original.priority,
         deadline_at: original.deadline_at.clone(),
         deferrable: original.deferrable,
+        income_usd_per_hour: original.income_usd_per_hour,
+        income_source: original.income_source.clone(),
         repo: original.repo.clone(),
         repo_ref: original.repo_ref.clone(),
         repo_workdir: original.repo_workdir.clone(),

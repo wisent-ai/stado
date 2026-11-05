@@ -201,12 +201,36 @@ pub(crate) async fn before_admission(
             )
             .await?;
             let gpu_work_active = used_vram.is_positive();
-            let should_yield = gpu_work_active || queued_job.is_some();
+            // A queued job takes the board only when it is worth more per
+            // board-hour than what the deployment earns there; an admitted
+            // job already running keeps it until it ends.
+            let queued_wins = match &queued_job {
+                Some((job, _)) => {
+                    let worker = crate::config::worker_name();
+                    let decision =
+                        weigh(store, &worker, &reservation.deployment, job, log_fn).await;
+                    agent_diag.insert(
+                        "board_decision".into(),
+                        serde_json::to_value(&decision).unwrap_or(Value::Null),
+                    );
+                    decision.chosen
+                        == Some(super::super::super::allocate::Use::Job {
+                            job_id: job.job_id.clone(),
+                        })
+                }
+                None => false,
+            };
+            let should_yield = gpu_work_active || queued_wins;
             match inference_container_running(&reservation.deployment).await {
                 Ok(true) if should_yield => {
                     let reason = match &queued_job {
-                        Some((job_id, need)) => format!("queued job {job_id} needs {need} GiB"),
-                        None => "an admitted GPU job is active".to_string(),
+                        Some((job, need)) if queued_wins => {
+                            format!(
+                                "queued job {} needs {need} GiB and is worth more",
+                                job.job_id
+                            )
+                        }
+                        _ => "an admitted GPU job is active".to_string(),
                     };
                     log_fn(&format!(
                         "yieldable inference '{}': pausing because {reason}",
@@ -264,8 +288,9 @@ pub(crate) async fn before_admission(
                 }
                 Ok(false) => {
                     agent_diag.insert("inference_runtime_state".into(), Value::from("yielded"));
-                    if let Some((job_id, need)) = queued_job {
-                        agent_diag.insert("inference_yield_for_job".into(), Value::from(job_id));
+                    if let Some((job, need)) = queued_job.filter(|_| queued_wins) {
+                        agent_diag
+                            .insert("inference_yield_for_job".into(), Value::from(job.job_id));
                         agent_diag.insert("inference_yield_for_vram_gb".into(), Value::from(need));
                     }
                 }
@@ -284,6 +309,100 @@ pub(crate) async fn before_admission(
         free_for_one_job(total_vram_gb, used_vram, &cards),
         cards,
     )))
+}
+
+/// The board's decision between the queued `job` and the Yieldable
+/// `deployment` holding it, each valued per board-hour, kept with its inputs.
+/// The job's value is the income its submitter stated, else the autonomy
+/// policy's `budgets.internal_usd_per_gpu_hour`; the deployment's is what
+/// outside callers paid for it over the policy's
+/// `freshness.pricing_max_age_seconds`, the age the operator lets a price
+/// be. A side whose value cannot be read is a refused candidate, named,
+/// never valued at zero.
+async fn weigh(
+    store: &JobStorage,
+    host: &str,
+    deployment: &str,
+    job: &crate::models::Job,
+    log_fn: &mut dyn FnMut(&str),
+) -> super::super::super::allocate::Decision {
+    use super::super::super::allocate::{self, Candidate, Use};
+    let policy = match crate::autonomy::storage::load_policy(store).await {
+        Ok(Some(policy)) => Ok(policy),
+        Ok(None) => Err("no autonomy policy is written".to_string()),
+        Err(error) => Err(format!("the autonomy policy cannot be read: {error}")),
+    };
+    let job_use = Use::Job {
+        job_id: job.job_id.clone(),
+    };
+    let job_candidate = match (job.income_usd_per_hour, &job.income_source, &policy) {
+        (Some(income), Some(source), _) => {
+            Candidate::valued(job_use, income, format!("stated by {source}"))
+        }
+        (_, _, Ok(policy)) => match policy.budgets.internal_usd_per_gpu_hour {
+            Some(value) => Candidate::valued(
+                job_use,
+                value,
+                "internal work at the policy's budgets.internal_usd_per_gpu_hour",
+            ),
+            None => Candidate::refused(
+                job_use,
+                "the job states no income and the autonomy policy declares no \
+                 budgets.internal_usd_per_gpu_hour",
+            ),
+        },
+        (_, _, Err(cause)) => {
+            Candidate::refused(job_use, format!("the job states no income and {cause}"))
+        }
+    };
+    let deployment_use = Use::Deployment {
+        name: deployment.to_string(),
+    };
+    let deployment_candidate = match &policy {
+        Err(cause) => Candidate::refused(
+            deployment_use.clone(),
+            format!("its earnings window is the policy's freshness.pricing_max_age_seconds, and {cause}"),
+        ),
+        Ok(policy) => {
+            let seconds = policy.freshness.pricing_max_age_seconds;
+            let since = i64::try_from(seconds)
+                .ok()
+                .and_then(chrono::Duration::try_seconds)
+                .and_then(|window| chrono::Utc::now().checked_sub_signed(window));
+            match since {
+                None => Candidate::refused(
+                    deployment_use.clone(),
+                    format!("freshness.pricing_max_age_seconds {seconds} reaches before any time"),
+                ),
+                Some(since) => match allocate::deployment_value(store, deployment, since).await {
+                Ok(Ok(value)) => Candidate::valued(
+                    deployment_use.clone(),
+                    value,
+                    format!("what outside callers paid over the last {seconds} s"),
+                ),
+                Ok(Err(cause)) => Candidate::refused(deployment_use.clone(), cause),
+                Err(error) => Candidate::refused(
+                    deployment_use.clone(),
+                    format!("its callers' usage cannot be read: {error}"),
+                ),
+                },
+            }
+        }
+    };
+    let decision = allocate::decide(
+        host,
+        deployment,
+        Some(deployment_use),
+        vec![job_candidate, deployment_candidate],
+        None,
+    );
+    log_fn(&format!("board of '{deployment}': {}", decision.reason));
+    if let Err(error) = allocate::keep(store, &decision).await {
+        log_fn(&format!(
+            "board of '{deployment}': the decision is not kept: {error}"
+        ));
+    }
+    decision
 }
 
 /// The free VRAM one job can use: what the bookkeeping leaves of the total

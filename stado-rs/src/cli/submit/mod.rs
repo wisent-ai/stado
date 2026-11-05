@@ -55,6 +55,15 @@ pub struct SubmitArgs {
     /// without one.
     #[arg(long)]
     deferrable: bool,
+    /// What the submitting product is paid per board-hour of this job, in
+    /// US dollars; with --income-source. The board allocator gives a board
+    /// to the use worth most; a job without it is internal work, valued at
+    /// the autonomy policy's budgets.internal_usd_per_gpu_hour.
+    #[arg(long = "income-usd-per-hour", requires = "income_source")]
+    income_usd_per_hour: Option<f64>,
+    /// The order or entitlement that pays --income-usd-per-hour.
+    #[arg(long = "income-source", requires = "income_usd_per_hour")]
+    income_source: Option<String>,
     /// Optional git URL to clone before running command (no auth).
     #[arg(long, default_value = "")]
     repo: String,

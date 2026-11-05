@@ -229,6 +229,11 @@ enum NativeRegistryOperations {
                   .init(id: "target", label: "Registry target", option: "--target", required: true),
                   .init(id: "since-days", label: "Days back", option: "--since-days", initial: "7"),
               ], mutates: false, jsonOutput: false),
+        .init(id: "market-decisions", title: "Each board decision a host's agent made, with every candidate's value",
+              path: ["market", "decisions"], hostPlacement: .none, fields: [
+                  .init(id: "target", label: "Worker name", option: "--target", required: true),
+                  .init(id: "since-hours", label: "Hours back", option: "--since-hours", initial: "24"),
+              ], mutates: false, jsonOutput: false),
         .init(id: "market-sources", title: "Every place a fleet host can earn, and which Stado can join",
               path: ["market", "sources"], hostPlacement: .none, fields: [
                   .init(id: "check", label: "Ask each source's page whether it still answers", option: "--check", flag: true),

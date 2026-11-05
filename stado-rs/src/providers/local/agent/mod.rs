@@ -29,6 +29,7 @@
 //! eviction decision, [`tick`] runs one poll, and [`claim`] is the admission
 //! scan that poll ends in.
 
+pub mod allocate;
 pub mod capacity;
 pub mod claim;
 pub mod drain;
