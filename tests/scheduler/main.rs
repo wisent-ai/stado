@@ -23,4 +23,6 @@ mod market_peer;
 mod quality_placed;
 mod readopt;
 mod restart;
+#[path = "../schedule_overdue/journey.rs"]
+mod schedule_overdue;
 mod sizing;
