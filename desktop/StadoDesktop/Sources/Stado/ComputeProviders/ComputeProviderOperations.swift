@@ -43,7 +43,8 @@ enum NativeComputeProviderOperations {
                 .init(id: "consumer", label: "Consumer", option: "--consumer", required: true),
                 .init(id: "request", label: "Request SHA-256 (or its first characters)", required: true),
                 .init(id: "checked", label: "What was checked to give this answer", option: "--checked", required: true),
-            ], payload: .standardInput(label: "The answer: for inference the forced function's arguments as JSON, else text; for image and search the family's answer JSON", initial: ""), jsonOutput: false),
+                .init(id: "function", label: "Function the answer calls (blank: the one the request names, or its only one)", option: "--function"),
+            ], payload: .standardInput(label: "The answer: for inference the called function's arguments as JSON, else text; for image and search the family's answer JSON", initial: ""), jsonOutput: false),
         .init(id: "capabilities-attestation-revoke", title: "Withdraw a statement; the request stays kept",
             path: ["capabilities", "attestation", "revoke"], hostPlacement: .none, fields: [
                 .init(id: "family", label: "Family", required: true, choices: ["inference", "image", "search"], initial: "inference"),

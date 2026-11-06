@@ -7,29 +7,62 @@ use serde_json::{json, Value};
 use super::{answer_path, located, named, read_kept, request_path, ATTESTED_MODEL, WHAT};
 use crate::cli::CmdError;
 
-/// The one function the request makes the answer call: the one
-/// `tool_choice` names, else the only one `tools` offers.
-fn forced_tool(request: &Value) -> Option<String> {
-    if let Some(name) = request["tool_choice"]["function"]["name"].as_str() {
-        return Some(name.to_owned());
+/// The functions the request offers the answer, by name.
+fn offered(request: &Value) -> Vec<String> {
+    request["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The one function the answer calls: `named` (`--function`), which the
+/// request must offer; else the one `tool_choice` names; else the only one
+/// `tools` offers. `None` when the request offers none, so the answer is
+/// text. A request that offers several and names none (`tool_choice`
+/// `required`, as a page question offering `answer` and `refuse` asks) is
+/// refused naming them: a caller that offered functions reads only a call of
+/// one, so a text answer would be refused by it, after the waiting call had
+/// already handed it over.
+fn called_tool(request: &Value, named: Option<&str>, digest: &str) -> Result<Option<String>, CmdError> {
+    let offered = offered(request);
+    if let Some(named) = named {
+        if !offered.iter().any(|tool| tool == named) {
+            return Err(CmdError::usage(format!(
+                "request {digest} offers no function {named}; it offers {}",
+                if offered.is_empty() { "none, so its answer is text".to_owned() } else { offered.join(", ") }
+            )));
+        }
+        return Ok(Some(named.to_owned()));
     }
-    match request["tools"].as_array().map(Vec::as_slice) {
-        Some([only]) => only["function"]["name"].as_str().map(str::to_owned),
-        _ => None,
+    if let Some(name) = request["tool_choice"]["function"]["name"].as_str() {
+        return Ok(Some(name.to_owned()));
+    }
+    match offered.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some(only.clone())),
+        several => Err(CmdError::usage(format!(
+            "request {digest} offers the functions {} and names none, so its caller reads only a call of one of them: \
+             name the one the answer calls with --function",
+            several.join(", ")
+        ))),
     }
 }
 
 /// `stado capabilities attestation record FAMILY --consumer C REQUEST
-/// --checked TEXT`, the answer on standard input. For `inference`: for a
-/// request that makes the answer call one function, the JSON object of its
-/// arguments; else the answer's text. For `image` and `search`: the answer
-/// itself, as the family's own alternative answers (`call::image_answer`,
-/// `call::search_answer` say its shape).
+/// --checked TEXT [--function NAME]`, the answer on standard input. For
+/// `inference`: for a request whose answer calls a function ([`called_tool`]),
+/// the JSON object of its arguments; else the answer's text. For `image` and
+/// `search`: the answer itself, as the family's own alternative answers
+/// (`call::image_answer`, `call::search_answer` say its shape), and
+/// `--function` is refused.
 pub(crate) fn record(
     family: &str,
     consumer: &str,
     request: &str,
     checked: &str,
+    function: Option<&str>,
     stated: &str,
 ) -> Result<(), CmdError> {
     let (declared, directory) = located(family, consumer)?;
@@ -60,6 +93,11 @@ pub(crate) fn record(
     })?;
     let at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     if declared.id != crate::capabilities::CapabilityKind::Inference {
+        if let Some(function) = function {
+            return Err(CmdError::usage(format!(
+                "--function {function} names the function an inference answer calls; a {family} answer calls none"
+            )));
+        }
         let mut answer: Value = serde_json::from_str(stated).map_err(|error| {
             CmdError::usage(format!(
                 "a {family} answer is JSON, as the family's alternative answers it, and standard input is not: {error}"
@@ -72,7 +110,7 @@ pub(crate) fn record(
         println!("recorded the statement answering {family} request {digest} of {consumer}");
         return Ok(());
     }
-    let message = match forced_tool(&asked) {
+    let message = match called_tool(&asked, function, &digest)? {
         Some(tool) => {
             let arguments: Value = serde_json::from_str(stated).map_err(|error| {
                 CmdError::usage(format!(

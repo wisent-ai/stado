@@ -4,7 +4,8 @@
 //! running instead of refusing, and prints, as its own answer, the statement
 //! `stado capabilities attestation record` writes while it waits, labelled as
 //! an attestation. Without the flag the same kind of request is refused, as
-//! before, naming the flag.
+//! before, naming the flag. A request offering several functions and naming
+//! none is answered only by a statement naming one with `--function`.
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -117,5 +118,44 @@ fn a_call_that_awaits_a_statement_is_answered_by_the_one_recorded_while_it_waits
         .as_str()
         .unwrap();
     assert_eq!(serde_json::from_str::<Value>(arguments).unwrap(), json!({"shows": true}));
+
+    // A page question offers `answer` and `refuse` and names neither: its
+    // caller reads only a call of one, so a statement that names no function
+    // is refused naming both, one naming a function it does not offer is
+    // refused, and one naming `answer` is that call.
+    let both = json!({
+        "model": "any-vision-capable",
+        "messages": [{"role": "user", "content": "Does the page list a password choice?"}],
+        "tools": [
+            {"type": "function", "function": {"name": "answer", "parameters": {"type": "object"}}},
+            {"type": "function", "function": {"name": "refuse", "parameters": {"type": "object"}}}
+        ],
+        "tool_choice": "required"
+    });
+    let before = kept(&root);
+    let waiting = call(&root, &both, true);
+    let digest = newly_kept(&root, &before, Instant::now());
+    let record = |function: Option<&str>| {
+        let mut args = vec!["capabilities", "attestation", "record", "inference", "--consumer", CONSUMER, digest.as_str(), "--checked", "journey"];
+        if let Some(function) = function {
+            args.extend(["--function", function]);
+        }
+        run(&root, &args, r#"{"shows": false}"#)
+    };
+    let unnamed = record(None);
+    assert!(!unnamed.status.success(), "a statement naming no function among several was recorded");
+    let said = String::from_utf8_lossy(&unnamed.stderr);
+    assert!(said.contains("offers the functions answer, refuse and names none"), "{said}");
+    let foreign = record(Some("click"));
+    assert!(!foreign.status.success(), "a statement naming a function the request does not offer was recorded");
+    assert!(String::from_utf8_lossy(&foreign.stderr).contains("offers no function click; it offers answer, refuse"));
+    let named = record(Some("answer"));
+    assert!(named.status.success(), "{}", String::from_utf8_lossy(&named.stderr));
+    let answered = waiting.wait_with_output().unwrap();
+    assert!(answered.status.success(), "{}", String::from_utf8_lossy(&answered.stderr));
+    let printed: Value = serde_json::from_slice(&answered.stdout).unwrap();
+    let called = &printed["answer"]["choices"][0]["message"]["tool_calls"][0]["function"];
+    assert_eq!(called["name"], "answer");
+    assert_eq!(serde_json::from_str::<Value>(called["arguments"].as_str().unwrap()).unwrap(), json!({"shows": false}));
     std::fs::remove_dir_all(&root).unwrap();
 }
