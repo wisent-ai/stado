@@ -31,11 +31,11 @@ final class DatabaseCopyStore: ObservableObject {
     }
 
     /// `stado database migrate NAME --to fleet [--port PORT] [--host HOST]
-    /// [--from-backup DIR] --json`. A blank host leaves the choice to the CLI
+    /// [--from-backup DIR] [--discard-pending] --json`. A blank host leaves the choice to the CLI
     /// (the vault owner); a blank port leaves it to the fleet host, which hands
     /// out a free one; a blank backup takes a new one from the source, and a
     /// chosen one restores that kept backup (a database its provider deleted).
-    nonisolated static func migrateArguments(name: String, host: String, port: String, fromBackup: String) -> [String] {
+    nonisolated static func migrateArguments(name: String, host: String, port: String, fromBackup: String, discardPending: Bool) -> [String] {
         var arguments = ["database", "migrate", name, "--to", "fleet"]
         let port = port.trimmingCharacters(in: .whitespaces)
         if !port.isEmpty {
@@ -49,7 +49,7 @@ final class DatabaseCopyStore: ObservableObject {
         if !backup.isEmpty {
             arguments += ["--from-backup", backup]
         }
-        arguments.append("--json")
+        arguments += discardPending ? ["--discard-pending", "--json"] : ["--json"]
         return arguments
     }
 
@@ -158,14 +158,14 @@ final class DatabaseCopyStore: ObservableObject {
         }
     }
 
-    func migrate(name: String, host: String, port: String, fromBackup: String) async -> Bool {
+    func migrate(name: String, host: String, port: String, fromBackup: String, discardPending: Bool) async -> Bool {
         guard !isRunning else { return false }
         isRunning = true
         defer { isRunning = false }
         do {
             let moved = try await cli.json(
                 MigrationReport.self,
-                arguments: Self.migrateArguments(name: name, host: host, port: port, fromBackup: fromBackup),
+                arguments: Self.migrateArguments(name: name, host: host, port: port, fromBackup: fromBackup, discardPending: discardPending),
                 confirmsMutation: true
             )
             report = ["\(moved.migrated) moved to \(moved.to) on \(moved.host); backup \(moved.backup); previous item \(moved.previousItem)"]

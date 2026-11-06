@@ -20,7 +20,6 @@
 //!   API machine prices are read from, which the credit gate and the price
 //!   book quote.
 
-use std::net::IpAddr;
 use std::sync::LazyLock;
 
 /// The public cloud's Resource Manager.
@@ -107,7 +106,7 @@ fn endpoint(declared: &str, public: &str, binding: &str) -> Result<String, Strin
         .map_err(|error| format!("{binding} {rule}; {declared:?} is not a URL: {error}"))?;
     let on_machine = match parsed.host() {
         Some(url::Host::Ipv4(address)) => address.is_loopback() || address.is_link_local(),
-        Some(url::Host::Ipv6(address)) => IpAddr::V6(address).is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback() || address.is_unicast_link_local(),
         Some(url::Host::Domain(name)) => name == "localhost",
         None => false,
     };

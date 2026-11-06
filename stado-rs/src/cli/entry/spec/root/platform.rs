@@ -6,7 +6,7 @@ use clap::Subcommand;
 use crate::cli::integrations::egress;
 use crate::cli::reporting::alerts;
 use crate::cli::setup::product;
-use crate::cli::work::queue;
+use crate::cli::work::{queue, scheduler};
 use crate::cli::*;
 
 mod ci;
@@ -162,6 +162,9 @@ pub(crate) enum PlatformCommands {
     /// Maintenance mode: pause/resume dispatching, and drain the fleet.
     #[command(subcommand)]
     Queue(queue::QueueCommands),
+    /// Run the coordinator's scheduling tick once, now.
+    #[command(subcommand)]
+    Scheduler(scheduler::SchedulerCommands),
     /// Show which alert channels resolve, and page them on purpose.
     #[command(subcommand)]
     Alerts(alerts::AlertsCommands),

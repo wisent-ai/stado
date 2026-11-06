@@ -61,6 +61,15 @@ pub fn fault(paths: &[PathBuf], runtime: &Runtime) -> Result<Option<(String, boo
         {
             continue;
         }
+        // A directory a recipe placed under bin/ is a resource the commands
+        // beside it read (a SwiftPM `<Package>_<Target>.bundle`), placed whole
+        // and given no PATH link (`recipes::build::cli_tree`): it is not run,
+        // so it is neither executable nor on PATH. Only a directory that is
+        // there is passed over; a recorded path that is missing or cannot be
+        // read is no directory, and is refused below as not executable.
+        if path.is_dir() && !path.is_symlink() {
+            continue;
+        }
         if !executable(path) {
             return Ok(Some((
                 format!("{} is not executable", path.display()),

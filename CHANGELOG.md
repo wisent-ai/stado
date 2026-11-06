@@ -36,6 +36,13 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A CLI that carries a resource bundle passes readiness:** a CLI stage places a directory under
+  `bin/` beside its commands (a SwiftPM `<Package>_<Target>.bundle` that `Bundle.module` reads)
+  whole, with no link on PATH, but readiness judged every recorded path as an executable, so the
+  bundle failed as `<bundle> is not executable` and every installation of such a CLI was rolled
+  back. A placed directory is now passed over; a recorded path that is missing or unreadable is
+  still refused as not executable.
+
 - **Azure VM creation is decided by ARM's `error.code`, not by words in its messages:** a NIC or
   VM create refusal was classified by searching the message for `QuotaExceeded`,
   `OperationNotAllowed` or `SkuNotAvailable`, so a message that quoted one of them for another
@@ -46,6 +53,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
   location's refusal. A NIC that cannot be removed after a refused VM, or after a delete, fails the
   call naming the VM, the NIC and both refusals instead of being logged and left holding the name
   the next attempt needs.
+
+- **An Azure endpoint on an IPv6 link-local address is admitted like an IPv4 one:** a declared
+  `azure.cloud.*` endpoint on `fe80::/10` was refused while `169.254.0.0/16` was admitted, though
+  both are link-local; both now are.
+
+- **One tick at a time runs over a store:** every coordinator tick now holds
+  `state/coordinator/tick-lock.json` naming its process while it runs, so two ticks over one store
+  no longer assign, dispatch and reap the same jobs twice. A record whose process on this host is
+  gone is taken over; one still running, or held on another host, refuses the tick naming its pid,
+  host and start. A resident coordinator that finds the store held logs `tick skipped: …` and
+  ticks at its next interval.
 
 ### Added
 
@@ -60,3 +78,11 @@ The version-bump commit moves them with `stado product changelog --version V`;
   HTTPS nor on a loopback or link-local address refuses every Azure call naming the binding, and
   `stado config show` names the endpoints in force. The ARM client no longer has an
   unauthenticated mode: every request carries the token.
+
+- **`stado scheduler tick`: one coordinator tick, now:** the tick that settles cancellations,
+  fires due schedules, reaps leases, assigns and dispatches ran only inside a coordinator's loop,
+  so nothing placed a queued job or fired a schedule before the next interval, and nothing could
+  observe one tick end to end. `stado scheduler tick [--provider P]... [--billing] [--json]` runs
+  the same tick once in this process, holding the store's tick lock, and answers how many machines
+  it started and which arms ran; a provider that is not a compute provider, is fenced or not
+  enabled, or has no tick arm, and a store another tick holds, are refused before the tick.

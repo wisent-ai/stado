@@ -190,7 +190,7 @@ pub fn surface_add() -> Command {
         .arg(
             value(
                 "kind",
-                "Surface kind: cli, desktop, web, service, ios or android",
+                "Surface kind: cli, desktop, web, docs, service, ios or android",
             )
             .required(true)
             .value_parser(|word: &str| {

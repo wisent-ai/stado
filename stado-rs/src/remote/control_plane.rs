@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crate::coordinator::{resolve_providers, run_tick};
+use crate::coordinator::{resolve_providers, run_tick, CoordinatorError, LockError};
 use crate::queue::JobStorage;
 
 /// A bundled coordinator that cannot start, with the reason: a declaration
@@ -125,6 +125,9 @@ async fn coordinator_loop(
         .await
         {
             Ok(scheduled) => log(&format!("tick scheduled={scheduled}")),
+            Err(CoordinatorError::Lock(held @ LockError::Held { .. })) => {
+                log(&format!("tick skipped: {held}"))
+            }
             Err(exc) => log(&format!("tick failed: {exc}")),
         }
         match crate::queue::copy::replicate_configured_backup().await {

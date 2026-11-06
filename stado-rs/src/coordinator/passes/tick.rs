@@ -18,6 +18,7 @@ use crate::scheduler::scheduler::{
 use crate::schedules::fire_due_schedules;
 
 use super::autonomy::run_autonomy_once;
+use super::lock::{LockError, TickLock};
 use super::providers::ResolvedProvider;
 
 /// Tick failure.
@@ -32,10 +33,16 @@ pub enum CoordinatorError {
     /// Monitor failures from `check_running_jobs` / `reap_dead_agents`.
     #[error(transparent)]
     Monitor(#[from] MonitorError),
+    /// The store's tick lock was not taken: another tick runs over it, or
+    /// the store could not say.
+    #[error(transparent)]
+    Lock(#[from] LockError),
 }
 
 /// One scheduling cycle across every provider (Python
-/// `coordinator._run_tick` + the CF's billing tail).
+/// `coordinator._run_tick` + the CF's billing tail), run while this process
+/// holds the store's tick lock ([`super::lock`]), so no second tick over the
+/// same store runs beside it; one that does is refused naming its holder.
 ///
 /// Each provider gets its own check_running_jobs + schedule_queued_jobs
 /// pass; the queue is shared (state lives in JobStorage), so a
@@ -46,6 +53,24 @@ pub enum CoordinatorError {
 /// behavior; coordinator.py's daemon never billed). Tests pass `false`
 /// to stay hermetic — the collector talks to BigQuery/ARM.
 pub async fn run_tick(
+    store: &JobStorage,
+    secrets: &BTreeMap<String, String>,
+    providers: &[ResolvedProvider],
+    with_billing: bool,
+    log: &dyn Fn(&str),
+) -> Result<i64, CoordinatorError> {
+    let lock = TickLock::take(store).await?;
+    let ticked = passes(store, secrets, providers, with_billing, log).await;
+    // The lock is released whatever the passes answered: a failed tick
+    // holding the store would refuse every later one.
+    let released = lock.release().await;
+    let scheduled = ticked?;
+    released?;
+    Ok(scheduled)
+}
+
+/// The passes of one tick, in order (`run_tick`).
+async fn passes(
     store: &JobStorage,
     secrets: &BTreeMap<String, String>,
     providers: &[ResolvedProvider],

@@ -13,6 +13,7 @@ struct DatabaseMigrateForm: View {
     @State private var host = ""
     @State private var port = ""
     @State private var fromBackup = ""
+    @State private var discardPending = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
@@ -34,12 +35,13 @@ struct DatabaseMigrateForm: View {
                 TextField("empty: a new backup from the source; a directory: restore that kept backup when the source is gone", text: $fromBackup)
                     .textFieldStyle(.roundedBorder)
             }
+            Toggle("Discard the pending placement an earlier failed move left (its unit and item; its data stays on that host)", isOn: $discardPending)
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button("Move") {
                     Task {
-                        if await store.migrate(name: database, host: host, port: port, fromBackup: fromBackup) { dismiss() }
+                        if await store.migrate(name: database, host: host, port: port, fromBackup: fromBackup, discardPending: discardPending) { dismiss() }
                     }
                 }
                 .disabled(store.isRunning)
