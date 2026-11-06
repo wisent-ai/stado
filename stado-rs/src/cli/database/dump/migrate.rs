@@ -1,4 +1,5 @@
-//! `stado database migrate NAME --to fleet [--port PORT] [--host HOST]`: a
+//! `stado database migrate NAME --to fleet [--port PORT] [--host HOST]
+//! [--discard-pending]`: a
 //! declared Postgres database another provider hosts (a Supabase project, an
 //! external server) moved onto a fleet host Stado runs, with no vendor and
 //! no bill.
@@ -12,7 +13,9 @@
 //! source's coordinates back, the fleet coordinates are kept as
 //! `<item>-fleet-pending` (marked the same way) so a second run restores
 //! into the same server instead of placing another, and the command refuses
-//! naming each table. The declaration (engine, consumers) never changes: a
+//! naming each table. A second run that names another host or port refuses
+//! while that pending server stands, unless `--discard-pending` retires it
+//! first ([`pending`]). The declaration (engine, consumers) never changes: a
 //! consumer that opens the database through `stado_database::connect` reads
 //! the new item on its next connection. The source is left as it was;
 //! `stado database destroy` is a separate decision.
@@ -33,8 +36,10 @@ use super::tools::Connection;
 use super::{files, item_fields, restore, take};
 
 mod kept;
+mod pending;
+mod silent;
 
-/// `stado database migrate NAME --to fleet [--port PORT] [--host HOST] [--json]`.
+/// `stado database migrate NAME --to fleet [--port PORT] [--host HOST] [--discard-pending] [--json]`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct MigrateArgs {
     /// Declared postgres database to move.
@@ -57,6 +62,12 @@ pub(crate) struct MigrateArgs {
     /// that backup are not in it, and the report says when it was taken.
     #[arg(long)]
     pub(in crate::cli::database) from_backup: Option<std::path::PathBuf>,
+    /// Retire the fleet server an earlier failed run left as
+    /// `<item>-fleet-pending` (its unit on its host, and the item) before
+    /// placing a new one: the move to another host or port after a placement
+    /// whose host could not run it. Its data directory stays on that host.
+    #[arg(long)]
+    pub(in crate::cli::database) discard_pending: bool,
     /// Emit machine-readable output.
     #[arg(long)]
     pub(in crate::cli::database) json: bool,
@@ -72,7 +83,15 @@ pub(in crate::cli::database) async fn run(args: MigrateArgs) -> Result<(), CmdEr
             args.to, args.to
         )));
     }
-    migrate(&args.name, args.host.as_deref(), args.port, args.from_backup.as_deref(), args.json).await
+    migrate(
+        &args.name,
+        args.host.as_deref(),
+        args.port,
+        args.from_backup.as_deref(),
+        args.discard_pending,
+        args.json,
+    )
+    .await
 }
 
 /// The provider an item records in `provider`, or none when it records none
@@ -113,6 +132,7 @@ pub(in crate::cli::database) async fn migrate(
     host: Option<&str>,
     port: Option<u16>,
     from_backup: Option<&std::path::Path>,
+    discard_pending: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
     let owner = owner_vault::locate().await?;
@@ -137,10 +157,23 @@ pub(in crate::cli::database) async fn migrate(
         ))
         .stating(FailureCode::Config));
     }
+    // The pending placement is decided before anything is written: a run
+    // that names another place is refused here, with nothing taken or kept.
+    let pending_found = match owner.item_ids().await? {
+        Some(ids) if !ids.contains(&pending) => None,
+        _ => owner.document(&pending).await?,
+    };
+    let decision =
+        pending::decide(name, &pending, pending_found, host, port, discard_pending, &owner).await?;
+    let (pending_kept, discarded) = match decision {
+        pending::Decision::Place => (None, Value::Null),
+        pending::Decision::Reuse(kept) => (Some(kept), Value::Null),
+        pending::Decision::Discarded(step) => (None, step),
+    };
 
     let backup = match from_backup {
         Some(directory) => {
-            source_silent(name, &item, &fields, directory)?;
+            silent::source_silent(name, &item, &fields, directory)?;
             files::kept_backup(name, directory)?
         }
         None => take(name, &owner).await?,
@@ -154,10 +187,6 @@ pub(in crate::cli::database) async fn migrate(
         .to_string();
     store(&owner, &previous, &kept::copy(&source_document, &item, "previous")?).await?;
 
-    let pending_kept = match owner.item_ids().await? {
-        Some(ids) if !ids.contains(&pending) => None,
-        _ => owner.document(&pending).await?,
-    };
     let from_pending = pending_kept.is_some();
     let (placed_on, placement, target_document) = match pending_kept {
         Some(kept) => (
@@ -245,6 +274,7 @@ pub(in crate::cli::database) async fn migrate(
         "item": item,
         "previous_item": previous,
         "pending_item": pending_status,
+        "discarded_pending": discarded,
         "consumers": "unchanged: each reads the fleet coordinates from the item on its next connection; \
                       the source's API keys and project URL stay only on the previous item",
         "rest_api": format!(
@@ -257,35 +287,4 @@ pub(in crate::cli::database) async fn migrate(
         return Ok(());
     }
     crate::cli::print_answer(&report, false)
-}
-
-/// A kept backup is restored only when the source no longer answers: while it
-/// answers, a new backup (`migrate` without `--from-backup`) holds every write
-/// the kept one lacks, and restoring the kept one would drop them. The source
-/// is asked for its server version through the item's own session; an item
-/// that names no session the source could be reached on counts as silent.
-fn source_silent(name: &str, item: &str, fields: &Value, directory: &std::path::Path) -> Result<(), CmdError> {
-    let Ok(connection) = Connection::from_item(item, fields) else {
-        return Ok(());
-    };
-    let ca_file = match connection.ca_certificate() {
-        Some(pem) => {
-            let file = directory.join("source-probe-server-ca.pem");
-            files::write(&file, pem)?;
-            Some(file)
-        }
-        None => None,
-    };
-    let answered = super::tools::server_major(&connection, ca_file.as_deref());
-    if let Some(file) = &ca_file {
-        let _ = std::fs::remove_file(file);
-    }
-    match answered {
-        Ok(major) => Err(CmdError::usage(format!(
-            "{name}'s source {} still answers (PostgreSQL {major}), so a new backup holds every write the kept {} lacks: run `stado database migrate {name} --to fleet` without --from-backup",
-            connection.address(),
-            directory.display()
-        ))),
-        Err(_) => Ok(()),
-    }
 }

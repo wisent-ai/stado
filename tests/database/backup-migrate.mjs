@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { assertKeptCopy } from './kept-copy.mjs';
+import { pendingLeg } from './pending/leg.mjs';
 
 // Real journey of `stado database backup` and `stado database migrate`
 // against a dedicated, already provisioned profile: its home, config, owner
@@ -192,13 +193,13 @@ try {
   const answering = JSON.parse(success(run(skarbiec, ['get', item])));
   const silent = new URL(field(item, 'session_url'));
   silent.hostname = 'stado-source.invalid';
-  const rewrite = payload => {
-    const answer = spawnSync(skarbiec, ['set', item], { cwd: root, env: environment, input: JSON.stringify(payload), encoding: 'utf8' });
-    report.commands.push({ program: skarbiec, arguments: ['set', item], exit_status: answer.status, stderr: answer.stderr });
-    assert.equal(answer.status, constants.F_OK, `skarbiec set ${item}: ${answer.stderr}`);
+  const put = (id, payload) => {
+    const answer = spawnSync(skarbiec, ['set', id], { cwd: root, env: environment, input: JSON.stringify(payload), encoding: 'utf8' });
+    report.commands.push({ program: skarbiec, arguments: ['set', id], exit_status: answer.status, stderr: answer.stderr });
+    assert.equal(answer.status, constants.F_OK, `skarbiec set ${id}: ${answer.stderr}`);
   };
   const payloadOf = document => document.payload ?? document;
-  rewrite({ ...payloadOf(answering), fields: { ...payloadOf(answering).fields, session_url: silent.toString() } });
+  put(item, { ...payloadOf(answering), fields: { ...payloadOf(answering).fields, session_url: silent.toString() } });
   refused(run(stado, fromBackup(output)), 'is no kept backup');
   const foreign = join(output, 'foreign-backup');
   mkdirSync(foreign);
@@ -212,7 +213,8 @@ try {
   const older = complete(JSON.parse(success(run(stado, ['database', 'backups', name, '--json'])))).find(backup => backup !== second.backup);
   if (older) refused(run(stado, fromBackup(older)), 'is not the newest complete backup');
   assert.equal(field(item, 'provider'), 'external', 'A refused migration must leave the item on the source');
-  const moved = JSON.parse(success(run(stado, fromBackup(second.backup))));
+  const moved = pendingLeg({ run, success, refused, field, put, stado, skarbiec, item, port, fromBackup,
+    here: success(run(stado, ['registry', 'self', '--name-only'])), source: payloadOf(answering), backup: second.backup });
   assert.equal(moved.migrated, name);
   assert.equal(moved.backup, second.backup, 'The move must restore the kept backup it was given');
   assert.deepEqual(moved.restore.mismatches, []);
@@ -223,8 +225,7 @@ try {
   const keptPrevious = JSON.parse(success(run(skarbiec, ['get', `${item}-previous`])));
   assertKeptCopy(id => payloadOf(JSON.parse(success(run(skarbiec, ['get', id])))), item, `${item}-previous`, 'previous');
   const restored = { ...payloadOf(keptPrevious), fields: { ...payloadOf(keptPrevious).fields, session_url: payloadOf(answering).fields.session_url } };
-  const put = spawnSync(skarbiec, ['set', `${item}-previous`], { cwd: root, env: environment, input: JSON.stringify(restored), encoding: 'utf8' });
-  assert.equal(put.status, constants.F_OK, `skarbiec set ${item}-previous: ${put.stderr}`);
+  put(`${item}-previous`, restored);
   assert.deepEqual(counted(item), before, 'The fleet copy must hold every row the source held');
   assert.deepEqual(configuration().database_api.databases[name], declaration, 'The declaration must not change');
   report.migrated = moved;
