@@ -41,6 +41,7 @@ enum NativeProductOperations {
             .init(id: "remove-roadmap", label: "Roadmap item titles recorded in error to remove, one per line (record a dropped or replaced idea as rejected or superseded instead)", option: "--remove-roadmap", multiple: true),
             .init(id: "benchmark", label: "Benchmark measuring the rivals, as JSON: {\"app\",\"suites\"}", option: "--benchmark"),
             .init(id: "remove-benchmark", label: "Remove the declared benchmark", option: "--remove-benchmark", flag: true),
+            .init(id: "submit", label: "How the submit queue reviews its changes, as JSON: {\"criticality\":\"critical\"} or {\"criticality\":\"standard\",\"low_risk_max_changed_lines\":N}, optional \"max_changed_lines\" and \"review_paths\"", option: "--submit"),
         ]),
         .init(id: "registry-rm", title: "Remove a product from the catalog", path: ["product", "registry", "rm"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),
