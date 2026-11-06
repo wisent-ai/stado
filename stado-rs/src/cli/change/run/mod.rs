@@ -30,6 +30,7 @@
 //! held to the fleet's daily build admit, and as the submitter's work only
 //! when those do not ([`gates::Admission`]).
 
+mod all;
 mod author;
 pub(super) mod gates;
 mod integration;
@@ -51,6 +52,7 @@ use verdict::{cancelled, follow_up, refuse, requeue};
 
 pub(super) use review::{recorded as recorded_review, ADMITTED};
 pub(super) use submission::{admit, stacked_on};
+pub use all::run_all;
 
 /// Run the queue of the repository whose checkout is `checkout`.
 pub async fn run(
@@ -68,56 +70,6 @@ pub async fn run(
     };
     let resident = resident().await;
     pass(&repository, checkout, (hosts, integrated, resident), lock).await
-}
-
-/// Run the queue of every repository this machine's queue holds a
-/// candidate waiting for a pass of, each from the checkout its oldest
-/// waiting candidate was submitted from. A repository whose pass already
-/// runs is left to it; one whose pass stops does not stop the others, and
-/// every stop is named at the end.
-pub async fn run_all(
-    hosts: &[String],
-    integrated: Option<&Path>,
-) -> Result<Vec<Candidate>, CmdError> {
-    let resident = resident().await;
-    let mut repositories: Vec<(String, std::path::PathBuf)> = Vec::new();
-    for candidate in record::list(None)? {
-        if record::waits_for_pass(&candidate)
-            && !repositories
-                .iter()
-                .any(|(repository, _)| *repository == candidate.repository)
-        {
-            repositories.push((candidate.repository.clone(), candidate.checkout.clone()));
-        }
-    }
-    let mut carried = Vec::new();
-    let mut stopped = Vec::new();
-    for (repository, checkout) in repositories {
-        let Some(lock) = record::lock(&repository)? else {
-            eprintln!(
-                "stado change run: a pass of {repository}'s submit queue is already running; \
-                 its candidates are left to it"
-            );
-            continue;
-        };
-        match pass(&repository, &checkout, (hosts, integrated, resident), lock).await {
-            Ok(done) => carried.extend(done),
-            Err(error) => {
-                eprintln!("stado change run: {repository}: {error}");
-                stopped.push(format!("{repository}: {error}"));
-            }
-        }
-    }
-    if !stopped.is_empty() {
-        return Err(CmdError::refused(format!(
-            "the pass carried {} candidate(s) to a verdict, and the queue of {} repository(ies) \
-             did not move: {}",
-            carried.len(),
-            stopped.len(),
-            stopped.join("; ")
-        )));
-    }
-    Ok(carried)
 }
 
 /// Whether this pass runs under no agent session, which makes it the
