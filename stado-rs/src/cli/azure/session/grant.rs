@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 use url::Url;
 use uuid::Uuid;
 
-use super::super::{CmdError, ARM_SCOPE, AZURE_CLI_CLIENT_ID};
+use super::super::{cloud, sign_in_scope, CmdError, AZURE_CLI_CLIENT_ID};
 
 pub(super) fn pkce_pair() -> (String, String) {
     let verifier = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -26,10 +26,8 @@ pub(super) fn authorization_url(
     state: &str,
     challenge: &str,
 ) -> Result<Url, CmdError> {
-    let mut url = Url::parse(&format!(
-        "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
-    ))
-    .map_err(|err| {
+    let scope = sign_in_scope()?;
+    let mut url = Url::parse(&cloud()?.oauth(tenant, "authorize")).map_err(|err| {
         CmdError::click(format!(
             "Azure tenant {tenant:?} does not form a sign-in URL: {err}"
         ))
@@ -40,7 +38,7 @@ pub(super) fn authorization_url(
         .append_pair("response_type", "code")
         .append_pair("redirect_uri", redirect_uri)
         .append_pair("response_mode", "query")
-        .append_pair("scope", ARM_SCOPE)
+        .append_pair("scope", &scope)
         .append_pair("state", state)
         .append_pair("code_challenge", challenge)
         .append_pair("code_challenge_method", "S256")
@@ -137,18 +135,17 @@ pub(super) async fn exchange_authorization_code(
     redirect_uri: &str,
     verifier: &str,
 ) -> Result<Value, CmdError> {
+    let scope = sign_in_scope()?;
     let response = crate::wait::request(
         reqwest::Client::new()
-            .post(format!(
-                "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
-            ))
+            .post(cloud()?.oauth(tenant, "token"))
             .form(&[
                 ("grant_type", "authorization_code"),
                 ("client_id", AZURE_CLI_CLIENT_ID),
                 ("code", code),
                 ("redirect_uri", redirect_uri),
                 ("code_verifier", verifier),
-                ("scope", ARM_SCOPE),
+                ("scope", scope.as_str()),
             ]),
     )
     .await?;

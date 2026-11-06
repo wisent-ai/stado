@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::super::{CmdError, ARM_RESOURCE, IDENTITY_API_VERSION, STORAGE_API_VERSION};
+use super::super::{CmdError, IDENTITY_API_VERSION, STORAGE_API_VERSION};
 
 /// An ARM answer's status and JSON body. A body that cannot be read or is
 /// not JSON is refused with its cause and text, not read as `null`: a 2xx
@@ -36,9 +36,10 @@ async fn list_resource_collection(
     provider_path: &str,
     api_version: &str,
 ) -> Result<Vec<Value>, CmdError> {
+    let arm = &super::super::cloud()?.resource_manager;
     let response = crate::wait::request(http
         .get(format!(
-            "{ARM_RESOURCE}/subscriptions/{subscription}/resourceGroups/{resource_group}/providers/{provider_path}?api-version={api_version}"
+            "{arm}/subscriptions/{subscription}/resourceGroups/{resource_group}/providers/{provider_path}?api-version={api_version}"
         ))
         .bearer_auth(access_token)).await?;
     let (status, body) = arm_answer(response, &format!("listing Azure {provider_path}")).await?;
@@ -130,9 +131,10 @@ pub(super) async fn agent_principal_id(
         .await?;
         select_resource(&resources, "stado-agent").cloned()
     } else {
+        let arm = &super::super::cloud()?.resource_manager;
         let response = crate::wait::request(
             http.get(format!(
-                "{ARM_RESOURCE}{configured_resource_id}?api-version={IDENTITY_API_VERSION}"
+                "{arm}{configured_resource_id}?api-version={IDENTITY_API_VERSION}"
             ))
             .bearer_auth(access_token),
         )

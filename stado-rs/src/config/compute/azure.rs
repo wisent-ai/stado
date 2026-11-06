@@ -41,6 +41,51 @@ static AZURE_SSH_PUBLIC_KEY: LazyLock<String> = LazyLock::new(|| {
 static AZURE_VM_IDENTITY_ID: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(crate::capabilities::ProviderId::Azure, "vm-identity-id", "")
 });
+static AZURE_RESOURCE_MANAGER: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(
+        crate::capabilities::ProviderId::Azure,
+        "resource-manager",
+        "",
+    )
+});
+static AZURE_AUTHORITY: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(crate::capabilities::ProviderId::Azure, "authority", "")
+});
+static AZURE_IDENTITY_ENDPOINT: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(
+        crate::capabilities::ProviderId::Azure,
+        "identity-endpoint",
+        "",
+    )
+});
+static AZURE_RETAIL_PRICES: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(crate::capabilities::ProviderId::Azure, "retail-prices", "")
+});
+
+/// The Azure Retail Prices API the deployment declares (env
+/// `AZURE_RETAIL_PRICES`); empty for the public one (`remote::azure_cloud`).
+pub fn azure_retail_prices() -> &'static str {
+    AZURE_RETAIL_PRICES.as_str()
+}
+
+/// The Azure Resource Manager the deployment declares (env
+/// `AZURE_RESOURCE_MANAGER`); empty for the public cloud's
+/// (`remote::azure_cloud`).
+pub fn azure_resource_manager() -> &'static str {
+    AZURE_RESOURCE_MANAGER.as_str()
+}
+
+/// The Azure OAuth authority the deployment declares (env
+/// `AZURE_AUTHORITY`); empty for the public cloud's.
+pub fn azure_authority() -> &'static str {
+    AZURE_AUTHORITY.as_str()
+}
+
+/// The managed-identity token endpoint the deployment declares (env
+/// `AZURE_IDENTITY_ENDPOINT`); empty for the instance metadata service's.
+pub fn azure_identity_endpoint() -> &'static str {
+    AZURE_IDENTITY_ENDPOINT.as_str()
+}
 
 /// Azure subscription id (env `AZURE_SUBSCRIPTION_ID`).
 pub fn azure_subscription_id() -> &'static str {

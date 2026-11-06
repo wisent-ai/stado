@@ -47,6 +47,24 @@ pub(in crate::capabilities) const AZURE_COMPUTE_CONFIG: &[ConfigField] = &[
         "azure.ssh_public_key",
     )
     .required(),
+    // The Azure cloud the deployment rents from (remote::azure_cloud): each
+    // undeclared is the public cloud's endpoint.
+    ConfigField::scalar(
+        "resource-manager",
+        "AZURE_RESOURCE_MANAGER",
+        "azure.cloud.resource_manager",
+    ),
+    ConfigField::scalar("authority", "AZURE_AUTHORITY", "azure.cloud.authority"),
+    ConfigField::scalar(
+        "identity-endpoint",
+        "AZURE_IDENTITY_ENDPOINT",
+        "azure.cloud.identity_endpoint",
+    ),
+    ConfigField::scalar(
+        "retail-prices",
+        "AZURE_RETAIL_PRICES",
+        "azure.cloud.retail_prices",
+    ),
 ];
 
 pub(in crate::capabilities) const AWS_COMPUTE_CONFIG: &[ConfigField] = &[

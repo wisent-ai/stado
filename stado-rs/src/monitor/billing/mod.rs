@@ -30,7 +30,8 @@
 //!   replaced by an action-scoped request to the separate Skarbiec service.
 //!   This removes the cross-cloud credential dependency.
 //! - Python's `ClientSecretCredential` is the literal OAuth2 client-
-//!   credentials POST to login.microsoftonline.com.
+//!   credentials POST to the declared Azure cloud's authority
+//!   ([`crate::remote::azure_cloud`]).
 //! - Python records exception detail as `{type(e).__name__}: {e}`; Rust has
 //!   no exception class names, so the detail is the error's Display text
 //!   (the exact upstream error is preserved either way).

@@ -33,3 +33,30 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+### Fixed
+
+- **Azure VM creation is decided by ARM's `error.code`, not by words in its messages:** a NIC or
+  VM create refusal was classified by searching the message for `QuotaExceeded`,
+  `OperationNotAllowed` or `SkuNotAvailable`, so a message that quoted one of them for another
+  reason skipped a location and one that phrased it differently did not. A refusal ARM states is
+  now kept with its HTTP status and `error.code`, from the response and from a long-running
+  operation that ends Failed or Canceled, and a location is skipped only for those codes. Any other
+  refusal is no longer dropped: when no location places the VM, the create fails naming each
+  location's refusal. A NIC that cannot be removed after a refused VM, or after a delete, fails the
+  call naming the VM, the NIC and both refusals instead of being logged and left holding the name
+  the next attempt needs.
+
+### Added
+
+- **The Azure cloud is declared, not built in:** the Resource Manager, the OAuth authority, the
+  managed-identity endpoint and the Retail Prices API were constants of the public cloud,
+  scattered through VM dispatch, the credit gate, sign-in, role repair, billing, the SKU catalog
+  and quota replies. They are now the compute bindings `azure.cloud.resource_manager`,
+  `azure.cloud.authority`, `azure.cloud.identity_endpoint` and `azure.cloud.retail_prices`
+  (`AZURE_RESOURCE_MANAGER`, `AZURE_AUTHORITY`, `AZURE_IDENTITY_ENDPOINT`, `AZURE_RETAIL_PRICES`),
+  each the public cloud's when undeclared, so a deployment can rent from a sovereign cloud and a
+  listener on a loopback address can stand in for Azure. A declared endpoint that is neither
+  HTTPS nor on a loopback or link-local address refuses every Azure call naming the binding, and
+  `stado config show` names the endpoints in force. The ARM client no longer has an
+  unauthenticated mode: every request carries the token.

@@ -28,7 +28,7 @@ fn polling_header(
 }
 
 impl ArmClient {
-    /// GET a JSON resource; non-2xx is an [`AzureError::Api`]. `url` may
+    /// GET a JSON resource; non-2xx is an [`AzureError::Refused`]. `url` may
     /// be a path or an absolute URL (LRO poll).
     pub async fn get(&self, url: &str, desc: &str) -> Result<Value, AzureError> {
         let response = self.send(reqwest::Method::GET, url, None).await?;

@@ -18,10 +18,11 @@ pub(super) fn subscription_id(runner: &dyn AzRunner) -> Result<String, RepliesEr
 
 /// quotaId proves the subscription is sponsored (Sponsored_*).
 /// az account show does NOT include subscriptionPolicies by default,
-/// so hit management.azure.com via `az rest` directly.
+/// so ask the declared cloud's Resource Manager via `az rest` directly.
 /// Python `_subscription_quota_id`.
 pub(super) fn subscription_quota_id(runner: &dyn AzRunner) -> Result<String, RepliesError> {
     let sub = subscription_id(runner)?;
+    let cloud = crate::remote::azure_cloud::declared().map_err(RepliesError::Config)?;
     let r = az(
         runner,
         &[
@@ -29,7 +30,10 @@ pub(super) fn subscription_quota_id(runner: &dyn AzRunner) -> Result<String, Rep
             "--method",
             "GET",
             "--uri",
-            &format!("https://management.azure.com/subscriptions/{sub}?api-version=2022-12-01"),
+            &format!(
+                "{}/subscriptions/{sub}?api-version=2022-12-01",
+                cloud.resource_manager
+            ),
             "--query",
             "subscriptionPolicies.quotaId",
         ],

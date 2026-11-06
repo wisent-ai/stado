@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
-use super::{CmdError, LoginArgs, OperatorToken, ARM_SCOPE};
+use super::{cloud, sign_in_scope, CmdError, LoginArgs, OperatorToken};
 
 mod credentials;
 mod grant;
@@ -143,16 +143,15 @@ pub(in crate::cli::azure) async fn refresh_operator_token(
     let account = credential_field(role, "login_email")
         .await?
         .filter(|email| !email.is_empty());
+    let scope = sign_in_scope()?;
     let response = crate::wait::request(
         reqwest::Client::new()
-            .post(format!(
-                "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-            ))
+            .post(cloud()?.oauth(&tenant_id, "token"))
             .form(&[
                 ("grant_type", "refresh_token"),
                 ("client_id", client_id.as_str()),
                 ("refresh_token", refresh_token.as_str()),
-                ("scope", ARM_SCOPE),
+                ("scope", scope.as_str()),
             ]),
     )
     .await?;

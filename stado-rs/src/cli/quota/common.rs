@@ -50,7 +50,8 @@ impl From<QuotaError> for CmdError {
             QuotaError::Gcp(GceError::Http(_)) | QuotaError::Azure(AzureError::Http(_)) => {
                 FailureCode::InfraDown
             }
-            QuotaError::Gcp(GceError::Api(_)) | QuotaError::Azure(AzureError::Api(_)) => {
+            QuotaError::Gcp(GceError::Api(_))
+            | QuotaError::Azure(AzureError::Api(_) | AzureError::Refused { .. }) => {
                 FailureCode::Unknown
             }
         };

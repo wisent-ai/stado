@@ -12,10 +12,6 @@ use crate::queue::JobStorage;
 
 use balance::azure_section_with;
 
-const AZURE_LOGIN_BASE: &str = "https://login.microsoftonline.com";
-/// Python `_ARM`.
-const ARM_BASE: &str = "https://management.azure.com";
-
 // ---------------------------------------------------------------------------
 // Azure section — Skarbiec SP + ARM available balance
 // ---------------------------------------------------------------------------
@@ -70,8 +66,12 @@ pub(crate) async fn balance_section() -> Value {
         });
     }
     let sp = Value::Object(sp);
+    let cloud = match crate::remote::azure_cloud::declared() {
+        Ok(cloud) => cloud,
+        Err(cause) => return azure_error("config_error", cause),
+    };
     let client = reqwest::Client::new();
-    azure_section_with(&client, &sp, AZURE_LOGIN_BASE, ARM_BASE).await
+    azure_section_with(&client, &sp, cloud).await
 }
 
 fn azure_error(status: &str, detail: String) -> Value {

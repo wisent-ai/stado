@@ -1,13 +1,10 @@
 //! Shared Azure bearer-token chain for identity-based authentication.
 //!
-//! Factored out of `providers/azure/mod.rs` (ARM) so the Azure Blob queue
-//! backend (`queue/azure_blob.rs`) reuses the exact same acquisition logic
-//! with a different scope/resource pair:
-//!
-//! - ARM:     scope `https://management.azure.com/.default`,
-//!   resource `https://management.azure.com`
-//! - Blob:    scope `https://storage.azure.com/.default`,
-//!   resource `https://storage.azure.com`
+//! Shared by ARM and the Azure Blob queue backend (`queue/azure_blob.rs`),
+//! each with its own scope/resource pair: ARM asks for the declared cloud's
+//! Resource Manager (`remote::azure_cloud`), Blob for its storage audience.
+//! The identity endpoint and the authority the chain asks are the declared
+//! cloud's too.
 //!
 //! A managed identity is preferred: on an Azure VM, IMDS answers and no secret
 //! exists anywhere. Off Azure — which is where this control plane actually runs
@@ -95,11 +92,13 @@ fn json_i64(value: Option<&Value>) -> Option<i64> {
     }
 }
 
-/// IMDS managed identity. Short timeout: off-Azure this endpoint hangs, then
-/// the chain falls through to Skarbiec.
+/// IMDS managed identity, at the identity endpoint the declared cloud names
+/// (`remote::azure_cloud`). Off Azure this endpoint answers nothing, and the
+/// chain falls through to Skarbiec.
 async fn imds_token(http: &reqwest::Client, resource: &str) -> Result<TokenGrant, TokenError> {
+    let cloud = crate::remote::azure_cloud::declared().map_err(TokenError::Auth)?;
     let response = crate::wait::request(
-        http.get("http://169.254.169.254/metadata/identity/oauth2/token")
+        http.get(&cloud.identity_endpoint)
             .header("Metadata", "true")
             .query(&[("api-version", IMDS_API_VERSION), ("resource", resource)]),
     )
@@ -148,18 +147,13 @@ async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenG
             .ok_or_else(|| TokenError::Auth(format!("{role}#{field} is absent or empty")))?;
         resolved.push(value);
     }
-    let response = crate::wait::request(
-        http.post(format!(
-            "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-            resolved[0].trim()
-        ))
-        .form(&[
-            ("client_id", resolved[1].trim()),
-            ("client_secret", resolved[2].trim()),
-            ("scope", scope),
-            ("grant_type", "client_credentials"),
-        ]),
-    )
+    let cloud = crate::remote::azure_cloud::declared().map_err(TokenError::Auth)?;
+    let response = crate::wait::request(http.post(cloud.oauth(&resolved[0], "token")).form(&[
+        ("client_id", resolved[1].trim()),
+        ("client_secret", resolved[2].trim()),
+        ("scope", scope),
+        ("grant_type", "client_credentials"),
+    ]))
     .await?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
