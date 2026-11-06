@@ -33,15 +33,16 @@ pub fn replaces_running_program(destination: &Path) -> bool {
 
 /// Refuse `candidate` when it does not accept this host's configuration,
 /// after its own migration. What it noted while accepting it (`NOTE ...`
-/// lines: a resolver state left by a resolver that no longer runs) is said.
+/// lines: a resolver state left by a resolver that no longer runs, a public
+/// edge it runs with but cannot serve) is said.
 pub fn refuse_unaccepted(candidate: &Path, name: &str) -> Result<()> {
-    let first = run(candidate, &["config", "validate"], name)?;
+    let first = validate(candidate, name)?;
     if first.status.success() {
         say_notes(&first, name);
         return Ok(());
     }
     let migration = run(candidate, &["config", "migrate"], name)?;
-    let second = run(candidate, &["config", "validate"], name)?;
+    let second = validate(candidate, name)?;
     if second.status.success() {
         eprintln!(
             "the incoming {name} migrated this host's configuration before installing: {}",
@@ -59,6 +60,20 @@ pub fn refuse_unaccepted(candidate: &Path, name: &str) -> Result<()> {
         String::from_utf8_lossy(&migration.stdout),
         String::from_utf8_lossy(&migration.stderr),
     )
+}
+
+/// The candidate's verdict as an install asks it: `config validate
+/// --install`, which refuses only what the candidate cannot run with. A
+/// candidate older than that flag refuses it as an unexpected argument
+/// before reading anything, and is asked `config validate`, the whole
+/// verdict it gave every install before the flag.
+fn validate(candidate: &Path, name: &str) -> Result<Output> {
+    let asked = run(candidate, &["config", "validate", "--install"], name)?;
+    let unknown = String::from_utf8_lossy(&asked.stderr).contains("unexpected argument '--install'");
+    if asked.status.success() || !unknown {
+        return Ok(asked);
+    }
+    run(candidate, &["config", "validate"], name)
 }
 
 /// Each `NOTE ...` line of an accepting `config validate`, under the name of

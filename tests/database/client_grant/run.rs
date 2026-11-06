@@ -110,7 +110,7 @@ impl Run {
     fn run(&self, command: &mut Command, input: Option<&str>) -> Output {
         self.environment(command);
         let output = match input {
-            Some(text) => stado_wait::process::output_with_input(command, text.as_bytes()),
+            Some(text) => stado_wait::output_with_input(command, text.as_bytes()),
             None => stado_wait::output(command),
         }
         .expect("run the real program");

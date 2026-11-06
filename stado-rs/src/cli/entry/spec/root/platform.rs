@@ -50,6 +50,13 @@ pub(crate) enum PlatformCommands {
         /// `key: value` lines.
         #[arg(long)]
         json: bool,
+        /// `validate`: judge the document as an install of this binary does,
+        /// refusing only what this binary cannot run with; a declaration it
+        /// runs with but cannot serve (a public edge on a host the registry
+        /// does not hold) is said in a `NOTE` line instead of refused, since
+        /// the installed binary reads the same declaration.
+        #[arg(long)]
+        install: bool,
     },
 
     /// Publish and consume immutable, versioned artifacts.
