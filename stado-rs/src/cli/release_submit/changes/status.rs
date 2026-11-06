@@ -1,4 +1,4 @@
-use super::{Change, ChangeStatus};
+use super::{Change, ChangeState, ChangeStatus};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::{BuildReceipt, BuildRun, BuildRunState, PlatformRunState};
@@ -16,7 +16,7 @@ pub(super) const QUALIFICATION_POLICY: &str = "required-behavioral-tests-v1";
 pub(super) struct Observation {
     created_at: String,
     run_id: String,
-    state: String,
+    state: ChangeState,
     failure: Option<String>,
     evidence: Vec<BuildReceipt>,
 }
@@ -165,7 +165,7 @@ pub(super) fn for_change(
     match observations.get(&change.id) {
         Some(value) => ChangeStatus {
             change,
-            state: value.state.clone(),
+            state: value.state,
             qualification_policy: QUALIFICATION_POLICY,
             run_id: Some(value.run_id.clone()),
             failure: value.failure.clone(),
@@ -173,7 +173,7 @@ pub(super) fn for_change(
         },
         None => ChangeStatus {
             change,
-            state: "queued".into(),
+            state: ChangeState::Queued,
             qualification_policy: QUALIFICATION_POLICY,
             run_id: None,
             failure: None,

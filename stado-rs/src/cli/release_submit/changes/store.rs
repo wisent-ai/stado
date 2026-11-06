@@ -127,7 +127,7 @@ pub(crate) async fn bind(
         if source::contains(root, &change.source_commit, commit)? {
             let unbound = !observations.contains_key(&change.id);
             let state = status::for_change(change.clone(), &observations);
-            if (!frozen && state.state != "passed") || (frozen && unbound) {
+            if (!frozen && state.state != super::ChangeState::Passed) || (frozen && unbound) {
                 covered.push(change);
             }
         }

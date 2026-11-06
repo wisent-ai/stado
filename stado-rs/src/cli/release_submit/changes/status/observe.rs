@@ -3,6 +3,7 @@
 //! build was made from.
 
 use super::{evidence, Observation};
+use crate::cli::release_submit::changes::ChangeState;
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::{BuildReceipt, BuildRun, BuildRunState, ProductManifest, StepStatus};
@@ -36,7 +37,7 @@ pub(super) async fn observe(
         Err(error) => {
             return Ok(Observation {
                 created_at: run.created_at.clone(),
-                state: "failed".into(),
+                state: ChangeState::Failed,
                 run_id: run.build_id.clone(),
                 failure: Some(format!(
                     "{manifest_path} no longer reads under this Stado's release contract: {error}"
@@ -49,7 +50,7 @@ pub(super) async fn observe(
     crate::cli::release_submit::refresh_build(store, run, &manifest).await?;
     let mut result = Observation {
         created_at: run.created_at.clone(),
-        state: "building".into(),
+        state: ChangeState::Building,
         run_id: run.build_id.clone(),
         failure: None,
         evidence: Vec::new(),
@@ -71,8 +72,8 @@ pub(super) async fn observe(
         let Some(bytes) = store.read_bytes(&path).await? else {
             if recipe.required {
                 qualified = false;
-                if run.state == BuildRunState::Passed && result.state != "failed" {
-                    result.state = "awaiting_tests".into();
+                if run.state == BuildRunState::Passed && result.state != ChangeState::Failed {
+                    result.state = ChangeState::AwaitingTests;
                     result.failure = Some(format!(
                         "{platform}: the successful build has no retained receipt at {path}"
                     ));
@@ -101,7 +102,7 @@ pub(super) async fn observe(
             continue;
         }
         if receipt.status == StepStatus::Failed {
-            result.state = "failed".into();
+            result.state = ChangeState::Failed;
             result.failure = Some(match receipt.failure.as_deref() {
                 Some(cause) => format!("{platform}: {cause}"),
                 None => {
@@ -110,23 +111,23 @@ pub(super) async fn observe(
             });
         } else if let Some(reason) = evidence::incomplete(recipe, &receipt) {
             qualified = false;
-            if result.state != "failed" {
-                result.state = "awaiting_tests".into();
+            if result.state != ChangeState::Failed {
+                result.state = ChangeState::AwaitingTests;
                 result.failure = Some(format!("{platform}: {reason}"));
             }
         }
         result.evidence.push(receipt);
     }
     if run.state == BuildRunState::Failed {
-        if result.state != "failed" {
+        if result.state != ChangeState::Failed {
             result.failure = Some(match &run.failure {
                 Some(cause) => cause.clone(),
                 None => run_failure_reasons(run),
             });
         }
-        result.state = "failed".into();
-    } else if qualified && run.state == BuildRunState::Passed && result.state != "failed" {
-        result.state = "passed".into();
+        result.state = ChangeState::Failed;
+    } else if qualified && run.state == BuildRunState::Passed && result.state != ChangeState::Failed {
+        result.state = ChangeState::Passed;
     }
     Ok(result)
 }

@@ -61,11 +61,39 @@ pub struct Change {
     pub submitted_at: String,
 }
 
+/// Where a submitted change stands: queued until a build covers it, building
+/// while that build runs, awaiting tests when the build passed but a
+/// required platform's receipt does not yet prove its tests, then passed or
+/// failed. A kept observation naming any other word is refused where it is
+/// read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeState {
+    Queued,
+    Building,
+    AwaitingTests,
+    Passed,
+    Failed,
+}
+
+impl ChangeState {
+    /// The state as `release changes list` prints it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Building => "building",
+            Self::AwaitingTests => "awaiting_tests",
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct ChangeStatus {
     #[serde(flatten)]
     pub change: Change,
-    pub state: String,
+    pub state: ChangeState,
     pub qualification_policy: &'static str,
     pub run_id: Option<String>,
     pub failure: Option<String>,
@@ -196,7 +224,7 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                 for row in statuses {
                     let line = format!(
                         "{} {} {} {}",
-                        row.change.id, row.change.product, row.change.task_id, row.state,
+                        row.change.id, row.change.product, row.change.task_id, row.state.word(),
                     );
                     match row.failure {
                         Some(failure) => println!("{line} {failure}"),
