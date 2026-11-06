@@ -72,9 +72,12 @@ pub fn settle_field_reads(
     grant_field_reads(consumer, Path::new(token_file), item, fields).map(Some)
 }
 
-/// Grant `consumer` a read on each of `fields` of `item` — or on the whole
-/// item when `fields` is empty — keeping its bearer, its remaining TTL, and
-/// every capability it already holds.
+/// Grant `consumer` a read on each of `fields` of `item` — or, when `fields`
+/// is empty, on every field the item holds in the owner vault now — keeping
+/// its bearer, its remaining TTL, and every capability it already holds.
+/// Skarbiec matches a read only against `read:<item>#<field>`, so a whole
+/// item is granted field by field; a capability naming no field would be
+/// written and match nothing.
 ///
 /// `token_file` is the consumer's own owner-only bearer file. It is required
 /// rather than derived: the bearer is what makes this a widening instead of a
@@ -116,14 +119,12 @@ pub fn grant_field_reads(
     let lifetime = GrantLifetime::left(expires_at, now);
 
     let held: Vec<String> = existing.iter().map(encode).collect::<Result<_, _>>()?;
-    let wanted: Vec<String> = if fields.is_empty() {
-        vec![format!("{ACTION}:{item}")]
+    let named: Vec<String> = if fields.is_empty() {
+        held_fields(item)?
     } else {
-        fields
-            .iter()
-            .map(|field| format!("{ACTION}:{item}#{field}"))
-            .collect()
+        fields.iter().map(|field| (*field).to_string()).collect()
     };
+    let wanted: Vec<String> = named.iter().map(|field| format!("{ACTION}:{item}#{field}")).collect();
     let added: Vec<String> = wanted
         .iter()
         .filter(|capability| !held.contains(capability))
@@ -262,4 +263,20 @@ pub fn grant_field_reads(
             .and_then(|settled| GrantLifetime::left(settled, now)),
         backup: Some(backup),
     })
+}
+
+/// Every field `item` holds in the owner vault, by name. An item the vault
+/// does not hold, or one whose payload carries no fields, is refused naming
+/// it: granting it nothing would report a grant that reads nothing.
+fn held_fields(item: &str) -> Result<Vec<String>, SkarbiecError> {
+    let document = owner::read_document(item)?
+        .ok_or_else(|| deployment(format!("{item} is not in the owner vault, so it has no fields to grant")))?;
+    let fields = document
+        .get("fields")
+        .and_then(Value::as_object)
+        .ok_or_else(|| deployment(format!("{item} in the owner vault carries no fields object, so none can be granted")))?;
+    if fields.is_empty() {
+        return Err(deployment(format!("{item} in the owner vault holds no field, so none can be granted")));
+    }
+    Ok(fields.keys().cloned().collect())
 }

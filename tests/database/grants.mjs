@@ -80,10 +80,14 @@ try {
   success(run(stado, ['config', 'init']));
   success(run(skarbiec, ['init', 'database-grant-journey']));
   success(run(stado, ['config', 'set', 'secrets.skarbiec.vault_file', vault]));
-  for (const item of ['grant-seed', 'grant-journey-database']) {
+  // The database item holds the fields a sqlite database's item carries.
+  const databaseFields = { engine: 'sqlite', path: '/var/lib/grant-journey.sqlite', pooler_url: 'sqlite:///var/lib/grant-journey.sqlite' };
+  for (const [item, fields] of [
+    ['grant-seed', { value: randomBytes(32).toString('hex') }],
+    ['grant-journey-database', databaseFields],
+  ]) {
     success(run(skarbiec, ['set', item], JSON.stringify({
-      schema: 'skarbiec.item.v2', kind: 'bundle', context: {},
-      fields: { value: randomBytes(32).toString('hex') },
+      schema: 'skarbiec.item.v2', kind: 'bundle', context: {}, fields,
     }), false));
   }
   success(run(stado, ['database', 'declare', 'grant-journey', '--engine', 'sqlite', '--consumer', 'base', '--json']));
@@ -102,7 +106,11 @@ try {
   const addedAndSettled = change('grant', 'other', 0);
   assert.equal(digest(readFileSync(reader.token)), reader.before);
   assert.equal(digest(readFileSync(other.token)), other.before);
-  assert.deepEqual(settledExisting.result.skarbiec[0].added, ['read:grant-journey-database']);
+  // Skarbiec matches a read only against read:<item>#<field>, so the grant
+  // names every field the item holds.
+  const fieldNames = Object.keys(databaseFields).sort();
+  assert.deepEqual([...settledExisting.result.skarbiec[0].added].sort(),
+    fieldNames.map(field => `read:grant-journey-database#${field}`));
   assert.deepEqual(repeatedSuccess.result.skarbiec[0].added, []);
   assert.deepEqual(addedAndSettled.after.consumers, ['base', 'reader', 'other']);
   report.persisted_grants = JSON.parse(success(run(skarbiec, ['grant', 'list'])));
@@ -110,9 +118,15 @@ try {
     const stored = report.persisted_grants.find(grant => grant.consumer === consumer);
     assert.ok(stored, `${consumer}: successful grant is absent from the real vault`);
     assert.deepEqual(
-      new Set(stored.capabilities.map(({ action, item, field }) => [action, item, field])),
-      new Set([['read', 'grant-seed', null], ['read', 'grant-journey-database', null]]),
+      stored.capabilities.map(({ action, item, field }) => (field == null ? `${action}:${item}` : `${action}:${item}#${field}`)).sort(),
+      ['read:grant-seed', ...fieldNames.map(field => `read:grant-journey-database#${field}`)].sort(),
     );
+    const token = join(home, '.stado', `${consumer}-skarbiec-token`);
+    for (const field of fieldNames) {
+      const verified = JSON.parse(success(run(skarbiec, ['grant', 'verify', consumer, 'grant-journey-database',
+        '--action', 'read', '--field', field, '--token-file', token])));
+      assert.equal(verified.allowed, true, `${consumer}: Skarbiec refuses its read of grant-journey-database#${field}`);
+    }
   }
 
   const revoked = change('revoke', 'other', 0);
