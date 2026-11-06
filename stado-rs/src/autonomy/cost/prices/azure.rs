@@ -38,8 +38,25 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
         filter.push_str(&region_filter);
         filter.push(')');
     }
-    let mut endpoint = url::Url::parse("https://prices.azure.com/api/retail/prices")
-        .expect("static Azure Retail Prices URL parses");
+    let cloud = match crate::remote::azure_cloud::declared() {
+        Ok(cloud) => cloud,
+        Err(cause) => {
+            source.state = PriceState::Blocked;
+            source.error = Some(cause);
+            return source;
+        }
+    };
+    let mut endpoint = match url::Url::parse(&cloud.retail_prices) {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            source.state = PriceState::Blocked;
+            source.error = Some(format!(
+                "the Retail Prices API {:?} is not a URL: {error}",
+                cloud.retail_prices
+            ));
+            return source;
+        }
+    };
     endpoint.query_pairs_mut().append_pair("$filter", &filter);
     let mut url = endpoint.to_string();
     let mut rows_without: Vec<String> = Vec::new();

@@ -1,7 +1,5 @@
 //! Azure network helpers — subnet/NSG ARM ID construction + NIC lifecycle.
 //!
-//! Port of `stado/providers/azure_helpers/network.py`.
-//!
 //! Naming convention: vnet `${AZURE_VNET}-{location}`, NSG `${AZURE_NSG}-
 //! {location}`, subnet `${AZURE_SUBNET}` (subnet is a child of vnet so its
 //! name is locally scoped to the already-region-specific vnet).
@@ -9,11 +7,6 @@
 use serde_json::{json, Value};
 
 use super::{ArmClient, AzureError, NETWORK_API_VERSION};
-
-/// Python `_log`.
-fn log(msg: &str) {
-    eprintln!("[azure-net] {msg}");
-}
 
 /// Python `subnet_id`.
 pub fn subnet_id(subscription: &str, rg: &str, vnet: &str, subnet: &str, location: &str) -> String {
@@ -88,18 +81,14 @@ pub async fn create_nic(
         .ok_or_else(|| AzureError::Api(format!("Azure {desc} -> response has no id")))
 }
 
-/// Python `delete_nic`: best-effort — every failure is logged, never
-/// propagated (Python swallows all exceptions here).
-pub async fn delete_nic(client: &ArmClient, rg: &str, name: &str) {
+/// Delete a VM's NIC; an absent NIC is already the wanted state. A failure
+/// is returned naming the NIC, because a NIC left behind holds the name the
+/// next placement and the next delete need.
+pub async fn delete_nic(client: &ArmClient, rg: &str, name: &str) -> Result<(), AzureError> {
     let path = format!(
         "{}?api-version={NETWORK_API_VERSION}",
         nic_path(client.subscription(), rg, name)
     );
     let desc = format!("delete NIC {}", nic_name(name));
-    if let Err(err) = client.delete_allow_404(&path, &desc).await {
-        log(&format!(
-            "NIC delete failed for {}: {err:?}",
-            nic_name(name)
-        ));
-    }
+    client.delete_allow_404(&path, &desc).await.map(drop)
 }

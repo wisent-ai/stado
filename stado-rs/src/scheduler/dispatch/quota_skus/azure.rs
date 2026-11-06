@@ -88,11 +88,21 @@ pub async fn azure_catalog() -> Vec<Value> {
             "error": "AZURE_SUBSCRIPTION_ID is required",
         })];
     }
+    let cloud = match crate::remote::azure_cloud::declared() {
+        Ok(cloud) => cloud,
+        Err(cause) => {
+            return vec![json!({
+                "provider": crate::capabilities::ProviderId::Azure.as_str(),
+                "ok": false,
+                "error": cause,
+            })];
+        }
+    };
     let http = reqwest::Client::new();
     let token = match crate::remote::azure_token::identity_bearer_token(
         &http,
-        "https://management.azure.com/.default",
-        "https://management.azure.com",
+        &cloud.scope(),
+        &cloud.resource_manager,
     )
     .await
     {
@@ -106,7 +116,8 @@ pub async fn azure_catalog() -> Vec<Value> {
         }
     };
     let mut next = Some(format!(
-        "https://management.azure.com/subscriptions/{subscription}/providers/Microsoft.Compute/skus?api-version=2021-07-01"
+        "{}/subscriptions/{subscription}/providers/Microsoft.Compute/skus?api-version=2021-07-01",
+        cloud.resource_manager
     ));
     let mut skus = Vec::new();
     while let Some(url) = next.take() {

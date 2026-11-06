@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use super::super::{CmdError, ARM_RESOURCE, ROLE_API_VERSION};
+use super::super::{cloud, CmdError, ROLE_API_VERSION};
 
 pub(super) async fn handle_deny_assignments(
     http: &reqwest::Client,
@@ -11,9 +11,10 @@ pub(super) async fn handle_deny_assignments(
     subscription_scope: &str,
     remove_name: Option<&str>,
 ) -> Result<Value, CmdError> {
+    let arm = &cloud()?.resource_manager;
     let response = crate::wait::request(http
         .get(format!(
-            "{ARM_RESOURCE}{subscription_scope}/providers/Microsoft.Authorization/denyAssignments?api-version={ROLE_API_VERSION}"
+            "{arm}{subscription_scope}/providers/Microsoft.Authorization/denyAssignments?api-version={ROLE_API_VERSION}"
         ))
         .bearer_auth(access_token)).await?;
     let (status, body) =
@@ -79,7 +80,7 @@ pub(super) async fn handle_deny_assignments(
             };
             let delete = crate::wait::request(http
                 .delete(format!(
-                    "{ARM_RESOURCE}{scope}/providers/Microsoft.Authorization/denyAssignments/{name}?api-version={ROLE_API_VERSION}"
+                    "{arm}{scope}/providers/Microsoft.Authorization/denyAssignments/{name}?api-version={ROLE_API_VERSION}"
                 ))
                 .bearer_auth(access_token)).await?;
             report["http_status"] = Value::from(delete.status().as_u16());

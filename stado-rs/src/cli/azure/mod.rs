@@ -27,8 +27,21 @@ use resources::repair_rbac;
 use session::login;
 
 const AZURE_CLI_CLIENT_ID: &str = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
-const ARM_SCOPE: &str = "https://management.azure.com/.default offline_access openid profile";
-const ARM_RESOURCE: &str = "https://management.azure.com";
+/// The OAuth scopes an operator sign-in asks for beside the Resource
+/// Manager's own (`.default`).
+const SIGN_IN_SCOPES: &str = "offline_access openid profile";
+
+/// The cloud the deployment declares (`remote::azure_cloud`), or its refusal
+/// as this command's declaration error.
+fn cloud() -> Result<&'static crate::remote::azure_cloud::Cloud, CmdError> {
+    crate::remote::azure_cloud::declared().map_err(CmdError::declaration)
+}
+
+/// The scope an operator sign-in asks for: the declared cloud's Resource
+/// Manager and [`SIGN_IN_SCOPES`].
+fn sign_in_scope() -> Result<String, CmdError> {
+    Ok(format!("{} {SIGN_IN_SCOPES}", cloud()?.scope()))
+}
 const ROLE_API_VERSION: &str = "2022-04-01";
 const IDENTITY_API_VERSION: &str = "2023-01-31";
 const STORAGE_API_VERSION: &str = "2023-05-01";

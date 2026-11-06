@@ -85,6 +85,8 @@ impl Provider for AzureProvider {
         let client = &state.client;
         let rg = config::azure_resource_group();
         let mut skipped: HashSet<String> = HashSet::new();
+        // Quota, policy or SKU refusals count as no capacity; other failures are returned.
+        let mut faults: Vec<String> = Vec::new();
         for location in config::azure_locations() {
             if skipped.contains(location) {
                 continue;
@@ -101,10 +103,11 @@ impl Provider for AzureProvider {
             {
                 Ok(id) => id,
                 Err(err) => {
-                    let msg = err.to_string();
                     log(&format!("NIC create failed in {location}: {err}"));
-                    if nic_skip_error(&msg) {
+                    if nic_skip_error(&err) {
                         skipped.insert(location.clone());
+                    } else {
+                        faults.push(format!("{location}: NIC create: {err}"));
                     }
                     continue;
                 }
@@ -145,19 +148,30 @@ impl Provider for AzureProvider {
                     {
                         return Ok(Some(reference));
                     }
-                    let msg = err.to_string();
                     log(&format!("VM create failed in {location}: {err}"));
-                    // Roll back the NIC we just created so we don't leak
-                    // it.
-                    network::delete_nic(client, rg, name).await;
-                    if vm_skip_error(&msg) {
+                    // A NIC that cannot be removed holds the name the next location needs.
+                    if let Err(cleanup) = network::delete_nic(client, rg, name).await {
+                        return Err(ProviderError::Value(format!(
+                            "Azure VM {name} failed in {location} ({err}); its NIC could not be \
+                             removed ({cleanup})"
+                        )));
+                    }
+                    if vm_skip_error(&err) {
                         skipped.insert(location.clone());
+                    } else {
+                        faults.push(format!("{location}: VM create: {err}"));
                     }
                     continue;
                 }
             }
         }
-        Ok(None)
+        if faults.is_empty() {
+            return Ok(None);
+        }
+        Err(ProviderError::Value(format!(
+            "no Azure location placed {name}: {}",
+            faults.join("; ")
+        )))
     }
 
     async fn delete_instance(&self, instance_ref: &str) -> Result<(), ProviderError> {
@@ -173,10 +187,8 @@ impl Provider for AzureProvider {
             .client
             .delete_allow_404(&path, &format!("delete VM {name}"))
             .await?;
-        // NIC cleanup mirrors the VM-delete contract: NotFound is
-        // idempotent success, and failures are best-effort log-only
-        // inside delete_nic (Python network.py swallows all exceptions).
-        network::delete_nic(&state.client, rg, name).await;
+        // An absent NIC is already gone; one that cannot be removed is returned, not left silently.
+        network::delete_nic(&state.client, rg, name).await?;
         Ok(())
     }
 

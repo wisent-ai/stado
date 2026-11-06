@@ -2,7 +2,8 @@
 //!
 //! Port of `stado/providers/azure.py`. Python uses azure-identity +
 //! azure-mgmt-compute/azure-mgmt-network; this port talks to the ARM REST
-//! API (`https://management.azure.com`) directly with reqwest — no Azure
+//! API of the deployment's declared cloud ([`crate::remote::azure_cloud`])
+//! directly with reqwest — no Azure
 //! SDK crates. NIC + VM create across AZURE_LOCATIONS, falling through
 //! quota/capacity errors per region. Pre-provisioned vnet/NSG (named with
 //! `-{location}` suffix, one per region in a shared RG) attach to the NIC;
@@ -12,7 +13,7 @@
 //! Authentication is shared with the Azure Blob queue backend through
 //! [`crate::remote::azure_token`]: an Azure managed identity is preferred, then the
 //! service principal of the Skarbiec `cloud-azure` role is read. This module
-//! requests the ARM audience (`https://management.azure.com`).
+//! requests the declared cloud's Resource Manager as its audience.
 //!
 //! On an agent VM IMDS resolves only when the VM carries a managed identity.
 //! Agent VMs are therefore created with the pre-provisioned user-assigned
@@ -56,7 +57,7 @@ mod power;
 mod provider;
 pub mod public;
 
-pub use arm::{ArmClient, AzureError, ARM_API_BASE};
+pub use arm::{ArmClient, AzureError};
 pub use builders::{parse_image_urn, vm_body, MANAGED_TAG, MANAGED_TAG_VALUE};
 pub use power::{power_state, resource_phase, vm_is_alive};
 pub use provider::AzureProvider;

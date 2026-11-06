@@ -63,15 +63,16 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
     if matches!(args, ["account", "show", ..]) {
         return Ok(json!(subscription).to_string());
     }
+    let cloud = crate::remote::azure_cloud::declared().map_err(RepliesError::Config)?;
     let http = reqwest::Client::new();
     let token = crate::remote::azure_token::identity_bearer_token(
         &http,
-        "https://management.azure.com/.default",
-        "https://management.azure.com",
+        &cloud.scope(),
+        &cloud.resource_manager,
     )
     .await
     .map_err(|err| RepliesError::Auth(err.to_string()))?;
-    let base = format!("https://management.azure.com/subscriptions/{subscription}");
+    let base = format!("{}/subscriptions/{subscription}", cloud.resource_manager);
 
     if matches!(args, ["rest", ..]) {
         let value = azure_response(

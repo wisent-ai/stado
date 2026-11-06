@@ -11,15 +11,14 @@ use super::azure_error;
 use crate::config;
 use crate::monitor::billing::format::{error_section, py_list_repr};
 
-/// Injectable twin of the post-secret half of [`azure_section`](super::azure_section): SP JSON +
-/// login/ARM base URLs explicit, so tests can run the OAuth + ARM exchange
-/// against the loopback mock.
+/// The post-secret half of [`azure_section`](super::azure_section): the SP
+/// JSON and the Azure cloud whose authority and Resource Manager it asks.
 pub(super) async fn azure_section_with(
     client: &reqwest::Client,
     sp: &Value,
-    login_base: &str,
-    arm_base: &str,
+    cloud: &crate::remote::azure_cloud::Cloud,
 ) -> Value {
+    let arm_base = cloud.resource_manager.as_str();
     let field = |key: &str| {
         sp.get(key)
             .and_then(Value::as_str)
@@ -48,12 +47,12 @@ pub(super) async fn azure_section_with(
         }
     };
 
-    // Python ClientSecretCredential.get_token("https://management.azure.com/.default").
-    let token_url = format!("{login_base}/{tenant_id}/oauth2/v2.0/token");
+    let token_url = cloud.oauth(tenant_id, "token");
+    let scope = cloud.scope();
     let token = match crate::wait::request(client.post(&token_url).form(&[
         ("client_id", client_id),
         ("client_secret", client_secret),
-        ("scope", "https://management.azure.com/.default"),
+        ("scope", scope.as_str()),
         ("grant_type", "client_credentials"),
     ]))
     .await

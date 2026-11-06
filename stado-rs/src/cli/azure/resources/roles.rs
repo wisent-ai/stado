@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::super::session::jwt_claims;
-use super::super::{CmdError, RepairRbacArgs, ARM_RESOURCE, ARM_SCOPE, ROLE_API_VERSION};
+use super::super::{cloud, CmdError, RepairRbacArgs, ROLE_API_VERSION};
 
 fn role_assignment_name(scope: &str, principal_id: &str, role_id: &str) -> Uuid {
     let material = format!("{scope}\n{principal_id}\n{role_id}");
@@ -25,9 +25,10 @@ pub(super) async fn ensure_role(
     role_id: &str,
 ) -> Result<Value, CmdError> {
     let assignment = role_assignment_name(scope, principal_id, role_id);
+    let arm = &cloud()?.resource_manager;
     let response = crate::wait::request(http
         .put(format!(
-            "{ARM_RESOURCE}{scope}/providers/Microsoft.Authorization/roleAssignments/{assignment}?api-version={ROLE_API_VERSION}"
+            "{arm}{scope}/providers/Microsoft.Authorization/roleAssignments/{assignment}?api-version={ROLE_API_VERSION}"
         ))
         .bearer_auth(access_token)
         .json(&json!({
@@ -75,13 +76,22 @@ pub(super) async fn control_principal_id(args: &RepairRbacArgs) -> Result<String
         return Ok(id.to_string());
     }
     let http = reqwest::Client::new();
-    let token = crate::remote::azure_token::identity_bearer_token(&http, ARM_SCOPE, ARM_RESOURCE)
-        .await
-        .map_err(|err| match err {
-            crate::remote::azure_token::TokenError::Auth(_) => CmdError::click(err.to_string())
-                .stating(crate::primitives::failure::FailureCode::Auth),
-            crate::remote::azure_token::TokenError::Http(error) => CmdError::from(error),
-        })?;
+    // The control principal's own token: the Resource Manager's `.default`
+    // scope, as a client-credentials grant takes it, not the operator
+    // sign-in's scopes.
+    let cloud = cloud()?;
+    let token = crate::remote::azure_token::identity_bearer_token(
+        &http,
+        &cloud.scope(),
+        &cloud.resource_manager,
+    )
+    .await
+    .map_err(|err| match err {
+        crate::remote::azure_token::TokenError::Auth(_) => {
+            CmdError::click(err.to_string()).stating(crate::primitives::failure::FailureCode::Auth)
+        }
+        crate::remote::azure_token::TokenError::Http(error) => CmdError::from(error),
+    })?;
     jwt_claims(&token)?
         .get("oid")
         .and_then(Value::as_str)

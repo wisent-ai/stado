@@ -1,8 +1,9 @@
 //! Everything outside this process that Stado talks to: the control plane it
 //! answers, the tailnet and the LAN it addresses hosts on, the object store it
-//! reads and writes, the Azure token those calls carry, and the AWS Signature
-//! Version 4 both ends of Stado's S3 endpoint compute.
+//! reads and writes, the Azure cloud and the token those calls carry, and the
+//! AWS Signature Version 4 both ends of Stado's S3 endpoint compute.
 
+pub mod azure_cloud;
 pub mod azure_token;
 pub mod control_plane;
 pub mod lan;

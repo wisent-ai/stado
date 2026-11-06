@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::{bearer_token, AzureError, ARM_API_BASE};
+use super::{bearer_token, AzureError};
 
 /// The status an Azure-AsyncOperation answer reports. Every status that is
 /// not terminal is still running.
@@ -31,9 +31,9 @@ pub struct ArmClient {
 struct ArmInner {
     http: reqwest::Client,
     subscription: String,
-    base_url: String,
-    /// True in prod (token chain attached); false on loopback test mocks.
-    auth: bool,
+    /// The ARM base of the cloud the deployment declares, or why its
+    /// declaration was refused: every request is refused with that.
+    base_url: Result<String, String>,
 }
 
 /// The wait an HTTP-date `Retry-After` names: the time left until `date`.
@@ -117,21 +117,28 @@ fn stated_error(answer: &Value) -> Option<String> {
     }
 }
 
-impl ArmClient {
-    /// Bind to the public ARM API; the token chain resolves on the first
-    /// request.
-    pub fn new(subscription: &str) -> Self {
-        Self::assemble(subscription, ARM_API_BASE, true)
-    }
+/// The `error.code` an ARM error object states, the field ARM documents a
+/// refusal's kind in.
+fn stated_code(answer: &Value) -> Option<String> {
+    answer
+        .get("error")?
+        .get("code")?
+        .as_str()
+        .map(str::to_string)
+}
 
-    /// Bind to an explicit base URL without auth (loopback mocks in tests).
-    fn assemble(subscription: &str, base_url: &str, auth: bool) -> Self {
+impl ArmClient {
+    /// Bind to the Resource Manager of the cloud the deployment declares
+    /// (`remote::azure_cloud`); the token chain resolves on the first request.
+    /// A declaration that is refused refuses every request with its cause.
+    pub fn new(subscription: &str) -> Self {
+        let base_url =
+            crate::remote::azure_cloud::declared().map(|cloud| cloud.resource_manager.clone());
         ArmClient {
             inner: Arc::new(ArmInner {
                 http: reqwest::Client::new(),
                 subscription: subscription.to_string(),
-                base_url: base_url.trim_end_matches('/').to_string(),
-                auth,
+                base_url,
             }),
         }
     }
@@ -152,20 +159,23 @@ impl ArmClient {
         url: &str,
         body: Option<&Value>,
     ) -> Result<reqwest::Response, AzureError> {
+        let base_url = self
+            .inner
+            .base_url
+            .as_deref()
+            .map_err(|cause| AzureError::Auth(cause.to_string()))?;
         let full = if url.starts_with("http") {
             url.to_string()
         } else {
-            format!("{}{url}", self.inner.base_url)
+            format!("{base_url}{url}")
         };
+        let token = bearer_token(&self.inner.http).await?;
         let mut request = self
             .inner
             .http
             .request(method, full)
-            .header(reqwest::header::ACCEPT, "application/json");
-        if self.inner.auth {
-            let token = bearer_token(&self.inner.http).await?;
-            request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
-        }
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
         // A body that cannot be serialized fails the request with its cause
         // instead of sending `{}` in its place.
         if let Some(body) = body {
@@ -174,10 +184,10 @@ impl ArmClient {
         Ok(crate::wait::request(request).await?)
     }
 
-    /// Lift a non-2xx response into [`AzureError::Api`], embedding the
-    /// ARM `error.code` + `error.message` so Python's substring
-    /// classification keeps working. An answer that states no error object
-    /// is quoted whole, and one that is not JSON says why beside it.
+    /// Lift a non-2xx response into [`AzureError::Refused`]: its HTTP
+    /// status, the `error.code` ARM stated and the `code message` read. An
+    /// answer that states no error object is quoted whole, and one that is
+    /// not JSON says why beside it.
     pub(super) async fn api_error(response: reqwest::Response, desc: &str) -> AzureError {
         let status = response.status().as_u16();
         // A refusal whose body cannot be read says so: read as empty, the
@@ -186,20 +196,28 @@ impl ArmClient {
         let text = match response.text().await {
             Ok(text) => text,
             Err(error) => {
-                return AzureError::Api(format!(
-                    "Azure {desc} -> HTTP {status}; its body could not be read: {}",
-                    error.without_url()
-                ))
+                return AzureError::Refused {
+                    status: Some(status),
+                    code: None,
+                    detail: format!(
+                        "Azure {desc} -> HTTP {status}; its body could not be read: {}",
+                        error.without_url()
+                    ),
+                }
             }
         };
-        let detail = match serde_json::from_str::<Value>(&text) {
+        let (code, detail) = match serde_json::from_str::<Value>(&text) {
             Ok(answer) => match stated_error(&answer) {
-                Some(stated) => stated,
-                None => text,
+                Some(stated) => (stated_code(&answer), stated),
+                None => (None, text),
             },
-            Err(cause) => format!("{text} (the answer is not JSON: {cause})"),
+            Err(cause) => (None, format!("{text} (the answer is not JSON: {cause})")),
         };
-        AzureError::Api(format!("Azure {desc} -> HTTP {status}: {detail}"))
+        AzureError::Refused {
+            status: Some(status),
+            code,
+            detail: format!("Azure {desc} -> HTTP {status}: {detail}"),
+        }
     }
 
     /// Poll an Azure-AsyncOperation URL until Succeeded/Failed/Canceled, at
@@ -238,9 +256,11 @@ impl ArmClient {
                         Some(stated) => stated,
                         None => text,
                     };
-                    return Err(AzureError::Api(format!(
-                        "Azure {desc} operation {status}: {detail}"
-                    )));
+                    return Err(AzureError::Refused {
+                        status: None,
+                        code: stated_code(&body),
+                        detail: format!("Azure {desc} operation {status}: {detail}"),
+                    });
                 }
                 OperationStatus::Running => hold_for(wait?).await,
             }

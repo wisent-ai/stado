@@ -5,7 +5,7 @@
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use super::arm::vm_path;
+use super::arm::{vm_path, AzureError};
 
 const VM_EXTENSION_API_VERSION: &str = "2022-11-01";
 const AGENT_GRANT_EXTENSION_NAME: &str = "stado-agent-grant";
@@ -194,13 +194,26 @@ pub(super) fn agent_grant_extension_body(location: &str, agent_grant: &str) -> V
     })
 }
 
-/// Python NIC-create failure classification: QuotaExceeded /
-/// OperationNotAllowed mark the location as skipped.
-pub(super) fn nic_skip_error(msg: &str) -> bool {
-    msg.contains("QuotaExceeded") || msg.contains("OperationNotAllowed")
+/// The ARM `error.code`s that say a location has no room for this NIC: the
+/// subscription's quota is spent or a policy forbids the request
+/// (https://learn.microsoft.com/en-us/azure/azure-resource-manager/troubleshooting/common-deployment-errors).
+const NIC_SKIP_CODES: [&str; 2] = ["QuotaExceeded", "OperationNotAllowed"];
+
+/// The codes above plus `SkuNotAvailable`, ARM's refusal of a VM size the
+/// location does not offer now (same page).
+const VM_SKIP_CODES: [&str; 3] = ["QuotaExceeded", "OperationNotAllowed", "SkuNotAvailable"];
+
+/// Whether a NIC create refusal marks its location as skipped, decided by
+/// the `error.code` ARM stated, never by words in its message.
+pub(super) fn nic_skip_error(refusal: &AzureError) -> bool {
+    refusal
+        .arm_code()
+        .is_some_and(|code| NIC_SKIP_CODES.contains(&code))
 }
 
-/// Python VM-create failure classification adds SkuNotAvailable.
-pub(super) fn vm_skip_error(msg: &str) -> bool {
-    nic_skip_error(msg) || msg.contains("SkuNotAvailable")
+/// Whether a VM create refusal marks its location as skipped.
+pub(super) fn vm_skip_error(refusal: &AzureError) -> bool {
+    refusal
+        .arm_code()
+        .is_some_and(|code| VM_SKIP_CODES.contains(&code))
 }
