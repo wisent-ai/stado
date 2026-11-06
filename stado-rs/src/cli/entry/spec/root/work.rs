@@ -172,10 +172,22 @@ pub(crate) enum QualityCommands {
         /// Read Git pre-push ref updates from stdin and check the committed
         /// source of every distinct pushed commit: its locks, module
         /// declarations and reach, with no gate and no build. Deletions have
-        /// no source tree to check, and a commit the submit queue recorded as
-        /// its own landing was checked by the queue's pass.
+        /// no source tree to check, a commit the submit queue recorded as its
+        /// own landing was checked by the queue's pass, and a push to another
+        /// repository than origin's (see --remote-url) is not checked.
         #[arg(long, conflicts_with = "revision")]
         pre_push: bool,
+        /// With --pre-push: the remote the push goes to, as Git hands the
+        /// hook its first argument (the remote's name, or its URL when the
+        /// push names none). Without it the push is taken for one to origin.
+        #[arg(long, requires_all = ["pre_push", "remote_url"])]
+        remote: Option<String>,
+        /// With --remote: the URL the push goes to, Git's second hook
+        /// argument. A push is checked only when it names the repository one
+        /// of origin's push URLs names (host and path, with scheme, user,
+        /// port, .git and case set aside); any other is said and passed.
+        #[arg(long, requires_all = ["pre_push", "remote"])]
+        remote_url: Option<String>,
         /// An open defect this check serves, named to Oko's admission
         /// (`oko admit test|build --purpose`) before a test gate runs or the
         /// CLI is built; repeat for several. A consent the operator limited

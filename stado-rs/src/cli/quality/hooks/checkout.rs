@@ -30,25 +30,25 @@ fn installed_under_home() -> &'static str {
         .unwrap_or(crate::deploy::host_exec::STADO_CLI)
 }
 
-/// The hook script: Git's ref updates on stdin go to the installed Stado's
-/// pre-push check, then to the chained hook when one is kept. The installed
-/// Stado is named from `$HOME` at run time, as a fleet host's gate script
-/// names it, so the hook neither carries this machine's home nor runs a
-/// build that happened to write it.
+/// The hook script: Git's ref updates on stdin and the remote its two
+/// arguments name go to the installed Stado's pre-push check, then to the
+/// chained hook when one is kept. The installed Stado is named from `$HOME`
+/// at run time, as a fleet host's gate script names it, so the hook neither
+/// carries this machine's home nor runs a build that happened to write it.
 pub(super) fn script() -> String {
     format!(
         "{HEADER}\
          # Written by `stado quality hooks install`; `stado quality hooks status` reads it\n\
          # and `stado quality hooks remove` takes it out, putting back the hook it chained.\n\
-         # Git's ref updates go to `stado quality check --pre-push`, which checks each\n\
-         # pushed commit's committed source (its locks, module declarations and reach)\n\
-         # and refuses the push when it does not hold; no gate formats, lints or\n\
-         # compiles at push. The pre-push hook this checkout had before, kept beside\n\
-         # this one as {CHAINED}, then reads the same updates.\n\
+         # Git's ref updates and remote ($1, $2) go to `stado quality check --pre-push`,\n\
+         # which checks the committed source of each commit pushed to origin's repository\n\
+         # and refuses the push when it does not hold; a push elsewhere is said and passed.\n\
+         # The pre-push hook this checkout had before, kept beside this one as {CHAINED},\n\
+         # then reads the same updates.\n\
          set -eu\n\
          updates=$(cat)\n\
          send() {{\n  if [ -n \"$updates\" ]; then printf '%s\\n' \"$updates\"; fi\n}}\n\
-         send | \"$HOME\"/{} quality check --pre-push --if-declared\n\
+         send | \"$HOME\"/{} quality check --pre-push --if-declared --remote \"$1\" --remote-url \"$2\"\n\
          chained=\"${{0%/*}}/{CHAINED}\"\n\
          if [ -x \"$chained\" ]; then\n  send | \"$chained\" \"$@\"\nfi\n",
         crate::deploy::shlex_quote(installed_under_home())

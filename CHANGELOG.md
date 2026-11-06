@@ -105,6 +105,18 @@ The version-bump commit moves them with `stado product changelog --version V`;
   host and start. A resident coordinator that finds the store held logs `tick skipped: …` and
   ticks at its next interval.
 
+- **A push to a mirror or a fork is no longer checked as one to origin:** the pre-push hook
+  dropped the remote name and URL Git hands every pre-push hook, so `stado quality check
+  --pre-push` took every push of `main` for one to the `main` the submit queue lands on, and a
+  commit pushed to a backup mirror was refused for what only the shared `main` must hold. The hook
+  now hands them on as `--remote` and `--remote-url`. A push Git names as `origin` is always
+  checked, whatever its URL reads; any other remote is passed, with a line naming both
+  repositories, only when its URL names a repository none of `origin`'s push URLs names (host
+  and path, with scheme, user, port, `.git`, a trailing `/` and case set aside). With no remote
+  given, a URL that names none, or no `origin`, the push is checked as before and the check says
+  why. A hook an older Stado wrote reads as `outdated` until `stado quality hooks install`
+  rewrites it. The push journey is now its own target, `quality-push`.
+
 ### Added
 
 - **A push cannot add a call to a product the catalog does not show it running without:**

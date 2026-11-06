@@ -417,6 +417,10 @@ name = "quality-lock-steps"
 path = "../tests/quality/lock_steps.rs"
 
 [[test]]
+name = "quality-push"
+path = "../tests/quality/push/mod.rs"
+
+[[test]]
 name = "release-module-reachability"
 path = "../tests/release/module_reachability.rs"
 

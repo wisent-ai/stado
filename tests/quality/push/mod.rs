@@ -1,8 +1,9 @@
 //! Real Git pushes to an isolated bare remote through the real Stado checker.
-//! A push runs no gate: the product declares a format and a lint gate that
-//! refuse every tree, and only the committed source decides, a module the
-//! crate declares and the commit does not hold refusing the push.
+//! A push runs no gate: format and lint gates that refuse every tree are
+//! declared, and only the committed source decides, a module the crate
+//! declares and the commit lacks refusing; a push elsewhere: `mirror.rs`.
 mod fixture;
+mod mirror;
 use fixture::Fixture;
 use serde_json::{json, Value};
 use std::fs;
@@ -100,8 +101,7 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
     let good = fixture.commit();
     // A module the crate declares and the commit does not hold: compiled,
     // it fails everywhere, and the source check reads it without compiling.
-    fs::write(&source_path, format!("mod missing;\n{declared}"))
-        .expect("declare a missing module");
+    fs::write(&source_path, format!("mod missing;\n{declared}")).expect("declare a missing module");
     let bad = fixture.commit();
     assert_ne!(good, bad, "the two committed trees must differ");
     // HEAD now declares a module it does not hold, while the uncommitted
@@ -176,6 +176,7 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
         good,
         "refused push changed remote state"
     );
+    mirror::pushed_elsewhere(&mut fixture, &good, &bad);
     // Git sends a null local object for a deleted ref. A bad HEAD must not
     // turn deletion of an already-published branch into a source gate.
     let review = fixture.success(

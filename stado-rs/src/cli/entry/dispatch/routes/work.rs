@@ -40,6 +40,8 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                 if_declared,
                 revision,
                 pre_push,
+                remote,
+                remote_url,
                 purposes,
                 json,
                 place,
@@ -67,11 +69,16 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                     .await
                 }
                 (None, false) => {
+                    // clap admits --remote and --remote-url only together.
+                    let remote = remote
+                        .as_deref()
+                        .zip(remote_url.as_deref())
+                        .map(|(name, url)| crate::cli::change::git::Remote { name, url });
                     crate::cli::quality::check(
                         root.as_deref(),
                         if_declared,
                         revision.as_deref(),
-                        pre_push,
+                        pre_push.then_some(remote.as_ref()),
                         &purposes,
                         json,
                     )

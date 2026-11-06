@@ -1,7 +1,10 @@
 #!/bin/sh
-# Test-repository hook: Git supplies the actual ref-update protocol on stdin.
-# The executable and checkout are explicit inputs, never production defaults.
+# Test-repository hook: Git supplies the actual ref-update protocol on stdin
+# and the remote it pushes to as the two arguments, which it hands on as
+# Stado's own hook does. The executable and checkout are explicit inputs,
+# never production defaults.
 set -eu
 : "${STADO_BIN:?the real Stado executable is required}"
 : "${STADO_TEST_CHECKOUT:?the isolated product checkout is required}"
-exec "$STADO_BIN" quality check --root "$STADO_TEST_CHECKOUT" --pre-push --if-declared
+exec "$STADO_BIN" quality check --root "$STADO_TEST_CHECKOUT" --pre-push --if-declared \
+  --remote "$1" --remote-url "$2"

@@ -12,7 +12,47 @@ use crate::cli::CmdError;
 
 /// The branch the queue lands on, a ref name of the forge protocol.
 pub const MAIN: &str = "main";
-const REMOTE: &str = "origin";
+/// The remote whose `main` the queue lands on.
+pub const REMOTE: &str = "origin";
+
+/// The remote a push goes to, as Git hands its pre-push hook two arguments:
+/// the remote's name, or the URL itself when the push names none, and the
+/// URL it pushes to (https://git-scm.com/docs/githooks#_pre_push).
+pub struct Remote<'a> {
+    pub name: &'a str,
+    pub url: &'a str,
+}
+
+/// The repository `url` names, as `host/path` in lower case, so every
+/// spelling Git accepts for one repository names it once: the scheme, a
+/// user, a port, one `.git` and a trailing `/` are set aside, and the
+/// scp-like `[user@]host:path` names the same as `ssh://[user@]host/path`
+/// (https://git-scm.com/docs/git-push#_git_urls). A local path or a
+/// `file://` URL names its path with no host. None for an empty URL. Case
+/// is folded because forges name repositories without it; a case that does
+/// tell two repositories apart only makes them one, which keeps the check.
+pub fn named_repository(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    let url = url
+        .strip_suffix(".git")
+        .unwrap_or(url)
+        .trim_end_matches('/');
+    if url.is_empty() {
+        return None;
+    }
+    let (authority, path) = match url.split_once("://") {
+        Some((_, rest)) => rest.split_once('/').unwrap_or((rest, "")),
+        None => match url.split_once(':') {
+            Some((host, path)) if !host.contains('/') => (host, path),
+            _ => ("", url),
+        },
+    };
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = host.split_once(':').map_or(host, |(host, _)| host);
+    Some(format!("{host}/{}", path.trim_start_matches('/')).to_lowercase())
+}
 
 /// What one git call printed and how it ended.
 pub struct Ran {
