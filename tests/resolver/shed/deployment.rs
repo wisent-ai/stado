@@ -111,6 +111,21 @@ impl Deployment {
         target["service_resolver"]["refresh_seconds"] = json!(refresh_seconds);
         target["service_resolver"]["adapters"] =
             json!([{"service": SERVICE, "consumer": CONSUMER, "bind": adapter_bind}]);
+        // A fixed route's managed service must be one its active host
+        // declares: this host serves `elsewhere-api` here, so it declares it
+        // beside its own service, with the unit the other host names for it.
+        let unit = document["targets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|host| host["services"].as_array().into_iter().flatten())
+            .find(|declared| declared["name"] == SERVICE)
+            .map(|declared| declared["unit"].clone())
+            .expect("the template declares the service on some host");
+        document["targets"][0]["services"]
+            .as_array_mut()
+            .expect("the template's first host declares its services")
+            .push(json!({"name": SERVICE, "unit": unit}));
         let service = &mut document["service_directory"]["services"][SERVICE];
         service["active_host"] = json!(TARGET);
         service["endpoints"][TARGET] = json!({"url": format!("http://{service_bind}")});

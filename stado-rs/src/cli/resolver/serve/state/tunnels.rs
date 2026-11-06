@@ -1,7 +1,8 @@
 //! The native SSH sessions a resolver's adapters share, one per active host
 //! and service address, and the hosts none of whose paths answered.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LockResult};
 use std::time::{Duration, Instant};
 
 use crate::cli::resolver::authority::tunnel::Tunnel;
@@ -17,13 +18,38 @@ pub(in crate::cli::resolver::serve) struct Unreached {
     cause: String,
 }
 
+/// Whether this resolver already said that it read a lock a panicked holder
+/// poisoned; the line is printed once, not on every connection.
+static RECOVERY_SAID: AtomicBool = AtomicBool::new(false);
+
+/// The guard `locked` holds, recovered when a panicked holder poisoned it:
+/// the values behind these locks are whole after any panic, so they are
+/// read as they stand, and the first recovery is said on stderr naming
+/// `what` was held.
+fn recovered<G>(locked: LockResult<G>, what: &str) -> G {
+    locked.unwrap_or_else(|poisoned| {
+        if !RECOVERY_SAID.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "stado resolver: the {what} lock was poisoned by a holder that panicked; its \
+                 values are read as they stand"
+            );
+        }
+        poisoned.into_inner()
+    })
+}
+
 impl super::ResolverState {
     /// Why `active_host` is refused without a handshake: its paths all
     /// refused within the last refresh interval. `None` when it was not
-    /// tried, answered, or that refusal is older than the interval.
+    /// tried, answered, or that refusal is older than the interval. A lock a
+    /// panicked holder poisoned still holds whole values (a refresh interval,
+    /// a map of plain records), so it is read through
+    /// [`std::sync::PoisonError::into_inner`] and said once on stderr; read
+    /// as nothing remembered, every refused host would be tried again.
     fn recently_unreached(&self, active_host: &str) -> Option<String> {
-        let interval = Duration::from_secs(self.config.read().ok()?.refresh_seconds);
-        let unreached = self.unreached.lock().ok()?;
+        let seconds = recovered(self.config.read(), "configuration").refresh_seconds;
+        let interval = Duration::from_secs(seconds);
+        let unreached = recovered(self.unreached.lock(), "unreached-host memory");
         let last = unreached.get(active_host)?;
         let ago = last.at.elapsed();
         (ago < interval).then(|| {
@@ -39,19 +65,19 @@ impl super::ResolverState {
 
     /// Keep what the last session attempt to `active_host` said: a refusal
     /// is remembered for [`Self::recently_unreached`], a session forgets it.
+    /// A poisoned lock is recovered as there, never skipped.
     fn note_attempt(&self, active_host: &str, refused: Option<&str>) {
-        if let Ok(mut unreached) = self.unreached.lock() {
-            match refused {
-                Some(cause) => {
-                    let record = Unreached {
-                        at: Instant::now(),
-                        cause: cause.to_string(),
-                    };
-                    unreached.insert(active_host.to_string(), record);
-                }
-                None => {
-                    unreached.remove(active_host);
-                }
+        let mut unreached = recovered(self.unreached.lock(), "unreached-host memory");
+        match refused {
+            Some(cause) => {
+                let record = Unreached {
+                    at: Instant::now(),
+                    cause: cause.to_string(),
+                };
+                unreached.insert(active_host.to_string(), record);
+            }
+            None => {
+                unreached.remove(active_host);
             }
         }
     }
