@@ -221,10 +221,14 @@ async fn pass(
             if refused && candidate.waits_on == Some(WaitsOn::Gate) {
                 candidate.waits_on = Some(WaitsOn::Admission);
             }
+            // A declaration that does not read holds this candidate alone:
+            // the one record a product lacks a submit policy in leaves
+            // another product's candidates to be carried by this pass.
+            let declared = candidate.waits_on == Some(WaitsOn::Declaration);
             candidate.state = State::Queued;
             candidate.refusal = Some(format!("the pass stopped before a verdict: {error}"));
             record::save(&mut candidate)?;
-            if refused {
+            if refused || declared {
                 eprintln!("stado change run: {} stays queued: {error}", candidate.id);
                 held.push((candidate.id.clone(), error.to_string()));
                 continue;
@@ -320,13 +324,15 @@ async fn land(
             }
         };
         candidate.product = Some(plan.product.clone());
-        let policy = match risk::policy(&plan.product) {
-            Ok(policy) => policy,
-            Err(error) => {
-                refuse(candidate, error.to_string());
-                return Ok(());
-            }
-        };
+        // The catalog and the product's submit policy are this machine's
+        // declarations, not the candidate's change: one that cannot be read
+        // (a catalog commit that does not validate, a record without a
+        // submit policy) leaves the candidate queued waiting on it, and the
+        // first pass after it reads judges the candidate, instead of every
+        // submitter's candidate being refused by one broken declaration.
+        candidate.waits_on = Some(WaitsOn::Declaration);
+        let policy = risk::policy(&plan.product)?;
+        candidate.waits_on = Some(WaitsOn::Remote);
         let (paths, lines) = git::changed(checkout, &tip, &rebased.commit).await?;
         let classified = risk::classify(&plan.product, &policy, &paths, lines, &plan.names());
         eprintln!(

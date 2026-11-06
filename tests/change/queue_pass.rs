@@ -10,7 +10,9 @@
 //! hang, by the checkout's own `core.sshCommand` over an `ssh://` origin;
 //! the resumed pass reads the bare repository again and reaches a verdict
 //! (the candidate does not merge onto the `main` that moved meanwhile), so
-//! no gate, Oko admission or reviewer is needed for the verdict.
+//! no gate, Oko admission or reviewer is needed for the verdict. A catalog
+//! that cannot be read leaves a candidate queued on that declaration, and
+//! the first pass after it reads judges it.
 
 use serde_json::{json, Value};
 use std::fs;
@@ -997,6 +999,86 @@ fn a_round_recorded_during_a_pass_lands_the_held_candidate_in_that_pass() {
         stdout.contains("second.txt names nothing the change needs"),
         "{stdout}"
     );
+    journey.report["outcome"] = json!("passed");
+    journey.save();
+}
+
+/// A catalog that cannot be read holds every candidate in the queue instead
+/// of refusing it. One catalog commit that did not validate left sixteen
+/// candidates of oko and stado refused by the next passes ('the product
+/// catalog … cannot be read: … duplicate web surface'), though none of them
+/// changed the catalog: every submitter had to submit again.
+///
+/// The workspace's `stado/catalog/products.yml`, which no checkout tracks,
+/// is the catalog the pass reads: a file that is not a catalog makes the
+/// pass leave the candidate queued with `waits_on: declaration`, its refusal
+/// naming the catalog, and `stado change list` names the wait and how to
+/// lift it. With the file gone the pass reads the catalog compiled into the
+/// binary; the change is high risk (a format gate and no compiling gate), so
+/// a reviewer's no-findings round admits it and that pass lands it.
+#[test]
+fn a_candidate_waits_while_the_catalog_cannot_be_read_and_lands_once_it_reads() {
+    let mut journey = Journey::start();
+    repository(
+        &mut journey,
+        json!([{"name": "style", "kind": "format", "argv": ["true"]}]),
+    );
+    let checkout = journey.checkout.to_string_lossy().into_owned();
+    let change = commit(&mut journey, "change.txt", "change\n", "a change of the product");
+    let (submitted, stdout, stderr) = journey.run(&[
+        "change", "submit", &checkout, "--commit", &change, "--defect", DEFECT, "--json",
+    ]);
+    assert!(submitted, "submit: {stdout}{stderr}");
+    let id = serde_json::from_str::<Value>(&stdout).unwrap()["candidates"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // A catalog file that does not validate, where the pass reads it.
+    let catalog = journey.root.join("workspace/stado/catalog/products.yml");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    fs::write(&catalog, "products: not a list of products\n").unwrap();
+    let (ran, stdout, stderr) = journey.run(&["change", "run", &checkout]);
+    assert!(!ran, "a pass that held its candidate ends non-zero: {stdout}{stderr}");
+    assert!(
+        stderr.contains(&format!("stado change run: {id} stays queued:")),
+        "the pass does not say the candidate stays queued: {stderr}"
+    );
+    let held = journey.candidate(&id);
+    assert_eq!(held["state"], json!("queued"), "{held}");
+    assert_eq!(held["waits_on"], json!("declaration"), "{held}");
+    let refusal = held["refusal"].as_str().unwrap_or_default();
+    assert!(
+        refusal.contains("the pass stopped before a verdict")
+            && refusal.contains(&format!(
+                "the product catalog {} cannot be read",
+                catalog.display()
+            )),
+        "the refusal does not name the catalog: {held}"
+    );
+    let (listed, stdout, stderr) = journey.run(&["change", "list", &checkout]);
+    assert!(listed, "{stderr}");
+    assert!(
+        stdout.contains("waits on: a declaration;") && stdout.contains("then `stado change run "),
+        "list does not name the wait and how to lift it: {stdout}"
+    );
+
+    // The catalog reads again: the next pass judges the candidate, which a
+    // reviewer's no-findings round admits.
+    fs::remove_file(&catalog).unwrap();
+    let none = journey.root.join("none.json");
+    fs::write(&none, "[]").unwrap();
+    let none = none.to_string_lossy().into_owned();
+    let (recorded, _, stderr) = journey.run_in_session(
+        "reviewer",
+        &["change", "review", &id, "--findings", &none, "--improvements", &none],
+    );
+    assert!(recorded, "{stderr}");
+    let (ran, stdout, stderr) = journey.run(&["change", "run", &checkout]);
+    assert!(ran, "the pass after the catalog reads: {stdout}{stderr}");
+    let landed = journey.candidate(&id);
+    assert_eq!(landed["state"], json!("landed"), "{landed}");
+    assert_eq!(landed["waits_on"], json!(null), "{landed}");
     journey.report["outcome"] = json!("passed");
     journey.save();
 }

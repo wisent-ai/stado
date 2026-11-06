@@ -36,6 +36,15 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A catalog that cannot be read holds a submit-queue candidate instead of refusing it:** the
+  pass read the product's catalog record and submit policy on the candidate's behalf and refused
+  the candidate when it could not, so one catalog commit that did not validate refused every
+  queued candidate of every product and each submitter had to submit again. Such a candidate now
+  stays queued with `waits_on: declaration`, its refusal naming the catalog and its error, the
+  pass carries the candidates of other products behind it, and the first pass after the catalog
+  reads judges it. `stado change list` and `status` say `waits on: a declaration` with how to
+  lift it.
+
 - **`stado release staged activate` takes the settle window from the operator and reports the
   installer's whole run:** the activation slept 30 seconds before reading the runtime link again
   and printed the last 6 lines of the installer's log, both numbers nobody stated. The window is

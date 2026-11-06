@@ -79,6 +79,11 @@ pub enum WaitsOn {
     /// Its harsh review before landing recorded no round: the reviewer
     /// could not be run, or it was stopped before it recorded one.
     ReviewRound,
+    /// A declaration the pass reads on every candidate's behalf before it
+    /// judges the change, its product's catalog record and submit policy,
+    /// could not be read: no fault of the candidate, so it waits until the
+    /// declaration reads again instead of being refused.
+    Declaration,
 }
 
 impl WaitsOn {
@@ -88,6 +93,7 @@ impl WaitsOn {
             Self::Admission => "admission",
             Self::Gate => "gate",
             Self::ReviewRound => "review round",
+            Self::Declaration => "declaration",
         }
     }
 }

@@ -433,6 +433,13 @@ pub fn waits(candidate: &Candidate) -> Option<String> {
                  host of that platform back to publishing capacity"
             ),
             Some(WaitsOn::ReviewRound) => review_wait(candidate, &run),
+            Some(WaitsOn::Declaration) => format!(
+                "waits on: a declaration; its product's catalog record or submit policy could \
+                 not be read, which is this machine's catalog, not the change (the refusal \
+                 names the catalog and its error); unblock: repair the catalog (`stado product \
+                 registry set {product} --submit '{{…}}'` declares a submit policy; a catalog \
+                 that does not validate is repaired by a commit to it), then `{run}`"
+            ),
         },
     };
     Some(said)
