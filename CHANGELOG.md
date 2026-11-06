@@ -36,6 +36,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado host run attach` says what to run instead when it is handed an installed program:**
+  attach runs only a program delivered into a run of its own below `$HOME/.stado/work/runs`, and
+  handed the host's installed `~/.stado/bin/stado` it answered only `path … must be an absolute
+  path below the target account's $HOME/.stado/work/runs`, so a caller who wanted that Stado to
+  install an archive retried the same call. The refusal now carries a line saying why attach never
+  drives an installed program (the bytes it starts are the ones a run's delivery placed), naming
+  the commands that do the job: `stado host run deliver <target> <file>
+  .stado/work/runs/<id>/<name>` then attach that path, `stado host upgrade <target>` to bring the
+  installed Stado to a newer revision, and `stado host exec <target>` for its approved reads. With
+  `--json` that line is the error envelope's `help`.
+
 - **A catalog that cannot be read holds a submit-queue candidate instead of refusing it:** the
   pass read the product's catalog record and submit policy on the candidate's behalf and refused
   the candidate when it could not, so one catalog commit that did not validate refused every

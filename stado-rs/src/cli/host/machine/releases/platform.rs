@@ -103,8 +103,20 @@ pub async fn run_attached(
     arguments: &[String],
     json_output: bool,
 ) -> Result<(), CmdError> {
-    crate::deploy::host_run::validate_run_descendant(program)
-        .and_then(|_| crate::deploy::host_run::validate_arguments(arguments))
+    if let Err(error) = crate::deploy::host_run::validate_run_descendant(program) {
+        return Err(CmdError::usage(error)
+            .helping(format!(
+                "attach starts only a program delivered into a run of its own, so the bytes it \
+                 starts are the ones that run's delivery placed and a host's installed program is \
+                 never driven through it. Deliver the program first with `stado host run deliver \
+                 {target} <file> .stado/work/runs/<id>/<name>` and attach that path; `stado host \
+                 upgrade {target}` brings {target}'s installed Stado to a newer revision, \
+                 delivering, validating and installing it this way; `stado host exec {target}` \
+                 runs the installed Stado's approved reads."
+            ))
+            .machine_readable(json_output));
+    }
+    crate::deploy::host_run::validate_arguments(arguments)
         .map_err(|error| CmdError::usage(error).machine_readable(json_output))?;
     let resolved = crate::cli::canonical_host(target)
         .await
