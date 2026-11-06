@@ -237,6 +237,9 @@ fn apply(action: &str, id: &str, args: &Arguments, document: &mut Value) -> Resu
     if let Some(value) = args.optional("--benchmark")? {
         record["benchmark"] = fields::benchmark(value)?;
     }
+    if let Some(value) = args.optional("--submit")? {
+        record["submit"] = fields::submit(value)?;
+    }
     if let Some(file) = args.optional("--service-file")? {
         let service: Value = serde_yaml::from_slice(&fs::read(file)?)?;
         if !service.is_object() {

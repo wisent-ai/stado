@@ -108,6 +108,10 @@ pub fn command() -> Command {
                 "Declare the benchmark that measures the rivals: {\"app\",\"suites\"} as JSON",
             ))
             .arg(flag("remove-benchmark", "Remove the declared benchmark"))
+            .arg(value(
+                "submit",
+                "Declare how the submit queue reviews this product's changes: {\"criticality\":\"critical\"} or {\"criticality\":\"standard\",\"low_risk_max_changed_lines\":N}, with optional \"max_changed_lines\" and \"review_paths\", as JSON; replaces the whole declaration",
+            ))
             .arg(
                 value(
                     "add-dependency",

@@ -92,6 +92,23 @@ pub fn benchmark(value: &str) -> Result<Value> {
     object("--benchmark", value, &["app", "suites"])
 }
 
+/// The product's submit policy; the catalog validation that runs on every
+/// write refuses a criticality it does not know, a standard product with no
+/// `low_risk_max_changed_lines`, a critical one with it, a zero limit and a
+/// review path outside the repository.
+pub fn submit(value: &str) -> Result<Value> {
+    object(
+        "--submit",
+        value,
+        &[
+            "criticality",
+            "max_changed_lines",
+            "low_risk_max_changed_lines",
+            "review_paths",
+        ],
+    )
+}
+
 /// One need of another product, in the catalog's own dependency fields; the
 /// catalog validation that runs on every write refuses an unknown product, an
 /// empty field, an `alternative_source` without an `alternative`, and a

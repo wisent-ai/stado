@@ -67,6 +67,16 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Added
 
+- **A product's submit policy is declared through `stado product registry set --submit`:** the
+  submit queue refuses every change of a product whose catalog record declares no `submit`
+  policy, naming the declaration it needs, but no verb could write one, so such a product's
+  changes had no queue path. `--submit` takes the whole declaration as one JSON object
+  (`criticality`, `max_changed_lines`, `low_risk_max_changed_lines`, `review_paths`) and replaces
+  the record's `submit`; an unknown field is refused by name, and the catalog validation every
+  write runs refuses a standard product without a low-risk limit, a critical one with it, a zero
+  limit, an unknown criticality and a review path outside the repository. Stado Desktop's "Update
+  a catalog product" form carries the same field.
+
 - **The Azure cloud is declared, not built in:** the Resource Manager, the OAuth authority, the
   managed-identity endpoint and the Retail Prices API were constants of the public cloud,
   scattered through VM dispatch, the credit gate, sign-in, role repair, billing, the SKU catalog
