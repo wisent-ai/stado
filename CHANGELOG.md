@@ -36,6 +36,13 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A CLI that carries a resource bundle passes readiness:** a CLI stage places a directory under
+  `bin/` beside its commands (a SwiftPM `<Package>_<Target>.bundle` that `Bundle.module` reads)
+  whole, with no link on PATH, but readiness judged every recorded path as an executable, so the
+  bundle failed as `<bundle> is not executable` and every installation of such a CLI was rolled
+  back. A placed directory is now passed over; a recorded path that is missing or unreadable is
+  still refused as not executable.
+
 - **Azure VM creation is decided by ARM's `error.code`, not by words in its messages:** a NIC or
   VM create refusal was classified by searching the message for `QuotaExceeded`,
   `OperationNotAllowed` or `SkuNotAvailable`, so a message that quoted one of them for another
