@@ -10,8 +10,12 @@ import { fileURLToPath } from 'node:url';
 // and the workspace isolated under .build, writes Stado's own committed
 // catalog beside no checkout with the first product's star_repository
 // removed, and reads it. Expected: `stado product catalog --json` answers
-// every product, the first without a star_repository; a star_repository
-// that is not OWNER/REPO is still refused naming the product and field.
+// every product, the first without a star_repository. Each repository field
+// of that record (star_repository, owner_repository, its first surface's and
+// first installation's repository) set to a string that is not OWNER/REPO,
+// or to the number 42, is refused naming the product, the field and the
+// surface kind; and a field whose own check names no product (description)
+// is refused naming the product.
 // The star request's own report (`documentation star-repositories`) asks
 // GitHub and is not run here.
 // Required: STADO_BIN, the Stado under test.
@@ -67,15 +71,48 @@ try {
   assert.equal(record.star_repository, undefined, `${unnamed} was answered with a star_repository nobody declared`);
   report.unnamed = unnamed;
 
-  // A star_repository that is declared but is not OWNER/REPO is refused.
-  const malformed = [...lines];
-  malformed[star] = '  star_repository: not-a-repository';
-  writeFileSync(catalogPath, malformed.join('\n'));
-  const refused = read();
-  assert.ok(!succeeded(refused), 'a star_repository that is not OWNER/REPO was answered');
-  assert.ok(refused.stderr.includes(`${unnamed}.star_repository`), `the refusal does not name the field: ${refused.stderr}`);
-  assert.match(refused.stderr, /expected OWNER\/REPO/);
-  report.refusal = refused.stderr;
+  // Each repository field of the record, set to a string that is not
+  // OWNER/REPO and to a number, is refused naming the product, the field
+  // and, for a surface or an installation, its surface kind.
+  const within = (from, prefix) => lines.findIndex((line, index) => index > from && index < next && line.startsWith(prefix));
+  const surfaces = within(first, '  surfaces:');
+  const installations = within(first, '  installations:');
+  assert.ok(surfaces > first && installations > surfaces, `${unnamed} declares surfaces and installations`);
+  const surfaceKind = lines[surfaces + 1].slice('  - kind: '.length);
+  const surfaceRepository = within(surfaces, '    repository:');
+  const installationKind = lines[installations + 1].slice('  - surface: '.length);
+  const installationRepository = within(installations, '    repository:');
+  assert.ok(surfaceRepository > surfaces && surfaceRepository < installations, `${unnamed}'s first surface names a repository`);
+  assert.ok(installationRepository > installations, `${unnamed}'s first installation names a repository`);
+  const fields = [
+    [star, '  star_repository', `${unnamed}.star_repository`],
+    [within(first, '  owner_repository:'), '  owner_repository', `${unnamed}.owner_repository`],
+    [surfaceRepository, '    repository', `${unnamed}.surfaces.${surfaceKind}.repository`],
+    [installationRepository, '    repository', `${unnamed}.installations.${installationKind}.repository`],
+  ];
+  for (const [line, key, named] of fields) {
+    assert.ok(line > first, `${unnamed} declares ${named}`);
+    for (const [value, reason] of [['not-a-repository', /expected OWNER\/REPO/], ['42', /expected a string/]]) {
+      const malformed = [...lines];
+      malformed[line] = `${key}: ${value}`;
+      writeFileSync(catalogPath, malformed.join('\n'));
+      const refused = read();
+      assert.ok(!succeeded(refused), `${named} of ${value} was answered`);
+      assert.ok(refused.stderr.includes(named), `the refusal of ${named} = ${value} does not name it: ${refused.stderr}`);
+      assert.match(refused.stderr, reason);
+      report[`refusal ${named} ${value}`] = refused.stderr;
+    }
+  }
+
+  // A field whose own check names no product: its refusal names the product.
+  const described = lines.findIndex((line, index) => index > first && index < next && line.startsWith('  description:'));
+  assert.ok(described > first, `${unnamed} declares a description in the committed catalog`);
+  writeFileSync(catalogPath, lines.filter((_, index) => index !== described).join('\n'));
+  const undescribed = read();
+  assert.ok(!succeeded(undescribed), 'a product without a description was answered');
+  assert.ok(undescribed.stderr.includes(`product ${unnamed}`) && undescribed.stderr.includes('description: expected a string'),
+    `the refusal does not name the product whose description is missing: ${undescribed.stderr}`);
+  report.refusal_description = undescribed.stderr;
   report.result = 'passed';
 } catch (error) {
   failure = error;
