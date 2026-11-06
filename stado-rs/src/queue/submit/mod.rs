@@ -15,6 +15,8 @@
 //! uses is re-exported here, so `crate::queue::submit::<item>` resolves
 //! exactly as before.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -83,8 +85,20 @@ pub struct ResolvedHardwareProjection {
 /// compact separators, keys sorted recursively, non-ASCII escaped as
 /// \uXXXX (Python's default `ensure_ascii=True`).
 pub fn json_dumps_sorted_compact(value: &Value) -> String {
-    let compact = serde_json::to_string(&crate::models::sort_keys(value))
-        .expect("JSON serialization is infallible");
+    fn sorted(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let btree: BTreeMap<String, Value> = map
+                    .iter()
+                    .map(|(key, value)| (key.clone(), sorted(value)))
+                    .collect();
+                Value::Object(btree.into_iter().collect())
+            }
+            Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    let compact = serde_json::to_string(&sorted(value)).expect("JSON serialization is infallible");
     crate::models::ensure_ascii(&compact)
 }
 
