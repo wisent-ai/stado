@@ -4,6 +4,22 @@
 // inventory: a cleaned recording loses its artifact counts, not the fact that
 // the run happened or how its process ended.
 const detachedRoot = path.join(home, '.stado/weles-detached-runs');
+
+// How a detached run's process ended, as the inventory reports it: still
+// running (its record says running, or its ok is not yet set), succeeded,
+// failed, or only recorded when its record says neither.
+const RUN_STATUS = Object.freeze({
+  recorded: 'recorded',
+  running: 'running',
+  succeeded: 'succeeded',
+  failed: 'failed',
+});
+function runStatus(document) {
+  if (document.status === RUN_STATUS.running || document.ok === null) return RUN_STATUS.running;
+  if (document.ok === true) return RUN_STATUS.succeeded;
+  if (document.ok === false || document.status === RUN_STATUS.failed) return RUN_STATUS.failed;
+  return RUN_STATUS.recorded;
+}
 try {
   for (const entry of fs.readdirSync(detachedRoot, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
@@ -19,10 +35,7 @@ try {
       ? document.action
       : null;
 
-    let status = 'recorded';
-    if (document.status === 'running' || document.ok === null) status = 'running';
-    else if (document.ok === true) status = 'succeeded';
-    else if (document.ok === false || document.status === 'failed') status = 'failed';
+    const status = runStatus(document);
 
     const resultCandidates = [
       document.result,
