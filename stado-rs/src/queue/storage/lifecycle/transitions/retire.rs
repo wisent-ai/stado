@@ -5,8 +5,9 @@
 use crate::models::Job;
 use crate::queue::storage::records::{
     prefix_state, transition_cleaned_state, transition_fence_state, JobTransition,
+    TransitionState,
 };
-use crate::queue::storage::{transition_path, JobStorage, TRANSITION_RETIRED_STATE};
+use crate::queue::storage::{transition_path, JobStorage};
 use crate::queue::{tombstone, StorageError};
 
 impl JobStorage {
@@ -29,17 +30,17 @@ impl JobStorage {
             };
             if current.transition_id != completed.transition_id
                 || current.owner != completed.owner
-                || current.state == TRANSITION_RETIRED_STATE
+                || current.state == TransitionState::Retired
             {
                 return Ok(());
             }
-            if current.state != "completed" {
+            if current.state != TransitionState::Completed {
                 return Err(StorageError::StorageConflict(format!(
                     "durable transition {} changed to {} before retirement",
                     completed.transition_id, current.state
                 )));
             }
-            current.state = TRANSITION_RETIRED_STATE.to_string();
+            current.state = TransitionState::Retired;
             match self
                 .compare_and_swap_text(
                     &transition_path(&completed.job_id),
@@ -230,7 +231,7 @@ impl JobStorage {
                 == crate::queue::submit::immutable_job_projection(&transition.destination_job)
                 && destination.state == prefix_state(&transition.to_prefix)
             {
-                if !self.set_transition_state(transition, "completed").await? {
+                if !self.set_transition_state(transition, TransitionState::Completed).await? {
                     return Ok(false);
                 }
                 return self.finish_completed_transition(transition).await;
@@ -240,7 +241,7 @@ impl JobStorage {
         if let Some(versioned) = self.read_text_versioned(&source_path).await? {
             let source = Job::from_json(&versioned.content)?;
             if source.state != transition_fence_state(&transition.transition_id) {
-                self.set_transition_state(transition, "aborted").await?;
+                self.set_transition_state(transition, TransitionState::Aborted).await?;
                 return Ok(false);
             }
         }

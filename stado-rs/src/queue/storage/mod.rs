@@ -30,7 +30,6 @@ pub use queries::StatusLeaf;
 pub(crate) use records::{
     is_transition_sentinel_state, transition_is_retired, transition_path,
     validate_cancellation_snapshot, validate_transition_snapshot, WorkdirJobState,
-    TRANSITION_RETIRED_STATE,
 };
 
 #[derive(Debug, Clone)]

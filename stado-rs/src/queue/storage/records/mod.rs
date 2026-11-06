@@ -26,7 +26,66 @@ pub(crate) use snapshot::{validate_cancellation_snapshot, validate_transition_sn
 
 const TRANSITION_PREFIX: &str = "job-transitions";
 pub(in crate::queue::storage) const TRANSITION_SCHEMA: &str = "stado.job-transition.v1";
-pub(crate) const TRANSITION_RETIRED_STATE: &str = "retired:destination-verified-source-retired";
+
+/// Where a durable transition stands: prepared (the destination is written,
+/// the source not yet fenced), completed (the job moved) or aborted (the
+/// source stays the job), and retired once the destination is verified and
+/// the source removed. A stored word outside these was written outside this
+/// state machine; it is kept as `Unrecognized` rather than refused, because
+/// recovery settles such a record by what the queue holds
+/// ([`JobStorage::settle_unrecognized_transition`]) instead of stopping every
+/// claim that recovers first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub(in crate::queue::storage) enum TransitionState {
+    Prepared,
+    Completed,
+    Aborted,
+    Retired,
+    Unrecognized(String),
+}
+
+const PREPARED: &str = "prepared";
+const COMPLETED: &str = "completed";
+const ABORTED: &str = "aborted";
+const RETIRED: &str = "retired:destination-verified-source-retired";
+
+impl TransitionState {
+    /// The state as the transition document stores it.
+    pub(in crate::queue::storage) fn word(&self) -> &str {
+        match self {
+            Self::Prepared => PREPARED,
+            Self::Completed => COMPLETED,
+            Self::Aborted => ABORTED,
+            Self::Retired => RETIRED,
+            Self::Unrecognized(word) => word,
+        }
+    }
+}
+
+impl From<String> for TransitionState {
+    fn from(word: String) -> Self {
+        match word.as_str() {
+            PREPARED => Self::Prepared,
+            COMPLETED => Self::Completed,
+            ABORTED => Self::Aborted,
+            RETIRED => Self::Retired,
+            _ => Self::Unrecognized(word),
+        }
+    }
+}
+
+impl From<TransitionState> for String {
+    fn from(state: TransitionState) -> Self {
+        state.word().to_string()
+    }
+}
+
+impl std::fmt::Display for TransitionState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.word())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,7 +99,7 @@ pub(in crate::queue::storage) struct JobTransition {
     pub(in crate::queue::storage) source_version: String,
     pub(in crate::queue::storage) source_digest: String,
     pub(in crate::queue::storage) destination_version: Option<String>,
-    pub(in crate::queue::storage) state: String,
+    pub(in crate::queue::storage) state: TransitionState,
     pub(in crate::queue::storage) created_at: String,
     pub(in crate::queue::storage) destination_job: Job,
 }
@@ -61,8 +120,10 @@ pub(crate) fn transition_path(job_id: &str) -> String {
     format!("{TRANSITION_PREFIX}/{}.json", sha256_hex(job_id.as_bytes()))
 }
 
+/// Whether a stored transition document's `state` word says it is retired;
+/// read by callers that hold the document as JSON rather than parsed.
 pub(crate) fn transition_is_retired(state: &str) -> bool {
-    state == TRANSITION_RETIRED_STATE
+    state == RETIRED
 }
 
 pub(in crate::queue::storage) fn prefix_state(prefix: &str) -> &str {

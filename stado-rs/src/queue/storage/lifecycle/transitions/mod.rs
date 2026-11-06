@@ -3,7 +3,7 @@
 //! [`prepare`] installs one, [`recover`] finishes an abandoned one and
 //! [`retire`] settles the record and its fenced source).
 
-use crate::queue::storage::records::{JobTransition, TRANSITION_SCHEMA};
+use crate::queue::storage::records::{JobTransition, TransitionState, TRANSITION_SCHEMA};
 use crate::queue::storage::{transition_path, JobStorage};
 use crate::queue::StorageError;
 
@@ -38,7 +38,7 @@ impl JobStorage {
     async fn set_transition_state(
         &self,
         expected: &JobTransition,
-        state: &str,
+        state: TransitionState,
     ) -> Result<bool, StorageError> {
         loop {
             let Some((mut transition, version)) =
@@ -57,7 +57,7 @@ impl JobStorage {
             if transition.state == state {
                 return Ok(true);
             }
-            transition.state = state.to_string();
+            transition.state = state;
             match self
                 .compare_and_swap_text(
                     &transition_path(&expected.job_id),

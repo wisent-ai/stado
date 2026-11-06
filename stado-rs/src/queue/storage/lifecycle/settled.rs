@@ -23,8 +23,10 @@
 use crate::models::Job;
 use crate::primitives::tally::Tally;
 use crate::queue::runs::TERMINAL_PREFIXES;
-use crate::queue::storage::records::{cleaned_transition_id, transition_path, JobTransition};
-use crate::queue::storage::{transition_is_retired, JobStorage};
+use crate::queue::storage::records::{
+    cleaned_transition_id, transition_path, JobTransition, TransitionState,
+};
+use crate::queue::storage::JobStorage;
 use crate::queue::StorageError;
 
 /// What one sweep did.
@@ -93,7 +95,7 @@ impl JobStorage {
         match self.download_text(&transition_path(job_id)).await? {
             Some(record) => {
                 let transition: JobTransition = serde_json::from_str(&record)?;
-                Ok(transition_is_retired(&transition.state)
+                Ok(transition.state == TransitionState::Retired
                     && TERMINAL_PREFIXES.contains(&transition.to_prefix.as_str()))
             }
             None => {

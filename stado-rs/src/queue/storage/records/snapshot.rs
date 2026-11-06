@@ -4,7 +4,7 @@
 use crate::queue::storage::TransitionSnapshotProof;
 use crate::queue::StorageError;
 
-use super::{transition_path, JobTransition, TRANSITION_RETIRED_STATE, TRANSITION_SCHEMA};
+use super::{transition_path, JobTransition, TransitionState, TRANSITION_SCHEMA};
 
 /// Parse one immutable transition snapshot through the production transition
 /// type and prove that its object key is the canonical digest key for its job.
@@ -20,7 +20,7 @@ pub(crate) fn validate_transition_snapshot(
     }
     Ok(TransitionSnapshotProof {
         job_id: transition.job_id,
-        retired: transition.state == TRANSITION_RETIRED_STATE,
+        retired: transition.state == TransitionState::Retired,
     })
 }
 

@@ -5,7 +5,7 @@ use chrono::Utc;
 
 use crate::models::Job;
 use crate::queue::storage::records::{
-    merge_transition_destination, prefix_state, sha256_hex, JobTransition,
+    merge_transition_destination, prefix_state, sha256_hex, JobTransition, TransitionState,
     TRANSITION_CLEANED_PREFIX, TRANSITION_SCHEMA,
 };
 use crate::queue::storage::{transition_path, JobStorage};
@@ -95,7 +95,7 @@ impl JobStorage {
                 source_version: source_versioned.version.clone(),
                 source_digest: sha256_hex(source_versioned.content.as_bytes()),
                 destination_version,
-                state: "prepared".into(),
+                state: TransitionState::Prepared,
                 created_at: Utc::now().to_rfc3339(),
                 destination_job: destination,
             };
@@ -105,7 +105,7 @@ impl JobStorage {
                 None => self.create_text_if_absent(&path, &body).await?,
                 Some(active) => {
                     let existing: JobTransition = serde_json::from_str(&active.content)?;
-                    if existing.state == "prepared" {
+                    if existing.state == TransitionState::Prepared {
                         if unsettled.as_deref() == Some(active.version.as_str()) {
                             return Err(StorageError::StorageConflict(format!(
                                 "durable transition {} for job {} stays prepared: recovery left it unsettled twice",

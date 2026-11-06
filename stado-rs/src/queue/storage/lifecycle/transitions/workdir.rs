@@ -3,9 +3,9 @@
 
 use crate::models::Job;
 use crate::queue::storage::records::{
-    cleaned_transition_id, prefix_state, TRANSITION_FENCE_PREFIX,
+    cleaned_transition_id, prefix_state, TransitionState, TRANSITION_FENCE_PREFIX,
 };
-use crate::queue::storage::{JobStorage, WorkdirJobState, TRANSITION_RETIRED_STATE};
+use crate::queue::storage::{JobStorage, WorkdirJobState};
 use crate::queue::StorageError;
 
 impl JobStorage {
@@ -24,7 +24,7 @@ impl JobStorage {
         let Some((transition, _)) = self.read_job_transition(job_id).await? else {
             return Ok(WorkdirJobState::Unknown);
         };
-        if transition.state != TRANSITION_RETIRED_STATE
+        if transition.state != TransitionState::Retired
             || !crate::queue::runs::TERMINAL_PREFIXES.contains(&transition.to_prefix.as_str())
             || transition.destination_job.job_id != job_id
             || transition.destination_job.state != prefix_state(&transition.to_prefix)

@@ -3,10 +3,10 @@
 
 use crate::models::Job;
 use crate::queue::storage::records::{
-    prefix_state, sha256_hex, transition_cleaned_state, transition_fence_state,
+    prefix_state, sha256_hex, transition_cleaned_state, transition_fence_state, TransitionState,
     TRANSITION_CLEANED_PREFIX,
 };
-use crate::queue::storage::{JobStorage, TRANSITION_RETIRED_STATE};
+use crate::queue::storage::JobStorage;
 use crate::queue::StorageError;
 
 impl JobStorage {
@@ -17,10 +17,10 @@ impl JobStorage {
         let Some((transition, _)) = self.read_job_transition(job_id).await? else {
             return Ok(false);
         };
-        if transition.state == TRANSITION_RETIRED_STATE {
+        if transition.state == TransitionState::Retired {
             return Ok(false);
         }
-        if transition.state == "aborted" {
+        if transition.state == TransitionState::Aborted {
             // `aborted` is a decision made from an earlier view of the two
             // sides, not a terminal fact. A later placement rewrite can make
             // that view stale while the destination remains the completed
@@ -44,7 +44,7 @@ impl JobStorage {
                     return Ok(false);
                 }
             }
-            if !self.set_transition_state(&transition, "completed").await? {
+            if !self.set_transition_state(&transition, TransitionState::Completed).await? {
                 return Ok(false);
             }
             return self.finish_completed_transition(&transition).await;
@@ -53,11 +53,12 @@ impl JobStorage {
         let destination_path = format!("{}/{}.json", transition.to_prefix, job_id);
         let fence_state = transition_fence_state(&transition.transition_id);
 
-        if transition.state == "completed" {
-            return self.finish_completed_transition(&transition).await;
-        }
-        if transition.state != "prepared" {
-            return self.settle_unrecognized_transition(&transition).await;
+        match &transition.state {
+            TransitionState::Completed => {
+                return self.finish_completed_transition(&transition).await
+            }
+            TransitionState::Prepared => {}
+            _ => return self.settle_unrecognized_transition(&transition).await,
         }
 
         match self.read_text_versioned(&source_path).await? {
@@ -81,7 +82,7 @@ impl JobStorage {
             Some(versioned) => {
                 let source = Job::from_json(&versioned.content)?;
                 if source.state != fence_state {
-                    self.set_transition_state(&transition, "aborted").await?;
+                    self.set_transition_state(&transition, TransitionState::Aborted).await?;
                     return Ok(false);
                 }
             }
@@ -96,7 +97,7 @@ impl JobStorage {
                     // its caller. A job no prefix holds is lost, and said.
                     for prefix in crate::queue::runs::ALL_PREFIXES {
                         if self.read_job(prefix, job_id).await?.is_some() {
-                            self.set_transition_state(&transition, "aborted").await?;
+                            self.set_transition_state(&transition, TransitionState::Aborted).await?;
                             return Ok(false);
                         }
                     }
@@ -115,7 +116,7 @@ impl JobStorage {
                         transition.transition_id
                     )));
                 }
-                if !self.set_transition_state(&transition, "completed").await? {
+                if !self.set_transition_state(&transition, TransitionState::Completed).await? {
                     return Ok(false);
                 }
                 return self.finish_completed_transition(&transition).await;
@@ -189,7 +190,7 @@ impl JobStorage {
             // would be invisible to a listing that walks only the index.
             self.write_priority_marker(&destination).await?;
         }
-        if !self.set_transition_state(&transition, "completed").await? {
+        if !self.set_transition_state(&transition, TransitionState::Completed).await? {
             return Ok(false);
         }
         self.finish_completed_transition(&transition).await
