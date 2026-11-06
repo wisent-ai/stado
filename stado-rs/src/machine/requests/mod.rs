@@ -3,8 +3,44 @@
 
 use std::sync::LazyLock;
 
+use serde_json::{Map, Value};
+
 pub(in crate::machine) mod leases;
 pub(in crate::machine) mod validate;
+
+/// Where a submission's idempotency reservation stands: claimed by the
+/// submission holding it, enqueuing its job, then accepted with the job's
+/// result or released when the queue refused the job. Each is written and
+/// compared through [`RequestState::word`], so no state is spelled twice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::machine) enum RequestState {
+    Claimed,
+    Enqueuing,
+    Accepted,
+    Released,
+}
+
+impl RequestState {
+    /// The state as the stored reservation names it.
+    pub(in crate::machine) fn word(self) -> &'static str {
+        match self {
+            Self::Claimed => "claimed",
+            Self::Enqueuing => "enqueuing",
+            Self::Accepted => "accepted",
+            Self::Released => "released",
+        }
+    }
+
+    /// Whether the stored reservation `record` stands in this state.
+    pub(in crate::machine) fn holds(self, record: &Map<String, Value>) -> bool {
+        record.get("state").and_then(Value::as_str) == Some(self.word())
+    }
+
+    /// Move the stored reservation `record` to this state.
+    pub(in crate::machine) fn write(self, record: &mut Map<String, Value>) {
+        record.insert("state".into(), Value::from(self.word()));
+    }
+}
 
 /// Request fields accepted by `machine submit` (Python `REQUEST_FIELDS`).
 const REQUEST_FIELDS: &[&str] = &[

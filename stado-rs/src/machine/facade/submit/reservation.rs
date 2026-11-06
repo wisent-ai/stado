@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::machine::contract::encoding::{canonical_json, request_digest, utcnow};
 use crate::machine::contract::SCHEMA_VERSION;
+use crate::machine::requests::RequestState;
 use crate::machine::sources::staging::stage_source_archive;
 use crate::machine::sources::OwnedMachineFile;
 use crate::machine::{MachineError, MachineFacade};
@@ -172,16 +173,15 @@ impl MachineFacade {
                 }
                 // A reservation another submission holds stays held until
                 // that submission records its result or releases it.
-                if matches!(
-                    existing.get("state").and_then(Value::as_str),
-                    Some("claimed" | "enqueuing")
-                ) {
+                if RequestState::Claimed.holds(&existing)
+                    || RequestState::Enqueuing.holds(&existing)
+                {
                     return Err(MachineError::retryable(
                         "REQUEST_IN_PROGRESS",
                         "matching request is held by a submission that has not released it",
                     ));
                 }
-                existing.insert("state".into(), Value::from("claimed"));
+                RequestState::Claimed.write(&mut existing);
                 existing.insert("owner".into(), Value::from(owner.as_str()));
                 match self
                     .store
@@ -242,7 +242,7 @@ impl MachineFacade {
                 Value::from(request_digest(&digest_request)),
             );
             reservation.insert("run_id".into(), Value::from(run_id.as_str()));
-            reservation.insert("state".into(), Value::from("claimed"));
+            RequestState::Claimed.write(&mut reservation);
             reservation.insert("owner".into(), Value::from(owner.as_str()));
             reservation.insert("created_at".into(), Value::from(utcnow()));
             if self

@@ -7,6 +7,7 @@ use crate::machine::contract::encoding::canonical_json;
 use crate::machine::requests::leases::{
     renew_machine_request_claim, renew_machine_request_enqueue,
 };
+use crate::machine::requests::RequestState;
 use crate::machine::{MachineError, MachineFacade};
 use crate::models::{Job, JobSecretRef};
 use crate::queue::submit::{submit_batch, SubmitOptions};
@@ -57,14 +58,14 @@ impl MachineFacade {
             .cloned()
             .ok_or_else(|| MachineError::new("INTERNAL", "stored idempotency record is invalid"))?;
         if active.get("owner").and_then(Value::as_str) != Some(owner.as_str())
-            || active.get("state").and_then(Value::as_str) != Some("claimed")
+            || !RequestState::Claimed.holds(&active)
         {
             return Err(MachineError::retryable(
                 "REQUEST_IN_PROGRESS",
                 "matching request ownership changed before enqueue",
             ));
         }
-        active.insert("state".into(), Value::from("enqueuing"));
+        RequestState::Enqueuing.write(&mut active);
         active.insert("phase".into(), Value::from("enqueue"));
         self.store
             .compare_and_swap_text(
@@ -243,7 +244,7 @@ impl MachineFacade {
                     }
                 };
                 if released.get("owner").and_then(Value::as_str) == Some(owner.as_str()) {
-                    released.insert("state".into(), Value::from("released"));
+                    RequestState::Released.write(&mut released);
                     released.remove("owner");
                     released.insert("last_error".into(), Value::from(exc.to_string()));
                     // A request left owned by this facade waits out its claim

@@ -7,13 +7,15 @@ use crate::machine::contract::encoding::canonical_json;
 use crate::machine::MachineError;
 use crate::queue::{JobStorage, StorageError};
 
+use super::RequestState;
+
 /// Record `phase` on the reservation this submission owns. A lost swap reads
 /// the record again and decides on what it now holds.
 async fn renew_machine_request_lease(
     store: &JobStorage,
     record_path: &str,
     owner: &str,
-    expected_state: &str,
+    expected_state: RequestState,
     phase: &str,
 ) -> Result<(), MachineError> {
     loop {
@@ -31,7 +33,7 @@ async fn renew_machine_request_lease(
                     MachineError::new("INTERNAL", "stored idempotency record is invalid")
                 })?;
         if reservation.get("owner").and_then(Value::as_str) != Some(owner)
-            || reservation.get("state").and_then(Value::as_str) != Some(expected_state)
+            || !expected_state.holds(&reservation)
         {
             return Err(MachineError::retryable(
                 "REQUEST_IN_PROGRESS",
@@ -60,7 +62,7 @@ pub(in crate::machine) async fn renew_machine_request_claim(
     owner: &str,
     phase: &str,
 ) -> Result<(), MachineError> {
-    renew_machine_request_lease(store, record_path, owner, "claimed", phase).await
+    renew_machine_request_lease(store, record_path, owner, RequestState::Claimed, phase).await
 }
 
 pub(in crate::machine) async fn renew_machine_request_enqueue(
@@ -69,5 +71,5 @@ pub(in crate::machine) async fn renew_machine_request_enqueue(
     owner: &str,
     phase: &str,
 ) -> Result<(), MachineError> {
-    renew_machine_request_lease(store, record_path, owner, "enqueuing", phase).await
+    renew_machine_request_lease(store, record_path, owner, RequestState::Enqueuing, phase).await
 }

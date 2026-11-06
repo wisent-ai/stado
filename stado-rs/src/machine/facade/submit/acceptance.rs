@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::machine::contract::encoding::{canonical_json, utcnow};
 use crate::machine::contract::jobs::normalize_job;
+use crate::machine::requests::RequestState;
 use crate::machine::{MachineError, MachineFacade};
 use crate::models::Job;
 use crate::queue::StorageError;
@@ -64,7 +65,7 @@ impl MachineFacade {
                 return Ok(stored.clone());
             }
             if completed.get("owner").and_then(Value::as_str) != Some(owner.as_str())
-                || completed.get("state").and_then(Value::as_str) != Some("enqueuing")
+                || !RequestState::Enqueuing.holds(&completed)
                 || completed.get("run_id").and_then(Value::as_str) != Some(run_id.as_str())
             {
                 return Err(MachineError::retryable(
@@ -75,7 +76,7 @@ impl MachineFacade {
                     ),
                 ));
             }
-            completed.insert("state".into(), Value::from("accepted"));
+            RequestState::Accepted.write(&mut completed);
             completed.insert("job".into(), normalized.clone());
             completed.insert("result".into(), Value::Object(result.clone()));
             completed.insert("completed_at".into(), Value::from(utcnow()));
