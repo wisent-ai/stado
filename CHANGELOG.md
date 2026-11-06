@@ -36,6 +36,13 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The App Store Connect bearer lifetime is read from Apple's stated limit, kept with its
+  source:** `stado credentials signing profile ensure --provider apple` signed its bearer for a
+  lifetime written into the code as 20 × 60 seconds. The lifetime now comes from the provider
+  declaration `provider/app-store-connect.json`, which names the Apple page it was read from, the
+  day it was read and the rule it states; a declaration without a whole number of seconds is
+  refused by name before the bearer is signed.
+
 - **The record of a worker's publication attempts follows the worker's own attempts, not a
   minute of its own:** `~/.stado/logs/capacity-publication.json` skipped writing an attempt whose
   outcome, step and error matched the record unless the record was a minute old, a refresh age

@@ -10,9 +10,9 @@ use serde_json::{json, Value};
 use crate::cli::CmdError;
 
 const API: &str = "https://api.appstoreconnect.apple.com/v1";
-/// Apple refuses a bearer whose `exp` is more than twenty minutes after its
-/// `iat`; this is the longest it accepts.
-const BEARER_LIFETIME_SECONDS: u64 = 20 * 60;
+/// What Apple states about the App Store Connect API, with the page it was
+/// read from and when: the bearer lifetime it accepts.
+const PROVIDER: &str = include_str!("provider/app-store-connect.json");
 
 /// The team API key: its id, its issuer and its PKCS#8 private key (PEM).
 pub(super) struct ApiKey {
@@ -29,7 +29,30 @@ fn refused(detail: impl std::fmt::Display) -> CmdError {
     CmdError::refused(format!("App Store Connect: {detail}"))
 }
 
-/// A bearer for the next twenty minutes.
+/// The longest bearer lifetime (`exp` minus `iat`) App Store Connect accepts
+/// for the requests this command makes, read from the provider declaration
+/// (`provider/app-store-connect.json`, which names Apple's page). A
+/// declaration that does not parse or carries no whole number of seconds is
+/// refused by name, never answered with a lifetime of this module's own.
+fn bearer_lifetime_seconds() -> Result<u64, CmdError> {
+    let declaration: Value = serde_json::from_str(PROVIDER).map_err(|error| {
+        refused(format!(
+            "the provider declaration provider/app-store-connect.json is not JSON: {error}"
+        ))
+    })?;
+    declaration["bearer_lifetime_seconds"]
+        .as_u64()
+        .ok_or_else(|| {
+            refused(format!(
+                "the provider declaration provider/app-store-connect.json carries no whole \
+                 number bearer_lifetime_seconds: {}",
+                declaration["bearer_lifetime_seconds"]
+            ))
+        })
+}
+
+/// A bearer that lives as long as App Store Connect accepts
+/// ([`bearer_lifetime_seconds`]).
 pub(super) fn bearer(key: &ApiKey) -> Result<String, CmdError> {
     let body: String = key
         .private_key_pem
@@ -50,7 +73,7 @@ pub(super) fn bearer(key: &ApiKey) -> Result<String, CmdError> {
     let claims = json!({
         "iss": key.issuer_id,
         "iat": now,
-        "exp": now + BEARER_LIFETIME_SECONDS,
+        "exp": now + bearer_lifetime_seconds()?,
         "aud": "appstoreconnect-v1",
     });
     let signing_input = format!(
