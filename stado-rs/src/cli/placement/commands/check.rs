@@ -16,11 +16,27 @@ use crate::cli::CmdError;
 use crate::deploy::production_runner;
 use crate::placement::{PlacementProfile, PlacementTransaction};
 
+/// What a check of one move concluded: the profile is already placed on the
+/// destination, or every preflight check of the move passed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CheckStatus {
+    AlreadyPlaced,
+    WouldMove,
+}
+
+impl CheckStatus {
+    /// The status as the `--json` report names it.
+    fn word(self) -> &'static str {
+        match self {
+            Self::AlreadyPlaced => "already_placed",
+            Self::WouldMove => "would_move",
+        }
+    }
+}
+
 /// What a check of one move found.
 pub(super) struct Checked {
-    /// `would_move`, or `already_placed` when the profile is placed on the
-    /// destination.
-    pub status: &'static str,
+    pub status: CheckStatus,
     pub profile: String,
     pub from_host: String,
     pub to_host: String,
@@ -29,7 +45,7 @@ pub(super) struct Checked {
 impl Checked {
     pub(super) fn report(&self) -> Value {
         json!({
-            "status": self.status,
+            "status": self.status.word(),
             "profile": self.profile,
             "from_host": self.from_host,
             "to_host": self.to_host,
@@ -50,14 +66,13 @@ pub(super) async fn preflight_move(
     profile_host(&profile, to_host)?;
     let destination = target(&registry, to_host)?.clone();
     let source_name = placed_host(&registry, &profile).map_err(CmdError::declaration)?;
-    let mut checked = Checked {
-        status: "already_placed",
-        profile: profile.name.clone(),
-        from_host: source_name.clone(),
-        to_host: to_host.to_string(),
-    };
     if source_name == to_host {
-        return Ok(checked);
+        return Ok(Checked {
+            status: CheckStatus::AlreadyPlaced,
+            profile: profile.name.clone(),
+            from_host: source_name,
+            to_host: to_host.to_string(),
+        });
     }
     let source = target(&registry, &source_name)?.clone();
     let transaction = PlacementTransaction {
@@ -79,13 +94,17 @@ pub(super) async fn preflight_move(
     let runner = production_runner();
     crate::wait::until(
         crate::wait::Kind::Host,
-        format!("placement move check of {}: preflight", checked.profile),
+        format!("placement move check of {}: preflight", context.profile.name),
         format!("{source_name} and {to_host}"),
         preflight(&context, &runner),
     )
     .await?;
-    checked.status = "would_move";
-    Ok(checked)
+    Ok(Checked {
+        status: CheckStatus::WouldMove,
+        profile: context.profile.name.clone(),
+        from_host: source_name,
+        to_host: to_host.to_string(),
+    })
 }
 
 /// [`preflight_move`], printed: the report under `--json`, else one line.
@@ -101,7 +120,7 @@ pub(super) async fn check_move(
         println!("{}", serde_json::to_string_pretty(&checked.report())?);
         return Ok(());
     }
-    if checked.status == "already_placed" {
+    if checked.status == CheckStatus::AlreadyPlaced {
         println!(
             "{} is already placed on {}",
             checked.profile, checked.to_host
