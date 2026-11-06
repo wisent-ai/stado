@@ -36,7 +36,33 @@ async fn probe_connection(
             };
         }
     };
-    let result = runner(CommandSpec { argv, stdin: None }).await;
+    // The probe asks whether a path answers, so it waits no longer than the
+    // refresh interval this host's resolver declares, the measure every held
+    // request is judged by: ssh without a connect deadline sat in its TCP
+    // handshake for a host that went away (a powered-off Mac on the LAN and
+    // its tailnet), and every `stado placement holds`, `evacuate` and
+    // `service list` that names that host stood with it. The runner's future
+    // is dropped at the bound, which kills the ssh process group it owns.
+    // Without a declared interval the probe is waited on, as before.
+    let probe = runner(CommandSpec { argv, stdin: None });
+    let result = match crate::cli::resolver::declared_bound_seconds() {
+        Ok(Some(seconds)) => {
+            match tokio::time::timeout(std::time::Duration::from_secs(seconds), probe).await {
+                Ok(result) => result,
+                Err(_elapsed) => Err(format!(
+                    "SSH path did not answer within the {seconds}s refresh interval this host's resolver declares"
+                )),
+            }
+        }
+        Ok(None) => probe.await,
+        Err(unreadable) => {
+            eprintln!(
+                "stado: SSH path {} ({}) is probed without a bound: {unreadable}",
+                connection.name, connection.destination
+            );
+            probe.await
+        }
+    };
     match result {
         Ok(output) if output.succeeded() => SshConnectionProbe {
             name: connection.name.to_string(),
