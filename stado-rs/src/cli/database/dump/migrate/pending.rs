@@ -11,7 +11,10 @@
 //! retires the pending server's unit on its host and deletes the item before
 //! placing anew. The pending server's data directory stays on its host and is
 //! named in the answer, as `stado database destroy` leaves a data directory:
-//! deleting a database's data is never a side effect.
+//! deleting a database's data is never a side effect. The decision is made
+//! before the backup and the retirement only after it, so a refused or
+//! failed backup (a source that still answers `--from-backup`, a kept backup
+//! that is not the newest) leaves the pending placement for the next run.
 //!
 //! What fails, and what is said:
 //! - another host or port without `--discard-pending`: refused (usage) naming
@@ -38,9 +41,9 @@ pub(super) enum Decision {
     Place,
     /// Restore into the server the pending item names.
     Reuse(Value),
-    /// The pending server was retired and its item deleted: place a new one.
-    /// The value is the step the report keeps.
-    Discarded(Value),
+    /// Retire the pending server on this host once the backup is in hand,
+    /// then place a new one ([`discard`]).
+    Discard(String),
 }
 
 /// The host and port a pending item records.
@@ -59,14 +62,13 @@ fn standing(pending: &str, kept: &Value) -> Result<(String, Option<u64>), CmdErr
 
 /// Decide for `name` from the pending item `kept` (`None` when the vault
 /// holds none), the `host` and `port` this run names, and `discard`.
-pub(super) async fn decide(
+pub(super) fn decide(
     name: &str,
     pending: &str,
     kept: Option<Value>,
     host: Option<&str>,
     port: Option<u16>,
     discard: bool,
-    owner: &Owner,
 ) -> Result<Decision, CmdError> {
     let Some(kept) = kept else {
         if discard {
@@ -94,13 +96,25 @@ pub(super) async fn decide(
         }
         return Ok(Decision::Reuse(kept));
     }
+    Ok(Decision::Discard(pending_host))
+}
+
+/// Retire the pending server of `name` on `pending_host`: its unit
+/// `<name>-database` (or none, already absent), then the item. The answer
+/// is the step the report keeps as `discarded_pending`.
+pub(super) async fn discard(
+    name: &str,
+    pending: &str,
+    pending_host: &str,
+    owner: &Owner,
+) -> Result<Value, CmdError> {
     let unit = format!("{name}-database");
-    let target = crate::cli::canonical_host(&pending_host).await?;
+    let target = crate::cli::canonical_host(pending_host).await?;
     let declared = crate::deploy::service::declared_services(&target)
         .iter()
         .any(|service| service.matches(&unit));
     if declared {
-        crate::cli::service::lifecycle::adopt::removal::remove(&unit, &pending_host, false)
+        crate::cli::service::lifecycle::adopt::removal::remove(&unit, pending_host, false)
             .await
             .map_err(|error| {
                 error.also(format!(
@@ -118,12 +132,12 @@ pub(super) async fn decide(
             }
         ))
     })?;
-    Ok(Decision::Discarded(json!({
+    Ok(json!({
         "item": pending,
         "item_status": deleted,
         "host": pending_host,
         "unit": unit,
         "unit_status": if declared { "removed" } else { "already absent" },
         "data": format!("left in place at ~/.stado/databases/{name}/ on {pending_host}"),
-    })))
+    }))
 }

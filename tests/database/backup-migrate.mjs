@@ -213,7 +213,7 @@ try {
   const older = complete(JSON.parse(success(run(stado, ['database', 'backups', name, '--json'])))).find(backup => backup !== second.backup);
   if (older) refused(run(stado, fromBackup(older)), 'is not the newest complete backup');
   assert.equal(field(item, 'provider'), 'external', 'A refused migration must leave the item on the source');
-  const moved = pendingLeg({ run, success, refused, field, put, stado, skarbiec, item, port, fromBackup,
+  const moved = pendingLeg({ run, success, refused, field, put, stado, skarbiec, item, port, fromBackup, notBackup: output,
     here: success(run(stado, ['registry', 'self', '--name-only'])), source: payloadOf(answering), backup: second.backup });
   assert.equal(moved.migrated, name);
   assert.equal(moved.backup, second.backup, 'The move must restore the kept backup it was given');

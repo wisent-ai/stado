@@ -163,13 +163,7 @@ pub(in crate::cli::database) async fn migrate(
         Some(ids) if !ids.contains(&pending) => None,
         _ => owner.document(&pending).await?,
     };
-    let decision =
-        pending::decide(name, &pending, pending_found, host, port, discard_pending, &owner).await?;
-    let (pending_kept, discarded) = match decision {
-        pending::Decision::Place => (None, Value::Null),
-        pending::Decision::Reuse(kept) => (Some(kept), Value::Null),
-        pending::Decision::Discarded(step) => (None, step),
-    };
+    let decision = pending::decide(name, &pending, pending_found, host, port, discard_pending)?;
 
     let backup = match from_backup {
         Some(directory) => {
@@ -177,6 +171,15 @@ pub(in crate::cli::database) async fn migrate(
             files::kept_backup(name, directory)?
         }
         None => take(name, &owner).await?,
+    };
+    // Retired only once the backup is in hand, so a refused or failed backup
+    // leaves the pending placement as it stood for the next run.
+    let (pending_kept, discarded) = match decision {
+        pending::Decision::Place => (None, Value::Null),
+        pending::Decision::Reuse(kept) => (Some(kept), Value::Null),
+        pending::Decision::Discard(at) => {
+            (None, pending::discard(name, &pending, &at, &owner).await?)
+        }
     };
     let major = backup.manifest["server_major"]
         .as_str()
