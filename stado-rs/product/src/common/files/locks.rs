@@ -32,6 +32,25 @@ pub const PHASE_PREPARING: &str = "preparing";
 pub const PHASE_PLACING: &str = "placing";
 pub const PHASE_PLACED: &str = "placed";
 
+/// A lock another live writer holds, refused by [`lock`]: the path and the
+/// holder clause (`held by pid … (running) since …: <command>`). A caller for
+/// which a busy lock is an answer, not a failure (a sync whose next pass
+/// installs what this one would have), finds it with `downcast_ref::<Busy>`;
+/// every other caller reads it as the sentence it prints.
+#[derive(Debug)]
+pub struct Busy {
+    pub path: std::path::PathBuf,
+    pub holder: String,
+}
+
+impl std::fmt::Display for Busy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "another writer owns {}; {}", self.path.display(), self.holder)
+    }
+}
+
+impl std::error::Error for Busy {}
+
 /// Take the exclusive lock at `path` and write who holds it into the file.
 ///
 /// A refusal names that holder — its pid, whether the pid is still alive, its
@@ -89,7 +108,7 @@ fn take(path: &Path, mode: Take, product_scope: bool) -> Result<File> {
         let holder = crate::install::operation::clause(path);
         let held_by = match mode {
             Take::Refuse => {
-                anyhow::bail!("another writer owns {}; {holder}", path.display());
+                return Err(Busy { path: path.to_path_buf(), holder }.into());
             }
             // `--wait` keeps an operator's installation in progress, but an
             // automatic `product sync` is no operator's request: an explicit

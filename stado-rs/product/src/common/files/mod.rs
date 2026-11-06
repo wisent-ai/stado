@@ -5,7 +5,7 @@ mod record;
 use anyhow::{bail, Context, Result};
 pub(crate) use locks::lock_surface_waiting;
 pub use locks::{
-    alive, lock, lock_superseding, lock_waiting, mark_placed, mark_placing, mark_step,
+    alive, lock, lock_superseding, lock_waiting, mark_placed, mark_placing, mark_step, Busy,
     PHASE_PLACING,
 };
 pub use presence::{present, remove_tree};

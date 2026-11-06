@@ -45,6 +45,12 @@ struct Readiness {
     field: &'static str,
     channel: HostCredentialChannel,
     skarbiec_error: Option<String>,
+    /// The class of `skarbiec_error`: `infra_down`, `refused`, `not_found`
+    /// or `config`, as the credential channel answered.
+    skarbiec_failure: Option<&'static str>,
+    /// The class a command that needed the bearer refuses with.
+    #[serde(skip)]
+    credential_failure: FailureCode,
     vault_host: Option<String>,
     vault_item_state: Option<crate::cli::host::VaultItemState>,
     vault_error: Option<String>,
@@ -74,7 +80,17 @@ pub(super) async fn report(
     if json {
         return Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE));
     }
-    Err(CmdError::click(report.summary.clone()).stating(FailureCode::Config))
+    // The peer refusing is the peer's answer; a bearer that did not resolve
+    // while the vault could not be asked is what the channel answered; what
+    // this host must provision is config.
+    let failure = match report.verdict {
+        Verdict::PeerRefused => FailureCode::Refused,
+        Verdict::Unknown => report.credential_failure,
+        Verdict::Ready | Verdict::ItemAbsent | Verdict::NotAuthorized | Verdict::NoChannel => {
+            FailureCode::Config
+        }
+    };
+    Err(CmdError::click(report.summary.clone()).stating(failure))
 }
 
 /// Every declared peer's readiness as `stado capabilities market` lists it:
@@ -111,6 +127,8 @@ async fn assess(
         field: TOKEN_FIELD,
         channel: reading.channel.clone(),
         skarbiec_error: reading.error.clone(),
+        skarbiec_failure: reading.failure.map(|failure| failure.as_str()),
+        credential_failure: reading.failure_code(),
         vault_host: None,
         vault_item_state: None,
         vault_error: None,

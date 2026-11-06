@@ -25,7 +25,8 @@ use crate::cli::registry::doctor::checks::directory::{
 };
 use crate::cli::registry::doctor::checks::target::target_findings;
 use crate::cli::registry::doctor::checks::{
-    declared_release_control, profiles_lacking_stores, resolver_refusal, schedules_pinned_nowhere,
+    databases_without_fresh_backup, declared_release_control, profiles_lacking_stores, resolver_refusal,
+    schedules_pinned_nowhere,
 };
 use crate::cli::registry::doctor::declarations::{unread_configuration, unread_declarations};
 use crate::cli::registry::doctor::findings::Finding;
@@ -71,6 +72,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     foreign_install_roots(release_control.as_ref(), &mut findings);
     schedules_pinned_nowhere(&registry, &store, &mut findings).await;
     profiles_lacking_stores(&document, &mut findings);
+    databases_without_fresh_backup(now, &mut findings);
 
     // The one host whose unit files this command may open. Everything else
     // here is read from the store, and the environment a unit actually

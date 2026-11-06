@@ -11,9 +11,11 @@
 //! runs, which the follow loop reserves through capacity like any workload.
 //!
 //! One JSON document per node under `state/market/nodes/<name>.json` in the
-//! fleet's own store, and the loop's last transition under
-//! `state/market/node-runs/<name>.json`, so every host and Stado Desktop read
-//! the same answer.
+//! fleet's own store, the loop's last transition under
+//! `state/market/node-runs/<name>.json`, and each finished run under
+//! `state/market/node-hours/<name>/<started>.json`, so every host and Stado
+//! Desktop read the same answer and a source's earnings can be divided by
+//! the hours its node ran.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +25,8 @@ use crate::queue::{JobStorage, Listing, StorageError};
 pub const NODES_PREFIX: &str = "state/market/nodes/";
 /// Where each node's last transition lives.
 pub const RUNS_PREFIX: &str = "state/market/node-runs/";
+/// Where each finished run of a node is kept.
+pub const HOURS_PREFIX: &str = "state/market/node-hours/";
 
 /// What a node operation can fail with, each with the sentence the operator
 /// reads.
@@ -76,11 +80,89 @@ pub struct NodeDeclaration {
     /// carries no fleet work and the model's license chain is declared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment: Option<String>,
+    /// What the network requires of a host, as its own documentation states
+    /// it: the follow loop starts the node only while the host measures up,
+    /// naming the requirement it misses.
+    #[serde(default, skip_serializing_if = "NodeRequirements::is_empty")]
+    pub requirements: NodeRequirements,
     /// Whether the operator offers the node: the follow loop runs it only
     /// while this is true and the fleet's own queue is idle.
     pub listed: bool,
     pub declared_at: String,
     pub changed_at: String,
+}
+
+/// A network's published requirements of the host's connection, with the
+/// page that states them. Each is optional: a network that states none is
+/// held to none, and nothing here is a default Stado chose. Board memory is
+/// not one: the node's own `vram_gb` reservation is admitted through
+/// capacity, which refuses it where it does not fit.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeRequirements {
+    /// Download and upload the host's measured connection must carry, in
+    /// megabits per second.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_download_mbps: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_upload_mbps: Option<f64>,
+    /// The page of the network's documentation the figures were read from;
+    /// required with any of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+impl NodeRequirements {
+    pub fn is_empty(&self) -> bool {
+        self.min_download_mbps.is_none() && self.min_upload_mbps.is_none() && self.source.is_none()
+    }
+
+    fn validate(&self) -> Result<(), NodeError> {
+        let stated = self.min_download_mbps.is_some() || self.min_upload_mbps.is_some();
+        match (stated, self.source.as_deref().map(str::trim)) {
+            (true, None | Some("")) => {
+                return Err(NodeError::Usage(
+                    "a network requirement needs --requirements-source, the page of the \
+                     network's documentation that states it"
+                        .to_string(),
+                ))
+            }
+            (false, Some(_)) => {
+                return Err(NodeError::Usage(
+                    "--requirements-source names where requirements were read, and none was \
+                     given"
+                        .to_string(),
+                ))
+            }
+            _ => {}
+        }
+        let positive = |mbps: Option<f64>| mbps.is_none_or(|mbps| mbps.is_finite() && mbps > 0.0);
+        if !(positive(self.min_download_mbps) && positive(self.min_upload_mbps)) {
+            return Err(NodeError::Usage(
+                "--min-download-mbps and --min-upload-mbps must be above zero".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether a measured connection meets the requirements, or which one
+    /// it misses.
+    pub fn met_by(&self, download_mbps: f64, upload_mbps: f64) -> Result<(), String> {
+        let source = self.source.as_deref().unwrap_or("the network");
+        if let Some(need) = self.min_download_mbps.filter(|need| download_mbps < *need) {
+            return Err(format!(
+                "the host's measured download is {download_mbps:.1} Mbit/s, below the \
+                 {need} Mbit/s {source} requires"
+            ));
+        }
+        if let Some(need) = self.min_upload_mbps.filter(|need| upload_mbps < *need) {
+            return Err(format!(
+                "the host's measured upload is {upload_mbps:.1} Mbit/s, below the {need} \
+                 Mbit/s {source} requires"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// The follow loop's last transition for one node.
@@ -131,6 +213,7 @@ impl NodeDeclaration {
                     .to_string(),
             ));
         }
+        self.requirements.validate()?;
         Ok(())
     }
 }
@@ -260,6 +343,60 @@ pub async fn save_run(store: &JobStorage, run: &NodeRun) -> Result<(), NodeError
         .map_err(|error| NodeError::Usage(format!("the run record cannot be encoded: {error}")))?;
     store.upload_text(&run_path(&run.node), &body).await?;
     Ok(())
+}
+
+/// One finished run of a node: the source it earned from, the host, and
+/// when it ran.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeSegment {
+    pub node: String,
+    pub source: String,
+    pub target: String,
+    pub from: String,
+    pub to: String,
+}
+
+impl NodeSegment {
+    /// The hours of this run that fall at or after `since`.
+    pub fn hours_since(&self, since: chrono::DateTime<chrono::Utc>) -> Result<f64, String> {
+        let read = |at: &str| {
+            chrono::DateTime::parse_from_rfc3339(at)
+                .map(|at| at.with_timezone(&chrono::Utc))
+                .map_err(|error| {
+                    format!("node {} run time {at:?} is unreadable: {error}", self.node)
+                })
+        };
+        let from = read(&self.from)?.max(since);
+        let to = read(&self.to)?;
+        Ok(((to - from).num_seconds().max(0)) as f64 / 3600.0)
+    }
+}
+
+/// Keep one finished run.
+pub async fn save_segment(store: &JobStorage, segment: &NodeSegment) -> Result<(), NodeError> {
+    let body = serde_json::to_string(segment)
+        .map_err(|error| NodeError::Usage(format!("the run segment cannot be encoded: {error}")))?;
+    let key = format!(
+        "{HOURS_PREFIX}{}/{}.json",
+        segment.node,
+        segment.from.replace(':', "")
+    );
+    store.upload_text(&key, &body).await?;
+    Ok(())
+}
+
+/// Every kept run of every node.
+pub async fn segments(store: &JobStorage) -> Result<Vec<NodeSegment>, NodeError> {
+    let mut found = Vec::new();
+    for key in store.list_paths(HOURS_PREFIX, Listing::Every).await? {
+        let Some(text) = store.download_text(&key).await? else {
+            continue;
+        };
+        found.push(serde_json::from_str(&text).map_err(|error| {
+            NodeError::NotFound(format!("{key} does not hold a node run segment: {error}"))
+        })?);
+    }
+    Ok(found)
 }
 
 /// The role lock one follow loop of `node` holds for its life.

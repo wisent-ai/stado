@@ -21,11 +21,17 @@ pub async fn run(
     key: Option<&str>,
     value: Option<&str>,
     json: bool,
+    install: bool,
 ) -> Result<(), CmdError> {
+    if install && sub != "validate" {
+        return Err(CmdError::usage(format!(
+            "--install judges a document as an install does; it belongs to config validate, not config {sub}"
+        )));
+    }
     match sub {
         "init" => init(),
         "migrate" => migrate_identities(),
-        "validate" => validate().await,
+        "validate" => validate(install).await,
         "show" => show(json),
         "get" => match key {
             Some(key) => get(key),

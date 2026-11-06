@@ -252,6 +252,7 @@ enum NativeRegistryOperations {
         .init(id: "market-sources", title: "Every place a fleet host can earn, and which Stado can join",
               path: ["market", "sources"], hostPlacement: .none, fields: [
                   .init(id: "check", label: "Ask each source's page whether it still answers", option: "--check", flag: true),
+                  .init(id: "target", label: "Registry target: each source's earnings per board-hour on it", option: "--target"),
               ], mutates: false, jsonOutput: false),
         .init(id: "market-measure", title: "What Vast renters pay for a board model now",
               path: ["market", "measure"], hostPlacement: .none, fields: [
@@ -277,6 +278,9 @@ enum NativeRegistryOperations {
                   .init(id: "vram-gb", label: "GiB of board memory it holds", option: "--vram-gb", required: true),
                   .init(id: "disk-gb", label: "GiB of disk its data may take", option: "--disk-gb", initial: "0"),
                   .init(id: "deployment", label: "Inference deployment it serves (inference networks)", option: "--deployment"),
+                  .init(id: "min-download-mbps", label: "Download the network requires (Mbit/s)", option: "--min-download-mbps"),
+                  .init(id: "min-upload-mbps", label: "Upload the network requires (Mbit/s)", option: "--min-upload-mbps"),
+                  .init(id: "requirements-source", label: "Network page stating those requirements", option: "--requirements-source"),
               ], jsonOutput: false),
         .init(id: "market-node-edit", title: "Offer or withdraw a network node, or change what it holds",
               path: ["market", "node", "edit"], hostPlacement: .none, fields: [
@@ -287,6 +291,9 @@ enum NativeRegistryOperations {
                   .init(id: "vram-gb", label: "GiB of board memory it holds", option: "--vram-gb"),
                   .init(id: "disk-gb", label: "GiB of disk its data may take", option: "--disk-gb"),
                   .init(id: "deployment", label: "Inference deployment it serves (empty: none)", option: "--deployment"),
+                  .init(id: "min-download-mbps", label: "Download the network requires (Mbit/s; replaces the set)", option: "--min-download-mbps"),
+                  .init(id: "min-upload-mbps", label: "Upload the network requires (Mbit/s; replaces the set)", option: "--min-upload-mbps"),
+                  .init(id: "requirements-source", label: "Network page stating those requirements", option: "--requirements-source"),
               ], jsonOutput: false),
         .init(id: "market-node-remove", title: "Retire a network node that is not running",
               path: ["market", "node", "remove"], hostPlacement: .none, fields: [

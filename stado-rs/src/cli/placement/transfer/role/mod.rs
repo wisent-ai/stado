@@ -26,9 +26,11 @@
 mod carry;
 mod fence;
 mod route;
+mod takeover;
 
 pub(in crate::cli::placement) use carry::ensure_runs_on;
 pub(in crate::cli::placement) use fence::store_fence;
+pub(in crate::cli::placement) use takeover::take_role;
 
 use serde_json::{json, Value};
 
@@ -92,7 +94,7 @@ pub(in crate::cli::placement) async fn prepare_role(
         carry::ensure_source_takes_fenced_commit(&document, &source, runner).await?;
     }
     let destination = target(&parsed, to_host)?.clone();
-    let served = served_address(&destination).await?;
+    let served = served_address(&document, &destination)?;
     if with_authority {
         carry::ensure_destination_store_answers(&served, to_host).await?;
     }

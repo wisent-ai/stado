@@ -32,6 +32,7 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
                 family,
                 consumer,
                 json,
+                await_statement,
             }) => {
                 let mut input = String::new();
                 std::io::Read::read_to_string(&mut std::io::stdin(), &mut input).map_err(
@@ -40,7 +41,7 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
                             .machine_readable(json)
                     },
                 )?;
-                capabilities::call(&family, &consumer, &input, json).await
+                capabilities::call(&family, &consumer, &input, json, await_statement).await
             }
             Some(CapabilityAction::Select { family, order }) => {
                 capabilities::select(&family, &order)
@@ -61,13 +62,14 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
                     consumer,
                     request,
                     checked,
+                    function,
                 } => {
                     let mut stated = String::new();
                     std::io::Read::read_to_string(&mut std::io::stdin(), &mut stated).map_err(
                         |error| CmdError::usage(format!("standard input cannot be read: {error}")),
                     )?;
                     capabilities::attestation_record(
-                        &family, &consumer, &request, &checked, &stated,
+                        &family, &consumer, &request, &checked, function.as_deref(), &stated,
                     )
                 }
                 AttestationAction::Revoke {

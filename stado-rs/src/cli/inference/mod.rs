@@ -70,6 +70,9 @@ pub enum InferenceCommands {
         json: bool,
     },
     /// Execute one persisted plan if its registry precondition still matches.
+    /// Refused, before the host is touched, for a deployment sold outside the
+    /// fleet (a priced caller, a pay-per-call offer, a listed network node)
+    /// whose model license is unread or declares none.
     Apply {
         plan_id: String,
         #[arg(long)]

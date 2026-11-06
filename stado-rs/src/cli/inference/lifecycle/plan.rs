@@ -294,6 +294,7 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
         .cloned();
     let target = crate::cli::canonical_host(&plan.deployment.target).await?;
     let runner = production_runner();
+    license_permits_sale(&plan.deployment).await?;
 
     if let Some(current) = current.filter(|current| mode_only_change(current, &plan.deployment)) {
         let updated = inference::update_reservation(&target, &plan.deployment, &runner)
@@ -397,4 +398,51 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
         println!("applied inference plan {plan_id} generation={generation}");
     }
     Ok(())
+}
+
+/// Refuse a deployment whose model is sold outside the fleet while its
+/// license chain is unread or declares none. It is sold when a caller of it
+/// has a price, it carries a pay-per-call offer, or a listed network node
+/// serves it; a deployment only the fleet uses is applied, the plan having
+/// printed its license warning.
+async fn license_permits_sale(deployment: &schema::Deployment) -> Result<(), CmdError> {
+    let problem = match &deployment.model.license {
+        None => "its model license was never read".to_string(),
+        Some(license) if !license.undeclared().is_empty() => format!(
+            "its model chain declares no license for {} ({})",
+            license.undeclared().join(", "),
+            license.summary()
+        ),
+        Some(_) => return Ok(()),
+    };
+    let store = crate::queue::JobStorage::new().await?;
+    let name = &deployment.name;
+    let mut sold = Vec::new();
+    for caller in crate::inference::callers::list(&store, name).await? {
+        if caller.price.is_some() && caller.revoked_at.is_none() {
+            sold.push(format!("caller {} pays for it", caller.caller));
+        }
+    }
+    if crate::inference::pay_per_call::offer(&store, name)
+        .await?
+        .is_some()
+    {
+        sold.push("a pay-per-call offer sells it".to_string());
+    }
+    for node in crate::providers::node::list(&store)
+        .await
+        .map_err(|error| CmdError::declaration(error.to_string()))?
+    {
+        if node.listed && node.deployment.as_deref() == Some(name.as_str()) {
+            sold.push(format!("network node {} offers it", node.name));
+        }
+    }
+    if sold.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::refused(format!(
+        "{name} is sold outside the fleet ({}) and {problem}; declare the license on the model \
+         repository and plan again, or withdraw the sale first",
+        sold.join("; ")
+    )))
 }

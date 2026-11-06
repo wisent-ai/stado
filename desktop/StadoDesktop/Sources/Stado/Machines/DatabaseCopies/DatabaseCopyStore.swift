@@ -68,6 +68,53 @@ final class DatabaseCopyStore: ObservableObject {
         }
     }
 
+    /// `stado database backup NAME [--keep N] --schedule CRON --json`: the
+    /// routine of this host that runs that backup on CRON (UTC); blank
+    /// retention keeps every backup. A blank or invalid expression is passed
+    /// as it is and the CLI refuses it by name.
+    nonisolated static func scheduleArguments(name: String, cron: String, keep: String) -> [String] {
+        var arguments = ["database", "backup", name]
+        let keep = keep.trimmingCharacters(in: .whitespaces)
+        if !keep.isEmpty {
+            arguments += ["--keep", keep]
+        }
+        arguments += ["--schedule", cron.trimmingCharacters(in: .whitespaces), "--json"]
+        return arguments
+    }
+
+    func scheduleBackup(name: String, cron: String, keep: String) async -> Bool {
+        guard !isRunning else { return false }
+        isRunning = true
+        defer { isRunning = false }
+        do {
+            let routine = try await cli.json(
+                BackupRoutine.self,
+                arguments: Self.scheduleArguments(name: name, cron: cron, keep: keep),
+                confirmsMutation: true
+            )
+            report = ["\(name): backup routine \(routine.schedule) \(routine.declared) at '\(routine.cron)' (UTC), next at \(routine.nextDueAt): \(routine.command)"]
+            problem = nil
+            return true
+        } catch {
+            problem = error.localizedDescription
+            return false
+        }
+    }
+
+    /// What `stado database backup --schedule --json` answers.
+    private struct BackupRoutine: Codable {
+        let schedule: String
+        let cron: String
+        let command: String
+        let nextDueAt: String
+        let declared: String
+
+        enum CodingKeys: String, CodingKey {
+            case schedule, cron, command, declared
+            case nextDueAt = "next_due_at"
+        }
+    }
+
     /// `stado database backups --json`: every backup this machine keeps,
     /// newest first; an incomplete one is listed with why.
     nonisolated static func backupsArguments() -> [String] {

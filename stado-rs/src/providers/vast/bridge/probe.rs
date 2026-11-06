@@ -23,6 +23,12 @@ pub struct BusyState {
     /// `None` when nothing is queued or the record vanished before it was
     /// read.
     pub queued_need_gb: Option<i64>,
+    /// The queued job's id, when one was read.
+    pub queued_job_id: Option<String>,
+    /// The income its submitter stated for it per GPU-hour, with the order
+    /// or entitlement that pays (`stado submit --income-usd-per-hour
+    /// --income-source`); `None` when it states none.
+    pub queued_income: Option<(f64, String)>,
     pub idle: bool,
 }
 
@@ -37,6 +43,8 @@ pub async fn is_stado_busy(store: &JobStorage, hostname: &str) -> Result<BusySta
         .list_page("queue/", "", Some(NonZeroUsize::MIN))
         .await?;
     let mut queued_need_gb = None;
+    let mut queued_job_id = None;
+    let mut queued_income = None;
     for path in &queued {
         let Some(text) = store.download_text(path).await? else {
             continue;
@@ -47,6 +55,8 @@ pub async fn is_stado_busy(store: &JobStorage, hostname: &str) -> Result<BusySta
             ))
         })?;
         queued_need_gb = Some(job.gpu_mem_gb);
+        queued_income = job.income_usd_per_hour.zip(job.income_source.clone());
+        queued_job_id = Some(job.job_id);
     }
     let mut running_here: Vec<String> = Vec::new();
     for path in store.list_paths("running/", Listing::Every).await? {
@@ -83,6 +93,8 @@ pub async fn is_stado_busy(store: &JobStorage, hostname: &str) -> Result<BusySta
         running_here: running_here.len(),
         free_vram_gb,
         queued_need_gb,
+        queued_job_id,
+        queued_income,
         idle: queued.is_empty() && running_here.is_empty(),
     })
 }

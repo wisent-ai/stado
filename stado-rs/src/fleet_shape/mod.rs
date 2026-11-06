@@ -160,6 +160,9 @@ impl Sweep {
 
 pub const PORT_CHECK: &str = "one-listener-per-declared-port";
 pub const DOMAIN_CHECK: &str = "one-domain-per-declared-label";
+/// One service runs as one unit: no two loaded fleet units run the same
+/// program, whatever each is called.
+pub const SERVICE_COPY_CHECK: &str = "one-unit-per-service";
 pub const HEALTH_CHECK: &str = "health-green-boundaries-down";
 pub const REPLICA_CHECK: &str = "replica-cannot-resolve";
 pub const DISK_CHECK: &str = "disk-headroom-against-policy";

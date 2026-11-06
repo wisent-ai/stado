@@ -5,11 +5,14 @@
 //! ([`crate::providers::vast::is_stado_busy`]): idle means nothing is queued
 //! and no running job names this host. After `--idle-window-s` idle seconds,
 //! with the offer listed and the peer's queue holding work, a lending worker
-//! starts ([`crate::providers::peer::lending`]). The moment our work
-//! appears, the operator unlists, an inference reservation that names no
-//! board (or cannot be read) holds every card, or the session has run
-//! `--max-duration-s`, the worker is asked to drain: it claims nothing more
-//! and exits once the peer's jobs it runs have finished. A reservation that
+//! starts ([`crate::providers::peer::lending`]). The moment our work runs
+//! here, our queued work is worth more per GPU-hour than the peer pays (or
+//! its value cannot be read), the operator unlists, an inference reservation
+//! that names no board (or cannot be read) holds every card, or the session
+//! has run `--max-duration-s`, the worker is asked to drain: it claims
+//! nothing more and exits once the peer's jobs it runs have finished. The
+//! weighing is [`crate::providers::local::agent::allocate::offer_or_queue`],
+//! kept for `stado market decisions`. A reservation that
 //! names its board does not drain it: the worker reads the host's
 //! reservation, and its own admission gate withholds that board alone. A
 //! worker that ends by itself — the peer's queue held nothing
@@ -163,10 +166,37 @@ pub(super) async fn auto_list(params: Params) -> Result<(), CmdError> {
         } else if let Some(held) = held {
             Some(held)
         } else if !state.idle {
-            Some(format!(
+            let reason = format!(
                 "our queue has work (queued={}, running_here={})",
                 state.queued, state.running_here
-            ))
+            );
+            // A session already lending keeps the host while our work is only
+            // queued and the peer pays at least as much per GPU-hour as that
+            // work is worth; work running here, or unvalued work, drains it.
+            match &lending {
+                Some(_) if state.running_here == 0 && !drained => {
+                    match crate::providers::local::agent::allocate::offer_or_queue(
+                        &store,
+                        state.queued_job_id.as_deref(),
+                        state.queued_income.as_ref(),
+                        &format!("stado peer {}", params.peer),
+                        "host",
+                        current.price_gpu,
+                    )
+                    .await
+                    {
+                        Ok(_) if over_time => {
+                            Some("the session ran its --max-duration-s".to_string())
+                        }
+                        Ok(kept) => {
+                            say(&format!("still lending: {kept}"));
+                            None
+                        }
+                        Err(why) => Some(format!("{reason}; {why}")),
+                    }
+                }
+                _ => Some(reason),
+            }
         } else if over_time {
             Some("the session ran its --max-duration-s".to_string())
         } else {

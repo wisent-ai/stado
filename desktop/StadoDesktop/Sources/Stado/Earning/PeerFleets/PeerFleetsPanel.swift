@@ -68,6 +68,12 @@ struct PeerFleetsPanel: View {
                 Text(readiness.summary)
                     .foregroundStyle(readiness.lending ? WisentDesign.success : WisentDesign.danger)
                     .textSelection(.enabled)
+                if let error = readiness.skarbiecError {
+                    LabeledContent("Skarbiec", value: error)
+                    if let failure = readiness.skarbiecFailure {
+                        LabeledContent("Failure class", value: failure)
+                    }
+                }
                 ForEach(readiness.remedy, id: \.self) { line in
                     Text(line).font(WisentTypeScale.identifier()).textSelection(.enabled)
                 }

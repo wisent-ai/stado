@@ -158,10 +158,16 @@ pub(crate) enum MarketCommands {
     /// storage and bandwidth networks): what each pays for, its unit and
     /// currency, the page that says how a host joins, and whether Stado
     /// carries an adapter. --check asks each page whether it still answers
-    /// and exits non-zero naming each that does not.
+    /// and exits non-zero naming each that does not. --target HOST adds what
+    /// each source earned that host per board-hour over the autonomy
+    /// policy's freshness.pricing_max_age_seconds: kept payouts over the
+    /// hours its nodes ran, Vast.ai's kept days over their hours, beside the
+    /// best other source.
     Sources {
         #[arg(long)]
         check: bool,
+        #[arg(long)]
+        target: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -429,6 +435,8 @@ pub(crate) enum NodeCommands {
         /// carries no fleet work.
         #[arg(long)]
         deployment: Option<String>,
+        #[command(flatten)]
+        requirements: NodeRequirementArgs,
         #[arg(long)]
         json: bool,
     },
@@ -450,6 +458,10 @@ pub(crate) enum NodeCommands {
         /// The inference deployment it serves; empty stops it serving one.
         #[arg(long)]
         deployment: Option<String>,
+        /// Any requirement flag replaces the node's whole set of
+        /// requirements with the ones given.
+        #[command(flatten)]
+        requirements: NodeRequirementArgs,
         #[arg(long)]
         json: bool,
     },
@@ -489,6 +501,35 @@ pub(crate) enum NodeCommands {
         #[arg(long)]
         once: bool,
     },
+}
+
+/// What a network requires of the host's connection, copied from its own
+/// documentation: the follow loop starts the node only while the host's
+/// measured bandwidth meets it.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub(crate) struct NodeRequirementArgs {
+    /// Megabits per second the host's measured download must carry.
+    #[arg(long = "min-download-mbps")]
+    pub min_download_mbps: Option<f64>,
+    /// Megabits per second the host's measured upload must carry.
+    #[arg(long = "min-upload-mbps")]
+    pub min_upload_mbps: Option<f64>,
+    /// The page of the network's documentation that states the figures;
+    /// required with any of them.
+    #[arg(long = "requirements-source")]
+    pub source: Option<String>,
+}
+
+impl NodeRequirementArgs {
+    /// The declared requirements, or `None` when no flag was given.
+    pub fn given(&self) -> Option<crate::providers::node::NodeRequirements> {
+        let requirements = crate::providers::node::NodeRequirements {
+            min_download_mbps: self.min_download_mbps,
+            min_upload_mbps: self.min_upload_mbps,
+            source: self.source.clone(),
+        };
+        (!requirements.is_empty()).then_some(requirements)
+    }
 }
 
 /// One peer fleet as `stado market peer` declares it.

@@ -100,7 +100,19 @@ async fn install_and_check(
 ) -> Result<String, CmdError> {
     let (target, source, installed) = (install.target, install.source, install.installed);
     let capture = install.request.json;
-    let validated = apply::attach(target, delivered, &words(&["config", "validate"]), true).await?;
+    // Asked as every install asks (`config validate --install`): only what
+    // the incoming Stado cannot run with refuses. A release older than the
+    // flag refuses the flag itself, and is asked the `config validate` it
+    // answered every install with before.
+    let mut validated =
+        apply::attach(target, delivered, &words(&["config", "validate", "--install"]), true).await?;
+    let unknown = [validated.stdout.as_deref(), validated.stderr.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|said| said.contains("unexpected argument '--install'"));
+    if apply::ended(&validated).is_err() && unknown {
+        validated = apply::attach(target, delivered, &words(&["config", "validate"]), true).await?;
+    }
     if let Err(why) = apply::ended(&validated) {
         report.say("validate", State::Failed, why.clone());
         return Err(CmdError::refused(format!(

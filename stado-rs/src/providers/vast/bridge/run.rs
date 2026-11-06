@@ -313,7 +313,7 @@ pub async fn auto_list_loop(
                         listed = true;
                         log(&format!("DRY-RUN would list (idle {idle_dur_s}s)"));
                     } else if let Some(refusal) =
-                        crate::providers::vast::isolation::measure().refusal()
+                        crate::providers::vast::isolation::measure().await.refusal()
                     {
                         // Read before each listing: a service started or a
                         // rule removed since the last one would hand the next
@@ -405,7 +405,29 @@ pub async fn auto_list_loop(
             }
         } else {
             idle_since = None;
-            let decided = decide_action(listed, &state, None, params.idle_window_s);
+            let mut decided = decide_action(listed, &state, None, params.idle_window_s);
+            // Work queued for the fleet takes the board from the offer only
+            // when it is worth more per board-hour than the offer's price; a
+            // job already running here has the board, and the offer goes.
+            if decided == AutoListAction::Unlist && state.running_here == 0 {
+                // Vast rents the machine whole, so the decision is the host's.
+                match crate::providers::local::agent::allocate::offer_or_queue(
+                    store,
+                    state.queued_job_id.as_deref(),
+                    state.queued_income.as_ref(),
+                    "vast",
+                    "machine",
+                    params.price_gpu,
+                )
+                .await
+                {
+                    Ok(kept) => {
+                        log(&format!("still listed: {kept}"));
+                        decided = AutoListAction::BusyNotListed;
+                    }
+                    Err(why) => log(&format!("the queued job takes the host: {why}")),
+                }
+            }
             if decided == AutoListAction::Unlist {
                 if params.dry_run {
                     listed = false;
@@ -450,6 +472,7 @@ pub async fn auto_list_loop(
                     state.queued,
                     py_float(free_vram_gb)
                 )),
+                AutoListAction::BusyNotListed if listed => {}
                 AutoListAction::BusyNotListed => log(&format!("busy ({}); not listed", counts())),
                 AutoListAction::Unlist
                 | AutoListAction::List { .. }

@@ -114,6 +114,10 @@ pub(super) struct Readiness {
     /// answer, `refused` for a grant it refused, `not_found` for no item,
     /// `config` for a bearer or setting of this host.
     pub skarbiec_failure: Option<&'static str>,
+    /// The class a command that needed the key refuses with, as the
+    /// credential reading states it; not printed, `skarbiec_failure` is.
+    #[serde(skip)]
+    pub credential_failure: crate::primitives::failure::FailureCode,
     pub vault_host: Option<String>,
     pub vault_item_state: Option<crate::cli::host::VaultItemState>,
     pub vault_error: Option<String>,
@@ -152,6 +156,7 @@ pub(super) async fn assess(vault_host: Option<String>, ask_vault: bool) -> Readi
         channel: reading.channel.clone(),
         skarbiec_error: reading.error.clone(),
         skarbiec_failure: reading.failure.map(|failure| failure.as_str()),
+        credential_failure: reading.failure_code(),
         vault_host: None,
         vault_item_state: None,
         vault_error: None,
@@ -168,7 +173,7 @@ pub(super) async fn assess(vault_host: Option<String>, ask_vault: bool) -> Readi
         // A host Vast would rent is listed only when a renter's container
         // reaches nothing of the host's: an accepted key is not enough.
         if report.verdict == Verdict::Ready {
-            let isolation = crate::providers::vast::isolation::measure();
+            let isolation = crate::providers::vast::isolation::measure().await;
             if !isolation.isolated() {
                 report.verdict = Verdict::NotIsolated;
             }
@@ -387,5 +392,24 @@ pub(super) async fn report(
         // failed command uses.
         return Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE));
     }
-    Err(CmdError::click(summary).stating(crate::primitives::failure::FailureCode::Config))
+    Err(CmdError::click(summary).stating(failure_of(&report)))
+}
+
+/// The class a verdict that cannot earn states: Vast.ai's refusal is
+/// Vast.ai refusing, a key that did not resolve while the vault could not be
+/// asked is what the credential channel answered, and everything this host
+/// must provision (an item, a grant, a channel, isolation, a bandwidth
+/// probe) is config.
+fn failure_of(report: &Readiness) -> crate::primitives::failure::FailureCode {
+    use crate::primitives::failure::FailureCode;
+    match report.verdict {
+        Verdict::VastRefused => FailureCode::Refused,
+        Verdict::Unknown => report.credential_failure,
+        Verdict::Ready
+        | Verdict::ItemAbsent
+        | Verdict::NotAuthorized
+        | Verdict::NoChannel
+        | Verdict::NotIsolated
+        | Verdict::NoBandwidth => FailureCode::Config,
+    }
 }

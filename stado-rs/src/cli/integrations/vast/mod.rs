@@ -16,6 +16,7 @@ mod payout;
 mod readiness;
 mod readiness_text;
 mod serve_or_rent;
+pub(crate) mod source_value;
 mod sources;
 
 pub(crate) use readiness::read_vault;
@@ -32,7 +33,11 @@ use crate::queue::JobStorage;
 /// chosen; `None` for every verb that names one.
 pub(crate) async fn provider_less(command: &MarketCommands) -> Option<Result<(), CmdError>> {
     Some(match command {
-        MarketCommands::Sources { check, json } => sources::sources(*check, *json).await,
+        MarketCommands::Sources {
+            check,
+            target,
+            json,
+        } => sources::sources(*check, target.as_deref(), *json).await,
         MarketCommands::Compare {
             target,
             since_days,
@@ -265,7 +270,7 @@ async fn list(
     }
     // Vast lists the machine whole, so it is listed only when a renter's
     // container would reach nothing of the host's and no board is held.
-    if let Some(refusal) = vast::isolation::measure().refusal() {
+    if let Some(refusal) = vast::isolation::measure().await.refusal() {
         return Err(CmdError::refused(format!("not listed: {refusal}")));
     }
     if let Some(refusal) = vast::held::refusal().await {

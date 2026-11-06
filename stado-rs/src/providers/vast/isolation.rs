@@ -84,11 +84,12 @@ impl Isolation {
 }
 
 /// The IPv4 address of `interface`, from `ip -4 -o addr show dev`.
-fn interface_address(interface: &str) -> Result<Option<String>, String> {
-    let output = std::process::Command::new("ip")
-        .args(["-4", "-o", "addr", "show", "dev", interface])
-        .output()
-        .map_err(|error| format!("ip could not run: {error}"))?;
+async fn interface_address(interface: &str) -> Result<Option<String>, String> {
+    let output = crate::wait::output_async(
+        tokio::process::Command::new("ip").args(["-4", "-o", "addr", "show", "dev", interface]),
+    )
+    .await
+    .map_err(|error| format!("ip could not run: {error}"))?;
     if !output.status.success() {
         // `ip` refuses a device that does not exist: this host has no
         // bridge, so no marketplace container of Docker's default kind runs.
@@ -146,15 +147,17 @@ pub fn undropped_ranges(rules: &str) -> Vec<String> {
         .collect()
 }
 
-/// Read what a renter's container could reach on this host.
-pub fn measure() -> Isolation {
+/// Read what a renter's container could reach on this host. Every read is a
+/// child process awaited without holding a runtime thread, since the follow
+/// loop runs it on every listing.
+pub async fn measure() -> Isolation {
     let mut isolation = Isolation {
         bridge_address: None,
         reachable_listeners: Vec::new(),
         reachable_networks: Vec::new(),
         unread: Vec::new(),
     };
-    let bridge = match interface_address(BRIDGE) {
+    let bridge = match interface_address(BRIDGE).await {
         Ok(Some(address)) => address,
         Ok(None) => {
             isolation.unread.push(format!(
@@ -171,7 +174,7 @@ pub fn measure() -> Isolation {
         }
     };
     isolation.bridge_address = Some(bridge.clone());
-    match std::process::Command::new("ss").args(["-ltnH"]).output() {
+    match crate::wait::output_async(tokio::process::Command::new("ss").args(["-ltnH"])).await {
         Ok(output) if output.status.success() => {
             isolation.reachable_listeners =
                 reachable_listeners(&String::from_utf8_lossy(&output.stdout), &bridge);
@@ -187,9 +190,13 @@ pub fn measure() -> Isolation {
     // through passwordless sudo for this one fixed command, the way `stado
     // host reboot` runs its one command: a host grants exactly that line and
     // nothing wider. Without the grant the reading is unread, naming it.
-    match std::process::Command::new("sudo")
-        .args(["-n", IPTABLES, "-S", "DOCKER-USER"])
-        .output()
+    match crate::wait::output_async(tokio::process::Command::new("sudo").args([
+        "-n",
+        IPTABLES,
+        "-S",
+        "DOCKER-USER",
+    ]))
+    .await
     {
         Ok(output) if output.status.success() => {
             isolation.reachable_networks =

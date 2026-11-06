@@ -230,11 +230,23 @@ fi
 # The incoming Stado judges this host's configuration, and what its running
 # roles need of it, before it replaces the running one, after its own
 # migration: a release whose rules the host does not meet would close the
-# host's boundaries (its resolver, its object API) only once it runs.
-if [ "$binary" = stado ] && ! verdict=$("$staged_path" config validate 2>&1); then
+# host's boundaries (its resolver, its object API) only once it runs. It is
+# asked as an install asks (`config validate --install`: only what it cannot
+# run with refuses); a release older than that flag refuses the flag itself
+# and is asked the whole `config validate` it answered before.
+judge() {
+  if verdict=$("$staged_path" config validate --install 2>&1); then
+    return 0
+  fi
+  case "$verdict" in
+    *"unexpected argument '--install'"*) verdict=$("$staged_path" config validate 2>&1) ;;
+    *) return 1 ;;
+  esac
+}
+if [ "$binary" = stado ] && ! judge; then
   migration=$("$staged_path" config migrate 2>&1) \
     || migration="$migration (config migrate exited non-zero)"
-  if ! verdict=$("$staged_path" config validate 2>&1); then
+  if ! judge; then
     printf 'the incoming stado refuses this host configuration: %s\nits migration answered: %s\n' \
       "$verdict" "$migration" >&2
     say verify configuration_refused

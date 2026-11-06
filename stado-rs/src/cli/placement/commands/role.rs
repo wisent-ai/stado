@@ -30,6 +30,24 @@ pub enum RoleCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Take a directory service the host Stado process serves (the fleet
+    /// object API) on this host from an active host that does not answer:
+    /// this host's own object API serves it and the registry from this
+    /// host's copy is written there. This host must hold the registry
+    /// authority (stado placement move --authority). Refused while the active
+    /// host answers: then it is moved with its store (role move).
+    Take {
+        /// The directory service, e.g. stado-object-api.
+        service: String,
+        /// Why the role is taken, recorded in the placement history.
+        #[arg(long)]
+        reason: String,
+        /// Check the route and this host's object API, writing nothing.
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub(super) async fn run(command: RoleCommands) -> Result<(), CmdError> {
@@ -52,5 +70,11 @@ pub(super) async fn run(command: RoleCommands) -> Result<(), CmdError> {
             )
             .await
         }
+        RoleCommands::Take {
+            service,
+            reason,
+            check,
+            json,
+        } => crate::cli::placement::transfer::take_role(&service, &reason, check, json).await,
     }
 }

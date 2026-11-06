@@ -32,6 +32,9 @@ struct PeerReadiness: Decodable, Equatable, Sendable {
     let field: String
     let channel: VastReadiness.Channel
     let skarbiecError: String?
+    /// The class of `skarbiecError`: `infra_down`, `refused`, `not_found`
+    /// or `config`.
+    let skarbiecFailure: String?
     let vaultHost: String?
     let vaultItemState: String?
     let vaultError: String?
@@ -45,6 +48,7 @@ struct PeerReadiness: Decodable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case peer, verdict, summary, role, field, channel, remedy
         case skarbiecError = "skarbiec_error"
+        case skarbiecFailure = "skarbiec_failure"
         case vaultHost = "vault_host"
         case vaultItemState = "vault_item_state"
         case vaultError = "vault_error"

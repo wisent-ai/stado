@@ -161,7 +161,10 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
             version,
             json,
         } => fleet::place(&name, &engine, port, version.as_deref(), json).await,
-        DatabaseCommands::Backup(args) => dump::backup(args.name.as_deref(), args.keep, args.json).await,
+        DatabaseCommands::Backup(args) => match args.schedule.as_deref() {
+            Some(cron) => dump::schedule_backup(args.name.as_deref(), args.keep, cron, args.json).await,
+            None => dump::backup(args.name.as_deref(), args.keep, args.json).await,
+        },
         DatabaseCommands::Backups(args) => dump::files::list(args.name.as_deref(), args.json),
         DatabaseCommands::Migrate(args) => dump::migrate::run(args).await,
         DatabaseCommands::Rest { command } => match command {
@@ -231,6 +234,12 @@ pub(in crate::cli) fn declared_databases(
         CmdError::click(problems.join("; "))
             .stating(crate::primitives::failure::FailureCode::Config)
     })
+}
+
+/// When the newest complete backup of declared database `name` this machine
+/// keeps was taken, or `None` when it keeps none (`stado database backups`).
+pub(in crate::cli) fn newest_backup(name: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>, CmdError> {
+    dump::files::newest_complete(name)
 }
 
 async fn registry_document() -> Result<Value, CmdError> {

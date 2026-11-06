@@ -153,6 +153,93 @@ pub fn decide(
     }
 }
 
+/// The decision between work queued for the fleet and a market offer that
+/// holds this host, kept with its inputs under the worker name `stado market
+/// decisions --target` reads: `Ok` with its reason when the offer is worth
+/// at least as much and keeps the host, `Err` with why the queued job takes
+/// it. The job is valued at the income its submitter stated
+/// (`queued_income`), else the autonomy policy's
+/// `budgets.internal_usd_per_gpu_hour`; the offer at `offer_usd_per_hour`.
+/// The offer holds the host, so a tie keeps it. A job whose value cannot be
+/// read is not weighed: it takes the host, and the reason names what to
+/// declare. `board` names what the offer holds (`machine` for a
+/// marketplace that rents the machine whole).
+pub async fn offer_or_queue(
+    store: &crate::queue::JobStorage,
+    job_id: Option<&str>,
+    queued_income: Option<&(f64, String)>,
+    provider: &str,
+    board: &str,
+    offer_usd_per_hour: f64,
+) -> Result<String, String> {
+    let Some(job_id) = job_id else {
+        return Err("the queued job's record vanished before it was read".to_string());
+    };
+    let (value, source) = match queued_income {
+        Some((income, source)) => (*income, format!("stated by {source}")),
+        None => match crate::autonomy::storage::load_policy(store).await {
+            Ok(Some(policy)) => match policy.budgets.internal_usd_per_gpu_hour {
+                Some(value) => (
+                    value,
+                    "internal work at the policy's budgets.internal_usd_per_gpu_hour".to_string(),
+                ),
+                None => {
+                    return Err(format!(
+                        "job {job_id} states no income and the autonomy policy declares no \
+                         budgets.internal_usd_per_gpu_hour, so it is not weighed against the \
+                         {provider} offer"
+                    ))
+                }
+            },
+            Ok(None) => {
+                return Err(format!(
+                    "job {job_id} states no income and no autonomy policy is written, so it is \
+                     not weighed against the {provider} offer"
+                ))
+            }
+            Err(error) => {
+                return Err(format!(
+                    "job {job_id} states no income and the autonomy policy cannot be read \
+                     ({error}), so it is not weighed against the {provider} offer"
+                ))
+            }
+        },
+    };
+    let offer = Use::Offer {
+        provider: provider.to_string(),
+    };
+    let candidates = vec![
+        Candidate::valued(
+            Use::Job {
+                job_id: job_id.to_string(),
+            },
+            value,
+            source,
+        ),
+        Candidate::valued(
+            offer.clone(),
+            offer_usd_per_hour,
+            format!("the {provider} offer's price per GPU-hour"),
+        ),
+    ];
+    let decision = decide(
+        &crate::config::worker_name(),
+        board,
+        Some(offer.clone()),
+        candidates,
+        None,
+    );
+    let kept = match keep(store, &decision).await {
+        Ok(()) => String::new(),
+        Err(error) => format!("; the decision was not kept: {error}"),
+    };
+    let said = format!("{}{kept}", decision.reason);
+    match decision.chosen.as_ref() == Some(&offer) {
+        true => Ok(said),
+        false => Err(said),
+    }
+}
+
 /// Where decisions of `host` are kept.
 pub fn prefix(host: &str) -> String {
     format!("market/decisions/{host}/")

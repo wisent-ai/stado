@@ -174,3 +174,63 @@ pub(super) fn profiles_lacking_stores(document: &Value, findings: &mut Vec<Findi
         }
     }
 }
+
+/// Every declared postgres database whose copy this machine could not
+/// restore today: one that declares no backup period, one with no complete
+/// backup, and one whose newest complete backup is older than its declared
+/// `backup_every_hours`. A database whose provider stops answering is
+/// restored only from what was kept before (`stado database migrate
+/// --from-backup`); a period nobody declared, or a backup nobody takes, is
+/// found here and not on the day the host is gone.
+pub(super) fn databases_without_fresh_backup(now: chrono::DateTime<chrono::Utc>, findings: &mut Vec<Finding>) {
+    let declared = match crate::cli::database::declared_databases() {
+        Ok(declared) => declared,
+        Err(error) => {
+            findings.push(Finding::new(
+                "unreadable-database-declarations",
+                "database_api",
+                format!("the declared databases could not be read, so no backup was judged: {error}"),
+            ));
+            return;
+        }
+    };
+    for (name, declaration) in declared.iter().filter(|(_, declaration)| declaration.engine() == "postgres") {
+        let Some(period) = declaration.backup_every_hours() else {
+            findings.push(Finding::new(
+                "database-backup-undeclared",
+                name,
+                format!(
+                    "database {name} declares no backup period, so nothing says how old its last copy may be; set database_api.databases.{name}.backup_every_hours and take one with stado database backup {name}"
+                ),
+            ));
+            continue;
+        };
+        match crate::cli::database::newest_backup(name) {
+            Ok(None) => findings.push(Finding::new(
+                "database-backup-missing",
+                name,
+                format!(
+                    "database {name} has no complete backup on this machine (stado database backups {name}), so nothing restores it if its host stops answering; take one with stado database backup {name}"
+                ),
+            )),
+            Ok(Some(taken)) if now - taken > chrono::Duration::hours(i64::from(period.get())) => {
+                findings.push(Finding::new(
+                    "database-backup-stale",
+                    name,
+                    format!(
+                        "database {name}'s newest complete backup was taken at {}, {} hours ago, longer than the {} hours it declares; take one with stado database backup {name}",
+                        taken.to_rfc3339(),
+                        (now - taken).num_hours(),
+                        period
+                    ),
+                ))
+            }
+            Ok(Some(_)) => {}
+            Err(error) => findings.push(Finding::new(
+                "database-backup-unread",
+                name,
+                format!("database {name}'s backups could not be read, so their age was not judged: {error}"),
+            )),
+        }
+    }
+}

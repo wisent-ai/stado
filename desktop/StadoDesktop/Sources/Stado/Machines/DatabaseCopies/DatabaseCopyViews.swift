@@ -22,18 +22,31 @@ struct DatabaseAuthTarget: Identifiable {
     var id: String { database }
 }
 
-/// A row menu's **Back up**, **Move to fleet…**, **Serve REST API…**,
-/// **Retire REST API**, **Serve sign-in…** and **Retire sign-in**.
+/// The database a **Back up on a schedule…** form is open on.
+struct DatabaseScheduleTarget: Identifiable {
+    let database: String
+
+    var id: String { database }
+}
+
+/// A row menu's **Back up**, **Back up on a schedule…**, **Move to fleet…**,
+/// **Serve REST API…**, **Retire REST API**, **Serve sign-in…** and
+/// **Retire sign-in**.
 struct DatabaseCopyMenuItems: View {
     let database: String
     @ObservedObject var store: DatabaseCopyStore
     @Binding var moving: DatabaseMoveTarget?
     @Binding var serving: DatabaseRestTarget?
     @Binding var signing: DatabaseAuthTarget?
+    @Binding var scheduling: DatabaseScheduleTarget?
 
     var body: some View {
         Button("Back up") {
             Task { await store.backup(name: database) }
+        }
+        .disabled(store.isRunning)
+        Button("Back up on a schedule…") {
+            scheduling = DatabaseScheduleTarget(database: database)
         }
         .disabled(store.isRunning)
         Button("Move to fleet…") {
@@ -101,11 +114,12 @@ struct DatabaseCopyPanel: View {
 }
 
 extension View {
-    /// The **Move to fleet…**, **Serve REST API…** and **Serve sign-in…**
-    /// forms, each open on the database its target names.
+    /// The **Move to fleet…**, **Serve REST API…**, **Serve sign-in…** and
+    /// **Back up on a schedule…** forms, each open on the database its target
+    /// names.
     func databaseCopySheets(
         store: DatabaseCopyStore, moving: Binding<DatabaseMoveTarget?>, serving: Binding<DatabaseRestTarget?>,
-        signing: Binding<DatabaseAuthTarget?>
+        signing: Binding<DatabaseAuthTarget?>, scheduling: Binding<DatabaseScheduleTarget?>
     ) -> some View {
         sheet(item: moving) { target in
             DatabaseMigrateForm(database: target.database, store: store)
@@ -115,6 +129,9 @@ extension View {
         }
         .sheet(item: signing) { target in
             DatabaseAuthForm(database: target.database, store: store)
+        }
+        .sheet(item: scheduling) { target in
+            DatabaseScheduleForm(database: target.database, store: store)
         }
     }
 }

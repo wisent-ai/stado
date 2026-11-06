@@ -75,12 +75,27 @@ pub(crate) async fn recorded_listen_port(
         return Ok(None);
     }
     let document = read_document().await?;
-    let service = directory_name(entry);
-    Ok(document
+    Ok(listen_port_in(&document, entry, target))
+}
+
+/// The port `document` records for `entry` on `target`. For a caller that
+/// already holds the registry it acts on — a placement command that read it
+/// once, or took it from this host's copy because the store is silent — so
+/// the port comes from the same registry as the rest of its decision and no
+/// second read goes through a store that may be the one not answering.
+pub(crate) fn listen_port_in(
+    document: &Value,
+    entry: &CatalogService,
+    target: &str,
+) -> Option<u16> {
+    if !names_port(entry) {
+        return None;
+    }
+    document
         .get(DIRECTORY_KEY)
         .and_then(|block| block.get("services"))
-        .and_then(|services| services.get(service))
-        .and_then(|recorded| recorded_on(recorded, target)))
+        .and_then(|services| services.get(directory_name(entry)))
+        .and_then(|recorded| recorded_on(recorded, target))
 }
 
 /// A free loopback port the host's own system hands out. An installed Stado

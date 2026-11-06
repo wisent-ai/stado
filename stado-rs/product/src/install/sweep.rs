@@ -1,7 +1,7 @@
 use super::{perform, policy, recipe, status, transaction::lifecycle::rollback};
 use crate::{
     catalog::{self, text},
-    common::{capture, emit, lock, Arguments, Runtime},
+    common::{capture, emit, lock, Arguments, Busy, Runtime},
     source,
 };
 use anyhow::{bail, Context, Result};
@@ -43,21 +43,17 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     } else {
         match lock(&path) {
             Ok(writer) => Some(writer),
-            Err(error)
-                if error
-                    .downcast_ref::<std::io::Error>()
-                    .is_some_and(|e| e.kind() == std::io::ErrorKind::WouldBlock) =>
-            {
-                // A holder record that cannot be read is said with its cause,
-                // not printed as an empty holder.
-                let holder = match fs::read_to_string(&path) {
-                    Ok(text) => json!(text),
-                    Err(error) => json!({ "unreadable": error.to_string() }),
-                };
-                emit(&json!({"state": "busy", "holder": holder}))?;
-                return Ok(0);
-            }
-            Err(error) => return Err(error),
+            // Another sync holds the lock: this pass is not needed, since the
+            // holder reconciles the same catalog and the next pass installs
+            // what it does not. Answered as busy with the holder the lock
+            // names, exit 0, so a host routine does not record a failure.
+            Err(error) => match error.downcast::<Busy>() {
+                Ok(busy) => {
+                    emit(&json!({"state": "busy", "lock": busy.path, "holder": busy.holder}))?;
+                    return Ok(0);
+                }
+                Err(error) => return Err(error),
+            },
         }
     };
     let policy = policy::Policy::load(&runtime.home)?;

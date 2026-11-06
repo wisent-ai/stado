@@ -54,6 +54,11 @@ pub(crate) enum CapabilityAction {
         /// Print the resolution beside the answer, and a refusal, as JSON.
         #[arg(long)]
         json: bool,
+        /// When the attestation alternative is reached and no statement
+        /// answers this request yet, wait for one (`attestation record`)
+        /// and print it, instead of refusing and keeping the request.
+        #[arg(long)]
+        await_statement: bool,
     },
     /// Statements that answer one exact request in place of a product, for
     /// the attestation alternative: the requests `call` kept, read, answered
@@ -92,9 +97,9 @@ pub(crate) enum AttestationAction {
         request: String,
     },
     /// Record the answer on standard input as the statement answering the
-    /// request. For inference: for a request that makes the answer call one
-    /// function, the JSON object of its arguments; else the answer's text.
-    /// For image and search: the answer as the family's alternative gives it.
+    /// request. For inference: for a request whose answer calls a function,
+    /// the JSON object of its arguments; else the answer's text. For image
+    /// and search: the answer as the family's alternative gives it.
     Record {
         family: String,
         #[arg(long)]
@@ -104,6 +109,11 @@ pub(crate) enum AttestationAction {
         /// What was checked to give this answer; recorded beside it.
         #[arg(long)]
         checked: String,
+        /// The function the answer calls, among those the request offers.
+        /// Without it: the one `tool_choice` names, else the only one
+        /// offered; a request offering several and naming none is refused.
+        #[arg(long)]
+        function: Option<String>,
     },
     /// Withdraw the statement answering the request; the request is kept.
     Revoke {

@@ -95,6 +95,14 @@ pub(crate) fn youngest_held_seconds(
 /// The registry copy, which says the interval, is read only once a wait on
 /// that bind is found: every store request asks here, and most binds hold
 /// nothing.
+///
+/// A wait to a host the service's route no longer names is not one a new
+/// request stands behind: once the route moved (`placement role take`,
+/// `role move`), the resolver opens the next connection to the new active
+/// host, and the connection left hanging on the old one says nothing about
+/// it. Counted, it refused every request to the moved route for as long as
+/// the dead host kept the old connection open, which is forever when that
+/// host is switched off.
 pub(crate) fn held_at(url: &url::Url) -> Result<Option<String>, String> {
     let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
         return Ok(None);
@@ -111,9 +119,11 @@ pub(crate) fn held_at(url: &url::Url) -> Result<Option<String>, String> {
     let Some(refresh_seconds) = declared_refresh_seconds()? else {
         return Ok(None);
     };
+    let routes = crate::cli::resolver::kept_last_good_document()?;
     let held: Vec<&(WaitingOpen, i64)> = waiting
         .iter()
         .filter(|(_, waited)| *waited > refresh_seconds as i64)
+        .filter(|(open, _)| still_routed(routes.as_ref(), open))
         .collect();
     let Some((longest, waited)) = held.iter().max_by_key(|(_, waited)| *waited) else {
         return Ok(None);
@@ -125,6 +135,16 @@ pub(crate) fn held_at(url: &url::Url) -> Result<Option<String>, String> {
         held.len(),
         unanswered(longest, *waited)
     )))
+}
+
+/// Whether `open` waits on the host its service's route still names, by
+/// this host's registry copy. A copy that is absent, or names no active
+/// host for the service, cannot say the route moved, so the wait counts.
+fn still_routed(routes: Option<&serde_json::Value>, open: &WaitingOpen) -> bool {
+    let active = routes.and_then(|document| {
+        document["service_directory"]["services"][open.service.as_str()]["active_host"].as_str()
+    });
+    active.is_none_or(|active| active == open.active_host)
 }
 
 /// One service on another host whose requests from this host stand.

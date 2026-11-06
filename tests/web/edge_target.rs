@@ -7,7 +7,12 @@
 //! An edge on `absent-edge-host`, which the registry does not hold, is refused
 //! by `stado config validate` and `stado web edge status`, each naming the
 //! host and the two commands that fix it; the same edge on `marker-host`,
-//! which the registry holds, passes `config validate`.
+//! which the registry holds, passes `config validate`. Asked as an install
+//! asks (`config validate --install`), the edge on `absent-edge-host` is a
+//! `NOTE` and the verdict accepts, since the installed binary runs with the
+//! same declaration, while a document the binary cannot run with (a
+//! `providers` that is no list) still refuses; `--install` belongs to
+//! `validate` alone.
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
@@ -136,5 +141,58 @@ fn config_validate_accepts_the_edge_once_its_host_is_registered() {
         !said(&validated).contains(REFUSAL),
         "a registered edge host was refused: {}",
         said(&validated)
+    );
+}
+
+#[test]
+fn an_install_runs_with_an_edge_on_an_unregistered_host() {
+    let deployment = Deployment::start("install-absent", ABSENT);
+    let validated = deployment.stado(&["config", "validate", "--install"]);
+    let answer = said(&validated);
+    assert!(
+        validated.status.success(),
+        "config validate --install refused an edge on {ABSENT}: {answer}"
+    );
+    let note = answer
+        .lines()
+        .find(|line| line.starts_with("NOTE ") && line.contains(REFUSAL))
+        .unwrap_or_else(|| panic!("config validate --install does not note the edge: {answer}"));
+    for word in [ABSENT, "stado web edge provision", "stado web edge declare"] {
+        assert!(note.contains(word), "the install's note does not name {word}: {note}");
+    }
+    assert!(
+        !answer.lines().any(|line| line.starts_with("ERROR ")),
+        "an accepted install printed an ERROR: {answer}"
+    );
+}
+
+#[test]
+fn an_install_still_refuses_a_document_the_binary_cannot_run_with() {
+    let deployment = Deployment::start("install-unreadable", ABSENT);
+    let path = deployment.root.join(".stado/config.json");
+    let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    document["providers"] = json!("local");
+    fs::write(&path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+    let validated = deployment.stado(&["config", "validate", "--install"]);
+    let answer = said(&validated);
+    assert!(
+        !validated.status.success(),
+        "config validate --install accepted providers that is no list: {answer}"
+    );
+    assert!(
+        answer.lines().any(|line| line.starts_with("ERROR ") && line.contains("providers must be")),
+        "the refusal does not name providers: {answer}"
+    );
+}
+
+#[test]
+fn install_belongs_to_validate() {
+    let deployment = Deployment::start("install-show", REGISTERED);
+    let shown = deployment.stado(&["config", "show", "--install"]);
+    let answer = said(&shown);
+    assert!(!shown.status.success(), "config show took --install: {answer}");
+    assert!(
+        answer.contains("it belongs to config validate, not config show"),
+        "the refusal does not say where --install belongs: {answer}"
     );
 }
