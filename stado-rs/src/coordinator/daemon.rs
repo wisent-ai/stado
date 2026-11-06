@@ -12,7 +12,7 @@ use crate::targets::{fetch_registry_remote, load_registry_auto, Coordinator};
 use super::beside::{Replication, ShapeSweep};
 use super::grant::secrets_from_skarbiec;
 use super::log;
-use super::passes::{resolve_providers, run_tick, CoordinatorError};
+use super::passes::{resolve_providers, run_tick, CoordinatorError, LockError};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Invocation {
@@ -56,15 +56,6 @@ async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, CmdErr
         .stating(FailureCode::Config));
     }
     Ok(first.clone())
-}
-
-/// A tick that failed: the store keeps its own class; a scheduler or monitor
-/// failure states none, because neither error type carries one.
-fn tick_failure(error: CoordinatorError) -> CmdError {
-    match error {
-        CoordinatorError::Storage(error) => CmdError::from(error),
-        other => CmdError::click(other.to_string()),
-    }
 }
 
 /// Coordinator daemon entry point (Python `coordinator.run`). Returns the
@@ -175,10 +166,17 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, Cm
             }
         }
         let providers = resolve_providers();
-        let n = run_tick(&store, &secrets, &providers, true, &log)
-            .await
-            .map_err(tick_failure)?;
-        log(&format!("tick scheduled={n}"));
+        // A tick another process holds over this store (an operator's
+        // `stado scheduler tick`) is that tick's pass, not this daemon's
+        // failure: it is said and the next interval ticks. Any other failure
+        // ends the daemon as before.
+        match run_tick(&store, &secrets, &providers, true, &log).await {
+            Ok(n) => log(&format!("tick scheduled={n}")),
+            Err(CoordinatorError::Lock(held @ LockError::Held { .. })) => {
+                log(&format!("tick skipped: {held}"))
+            }
+            Err(error) => return Err(error.into()),
+        }
         // Publish the served queue namespace so submitters can refuse one
         // this fleet never claims from. An unchanged value, empty namespace
         // or lost compare-and-swap race needs no success log.

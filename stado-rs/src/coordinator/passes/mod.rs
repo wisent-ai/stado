@@ -5,12 +5,16 @@
 //!   and lifecycle stage over those arms.
 //! - `tick` composes every pass, plus the per-arm check/reap/schedule work,
 //!   into the single `run_tick` entry both deployment shapes call.
+//! - `lock` is the record a running tick holds, so one tick at a time runs
+//!   over a store.
 
 mod autonomy;
+mod lock;
 mod providers;
 mod tick;
 
 pub(crate) use autonomy::run_autonomy_once;
 
+pub use lock::{LockError, TICK_LOCK};
 pub use providers::{resolve_providers, ResolvedProvider};
 pub use tick::{run_tick, CoordinatorError};

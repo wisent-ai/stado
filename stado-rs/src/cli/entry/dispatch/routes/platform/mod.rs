@@ -8,7 +8,7 @@ use crate::cli::entry::spec::root::platform::PlatformCommands;
 use crate::cli::integrations::{egress, market};
 use crate::cli::reporting::alerts;
 use crate::cli::setup::{bootstrap, product, profiles};
-use crate::cli::work::{queue, schedule};
+use crate::cli::work::{queue, schedule, scheduler};
 use crate::cli::*;
 
 mod host_local;
@@ -109,6 +109,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
         PlatformCommands::Sandbox(sub) => sandbox::dispatch(sub).await,
         PlatformCommands::Secrets(sub) => secrets::dispatch(sub).await,
         PlatformCommands::Queue(sub) => queue::dispatch(sub).await,
+        PlatformCommands::Scheduler(sub) => scheduler::dispatch(sub).await,
         PlatformCommands::Alerts(sub) => alerts::dispatch(sub).await,
         PlatformCommands::Service(sub) => service::dispatch(sub).await,
         PlatformCommands::Egress(sub) => egress::dispatch(sub).await,

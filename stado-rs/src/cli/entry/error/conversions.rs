@@ -215,3 +215,20 @@ impl From<crate::service_resolution::ResolveError> for CmdError {
         Self::click(exc.to_string()).stating(code)
     }
 }
+
+impl From<crate::coordinator::CoordinatorError> for CmdError {
+    /// A tick that failed: the store keeps its own class, a tick another
+    /// process holds is a refusal; a scheduler or monitor failure states
+    /// none, because neither error type carries one.
+    fn from(exc: crate::coordinator::CoordinatorError) -> Self {
+        use crate::coordinator::{CoordinatorError, LockError};
+        match exc {
+            CoordinatorError::Storage(error)
+            | CoordinatorError::Lock(LockError::Storage(error)) => Self::from(error),
+            CoordinatorError::Lock(held @ LockError::Held { .. }) => {
+                Self::refused(held.to_string())
+            }
+            other => Self::click(other.to_string()),
+        }
+    }
+}
