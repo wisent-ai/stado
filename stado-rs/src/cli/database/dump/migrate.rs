@@ -5,11 +5,12 @@
 //!
 //! The order keeps every step recoverable. A backup is taken first and kept
 //! (`stado database backup`). The credential item as it stood is kept as
-//! `<item>-previous`. The fleet server is placed with the source's major
-//! PostgreSQL version, which writes `<item>` with the fleet coordinates; the
-//! backup is restored there and every counted table is counted again. When a
-//! table differs, `<item>` gets the source's coordinates back, the fleet
-//! coordinates are kept as `<item>-fleet-pending` so a second run restores
+//! `<item>-previous`, marked as a kept copy ([`kept`]). The fleet server is
+//! placed with the source's major PostgreSQL version, which writes `<item>`
+//! with the fleet coordinates; the backup is restored there and every
+//! counted table is counted again. When a table differs, `<item>` gets the
+//! source's coordinates back, the fleet coordinates are kept as
+//! `<item>-fleet-pending` (marked the same way) so a second run restores
 //! into the same server instead of placing another, and the command refuses
 //! naming each table. The declaration (engine, consumers) never changes: a
 //! consumer that opens the database through `stado_database::connect` reads
@@ -30,6 +31,8 @@ use super::super::supabase::owner_vault::{self, Owner};
 use super::super::DatabaseProvider;
 use super::tools::Connection;
 use super::{files, item_fields, restore, take};
+
+mod kept;
 
 /// `stado database migrate NAME --to fleet [--port PORT] [--host HOST] [--json]`.
 #[derive(Debug, clap::Args)]
@@ -149,7 +152,7 @@ pub(in crate::cli::database) async fn migrate(
                 .stating(FailureCode::Config)
         })?
         .to_string();
-    store(&owner, &previous, &source_document).await?;
+    store(&owner, &previous, &kept::copy(&source_document, &item, "previous")?).await?;
 
     let pending_kept = match owner.item_ids().await? {
         Some(ids) if !ids.contains(&pending) => None,
@@ -181,7 +184,7 @@ pub(in crate::cli::database) async fn migrate(
                 // and the fleet ones are kept for a second run.
                 Err(error) => {
                     if fleet_written {
-                        store(&owner, &pending, &written).await?;
+                        store(&owner, &pending, &kept::copy(&written, &item, "fleet-pending")?).await?;
                         store(&owner, &item, &source_document).await?;
                         return Err(error.also(format!(
                             "{item} holds the source's coordinates again and the fleet ones are {pending}"
@@ -206,7 +209,7 @@ pub(in crate::cli::database) async fn migrate(
     let restored = match restore::restore(&backup, &target) {
         Ok(report) if restore::complete(&report) => report,
         outcome => {
-            store(&owner, &pending, &target_document).await?;
+            store(&owner, &pending, &kept::copy(&target_document, &item, "fleet-pending")?).await?;
             store(&owner, &item, &source_document).await?;
             let cause = match outcome {
                 Ok(report) => format!("tables differ after the restore: {}", report["mismatches"]),
@@ -221,7 +224,7 @@ pub(in crate::cli::database) async fn migrate(
             .stating(FailureCode::InfraDown));
         }
     };
-    store(&owner, &item, &target_document).await?;
+    store(&owner, &item, &kept::in_use(target_document)).await?;
     let pending_status = if from_pending {
         owner.delete(&pending).await?
     } else {

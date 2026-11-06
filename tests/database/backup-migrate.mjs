@@ -5,6 +5,7 @@ import { constants, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
+import { assertKeptCopy } from './kept-copy.mjs';
 
 // Real journey of `stado database backup` and `stado database migrate`
 // against a dedicated, already provisioned profile: its home, config, owner
@@ -220,6 +221,7 @@ try {
   assert.equal(field(`${item}-previous`, 'session_url'), silent.toString(), 'The kept coordinates are the ones the item held when it moved');
   // The source answers again at its real address: the kept coordinates name it.
   const keptPrevious = JSON.parse(success(run(skarbiec, ['get', `${item}-previous`])));
+  assertKeptCopy(id => payloadOf(JSON.parse(success(run(skarbiec, ['get', id])))), item, `${item}-previous`, 'previous');
   const restored = { ...payloadOf(keptPrevious), fields: { ...payloadOf(keptPrevious).fields, session_url: payloadOf(answering).fields.session_url } };
   const put = spawnSync(skarbiec, ['set', `${item}-previous`], { cwd: root, env: environment, input: JSON.stringify(restored), encoding: 'utf8' });
   assert.equal(put.status, constants.F_OK, `skarbiec set ${item}-previous: ${put.stderr}`);
