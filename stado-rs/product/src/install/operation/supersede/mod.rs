@@ -3,7 +3,11 @@
 //! after-install steps without the lock. Each is told to stop with every
 //! process under it, each said on stderr, and the receipt records what was
 //! superseded, so the older one's steps neither finish after the newer
-//! installation's own nor stand in the receipt as still running.
+//! installation's own nor stand in the receipt as still running. The same
+//! stop ends an operation a person cancels (`cancel`).
+
+mod cancel;
+pub(in crate::install) use cancel::cancel;
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -17,9 +21,20 @@ use crate::state::ProductState;
 /// The receipt field an after-install run superseded by a newer installation
 /// is recorded under, in place of `after_install_running`.
 const SUPERSEDED: &str = "after_install_superseded";
+/// The receipt field an after-install run a person cancelled is recorded
+/// under, in place of `after_install_running`.
+const CANCELLED: &str = "after_install_cancelled";
 /// The receipt field an after-install run that ended without recording its
 /// outcome is recorded under, in place of `after_install_running`.
 const INTERRUPTED: &str = "after_install_interrupted";
+
+/// Why a running after-install run is told to stop: a newer installation of
+/// the surface took the lock, or a person cancelled it, recorded with the
+/// process that asked.
+enum Ending {
+    Superseded,
+    Cancelled(Value),
+}
 
 /// An installation that placed its files lets go of the lock while its
 /// after-install steps run, so a newer installation of the same surface takes
@@ -38,8 +53,20 @@ pub(in crate::install) fn stop_after_install(
     id: &str,
     surface: &str,
 ) -> Result<()> {
+    end_after_install(runtime, id, surface, Ending::Superseded).map(|_| ())
+}
+
+/// Stop the after-install run the receipt of `id`/`surface` records, for
+/// `ending`, and record in the receipt what happened to it; the record
+/// written, or `None` when the receipt records no such run.
+fn end_after_install(
+    runtime: &Runtime,
+    id: &str,
+    surface: &str,
+    ending: Ending,
+) -> Result<Option<Value>> {
     let Some(operation) = super::post_placement(runtime, id, surface)? else {
-        return Ok(());
+        return Ok(None);
     };
     let pid = i32::try_from(
         operation["pid"]
@@ -47,8 +74,16 @@ pub(in crate::install) fn stop_after_install(
             .context("after-install operation names no pid")?,
     )?;
     let (field, record) = if operation["running"] == true {
+        let (field, verb, by) = match ending {
+            Ending::Superseded => (
+                SUPERSEDED,
+                "superseding",
+                json!({"superseded_by": i32::try_from(std::process::id())?}),
+            ),
+            Ending::Cancelled(asked) => (CANCELLED, "cancelling", json!({"cancelled_by": asked})),
+        };
         eprintln!(
-            "superseding the installation of {id}/{surface} by pid {pid}: it is running its after-install steps {}",
+            "{verb} the installation of {id}/{surface} by pid {pid}: it is running its after-install steps {}",
             operation["steps"]
         );
         let told: Vec<Value> = descendants(pid)?
@@ -60,8 +95,9 @@ pub(in crate::install) fn stop_after_install(
         for each in &told {
             eprintln!("  {each}");
         }
-        let by = i32::try_from(std::process::id())?;
-        (SUPERSEDED, json!({"superseded_by": by, "told": told}))
+        let mut record = by;
+        record["told"] = json!(told);
+        (field, record)
     } else {
         (
             INTERRUPTED,
@@ -78,10 +114,10 @@ pub(in crate::install) fn stop_after_install(
     };
     marker.extend(added);
     marker.insert("at".to_owned(), json!(now()));
-    receipt
-        .extra
-        .insert(field.to_owned(), Value::Object(marker));
-    receipt.save(runtime)
+    let written = Value::Object(marker);
+    receipt.extra.insert(field.to_owned(), written.clone());
+    receipt.save(runtime)?;
+    Ok(Some(json!({"field": field, "record": written})))
 }
 
 /// Every process under `pid`, its children's children included, with their
@@ -155,6 +191,17 @@ fn runs_step(command: &str, step: &Value) -> bool {
         })
 }
 
+/// The command of the process in `running` that runs one of `recipe`'s
+/// `after_install` steps, if one does: such a holder is past placement,
+/// whatever phase it records.
+fn after_install_step<'a>(running: &'a [(i32, String)], recipe: &Value) -> Option<&'a str> {
+    let steps = recipe["after_install"].as_array()?;
+    running
+        .iter()
+        .find(|(_, command)| steps.iter().any(|step| runs_step(command, step)))
+        .map(|(_, command)| command.as_str())
+}
+
 /// A holder from a Stado that records no end of placement keeps `placing`
 /// while it runs its recipe's after-install steps, which do not change the
 /// surface, so a newer installation waited on it for as long as such a step
@@ -164,9 +211,6 @@ fn runs_step(command: &str, step: &Value) -> bool {
 /// stop, as a holder still preparing is, and the newer installation takes the
 /// lock once they let go. Each process told is said on stderr.
 pub(in crate::install) fn stop_past_placement(lock: &Path, recipe: &Value) -> Result<()> {
-    let Some(steps) = recipe["after_install"].as_array() else {
-        return Ok(());
-    };
     let Some(held) = super::holder(lock)? else {
         return Ok(());
     };
@@ -175,10 +219,7 @@ pub(in crate::install) fn stop_past_placement(lock: &Path, recipe: &Value) -> Re
     }
     let pid = i32::try_from(held["pid"].as_u64().context("the holder names no pid")?)?;
     let running = descendants(pid)?;
-    let Some((_, step)) = running
-        .iter()
-        .find(|(_, command)| steps.iter().any(|step| runs_step(command, step)))
-    else {
+    let Some(step) = after_install_step(&running, recipe) else {
         return Ok(());
     };
     eprintln!(

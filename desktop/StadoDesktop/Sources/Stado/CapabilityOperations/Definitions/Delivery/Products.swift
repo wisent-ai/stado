@@ -135,6 +135,13 @@ enum NativeProductOperations {
             .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
             .init(id: "host", label: "Stado host for a service surface", option: "--host"),
         ], mutates: false),
+        // Ends the operation `status` names (the lock holder or an installation
+        // still running its after-install steps) with every process under it;
+        // refused while files are being placed or when nothing runs.
+        .init(id: "cancel", title: "Cancel the installation operation running on one surface", path: ["product", "cancel"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+            .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
+        ]),
         .init(id: "paths", title: "Inspect executable ownership and PATH collisions", path: ["product", "paths"], hostPlacement: .none, mutates: false),
         // Ends the running application through LaunchServices, waits on its
         // process in the wait register, opens the bundle and reads it running.

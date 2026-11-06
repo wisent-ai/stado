@@ -1,6 +1,6 @@
 //! The installation operation a product surface's lock stands for: which one
-//! runs and in what step (`stado product status`), and the after-install
-//! steps that run without the lock.
+//! runs and in what step (`stado product status`), the after-install steps
+//! that run without the lock, and ending one (`stado product cancel`).
 //!
 //! An installation holds `<products>/<product>/<surface>.lock` while it
 //! builds, places and records its files, and writes into it who holds it, in
@@ -21,6 +21,7 @@ mod prerequisites;
 mod supersede;
 pub(in crate::install) use after::{after_install, lock_surface};
 pub use perform::perform;
+pub(in crate::install) use supersede::cancel;
 use supersede::{stop_after_install, stop_past_placement};
 
 use anyhow::{Context, Result};

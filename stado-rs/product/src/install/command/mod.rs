@@ -1,6 +1,6 @@
-//! `stado product install|update|finish|status|remove|rollback|sync`: the
-//! arguments of one lifecycle verb, the catalog it reads, and the operation
-//! it runs.
+//! `stado product install|update|finish|status|cancel|remove|rollback|sync`:
+//! the arguments of one lifecycle verb, the catalog it reads, and the
+//! operation it runs.
 
 use anyhow::{bail, Result};
 
@@ -152,6 +152,15 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
             catalog::product(document, id)?,
             surface,
         )?)?,
+        ("cancel", Some(document)) => {
+            if let Some(host) = host {
+                bail!(
+                    "cancel ends an operation of this machine and reads no --host; run `stado \
+                     product cancel` on {host} itself"
+                );
+            }
+            super::operation::cancel(runtime, catalog::product(document, id)?, surface)?
+        }
         _ => bail!("unknown installation operation {action}"),
     };
     emit(&report)?;

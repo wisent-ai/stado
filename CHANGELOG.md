@@ -150,6 +150,20 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Added
 
+- **`stado product cancel PRODUCT --surface S [--json]` ends an installation that nothing
+  supersedes:** an installation waiting on another product's lock named the holder, but the holder
+  could be stopped only by a newer installation of its own surface or by a hand kill, so an
+  install whose finish stood on another host held every installation that depended on it with no
+  verb to end it. `cancel` ends the operation `stado product status` names on the surface: the
+  lock holder, when its recorded pid still runs with its recorded birth time, or an installation
+  still running its after-install steps without the lock. It and every process under it are told
+  to stop, the lock is taken once it is let go, and the receipt records the cancellation under
+  `operation_cancelled` or `after_install_cancelled` with the process that asked. It refuses, by
+  name, a holder placing files (a half-replaced surface is worse than a late one), a lock whose
+  recorded holder no longer runs, `--host` (cancel ends an operation of this machine), and a
+  surface on which nothing runs. Stado Desktop's Products operations carry it beside status.
+  Real journey: `tests/install/resident/locks.mjs`.
+
 - **A push cannot add a call to a product the catalog does not show it running without:**
   `stado product dependencies` reported every product's code that reaches another catalog
   product with no declared alternative, but nothing refused a revision that added one, so new

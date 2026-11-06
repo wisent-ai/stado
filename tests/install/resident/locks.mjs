@@ -1,6 +1,7 @@
 // A dedicated-host journey through the real product CLI and an isolated HOME.
-// It tests a released lock left by a dependency install and a held lock whose
-// guarded product disagrees with its record.
+// It tests a released lock left by a dependency install, a held lock whose
+// guarded product disagrees with its record, and `stado product cancel`
+// ending a real lock holder.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -41,10 +42,22 @@ function succeeds(result) {
     `command failed: ${result.error?.message} ${result.stderr} ${result.stdout}`);
   return result.stdout.trim();
 }
-function record(path, product, pid, started) {
+function record(path, product, pid, started, phase = 'preparing') {
   writeFileSync(path, `${JSON.stringify({ product, pid, started_at: started,
-    command: `${program} product install oko --surface cli`,
-    acquired_at: new Date().toISOString(), phase: 'preparing', step: 'source build' })}\n`);
+    command: `${program} product install ${product} --surface cli`,
+    acquired_at: new Date().toISOString(), phase, step: 'source build' })}\n`);
+}
+function birthOf(pid) {
+  const birth = spawnSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' });
+  report.commands.push({ executable: '/bin/ps', arguments: ['-p', String(pid), '-o', 'lstart='],
+    exit_status: birth.status, stdout: birth.stdout, stderr: birth.stderr });
+  assert.ok(!birth.status && birth.stdout.trim(), `cannot read the birth of pid ${pid}: ${birth.stderr}`);
+  return birth.stdout.trim();
+}
+function refuses(result, pattern, what) {
+  assert.ok(result.status || result.signal || result.error, `${what} must refuse`);
+  assert.match(result.stderr, pattern);
+  return { exit_status: result.status, stderr: result.stderr };
 }
 let failure;
 try {
@@ -125,6 +138,36 @@ try {
   const finalRecord = JSON.parse(readFileSync(lock, 'utf8'));
   assert.equal(finalRecord.product, 'stado');
   report.finalRecord = finalRecord;
+  const cancel = ['product', 'cancel', 'stado', '--surface', 'cli', '--json'];
+  report.cancelIdle = refuses(run(cancel), /nothing to cancel on stado\/cli/, 'cancel with nothing running');
+  report.cancelHost = refuses(run([...cancel, '--host', host]), /reads no --host/, 'cancel with --host');
+  const holder = spawn(fixture, [lock], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const holding = await Promise.race([
+    once(holder.stdout, 'data').then(([data]) => data.toString().trim()),
+    once(holder, 'exit').then(([code]) => { throw new Error(`lock holder exited before ready: ${code}`); }),
+  ]);
+  assert.equal(holding, 'held');
+  const holderBirth = birthOf(holder.pid);
+  record(lock, 'stado', holder.pid, holderBirth, 'placing');
+  report.cancelPlacing = refuses(run(cancel), /is being placed/, 'cancel of a holder placing files');
+  assert.equal(holder.exitCode, null, 'a holder placing files must not be stopped');
+  record(lock, 'stado', holder.pid, holderBirth, 'preparing');
+  const ended = once(holder, 'exit');
+  const cancelled = JSON.parse(succeeds(run(cancel)));
+  const [code, signal] = await ended;
+  report.commands.push({ executable: fixture, arguments: [lock], exit_status: code, signal });
+  assert.equal(signal, 'SIGTERM', 'cancel must stop the holder with SIGTERM');
+  assert.equal(cancelled.cancelled, 'lock holder');
+  assert.equal(cancelled.operation.pid, holder.pid);
+  assert.ok(cancelled.operation.told.some(told => told.pid === holder.pid && told.told_to_stop));
+  const afterCancel = JSON.parse(succeeds(run(['product', 'status', 'stado', '--surface', 'cli', '--json'])));
+  assert.equal(afterCancel.operation_cancelled.pid, holder.pid, 'the receipt records the cancelled holder');
+  assert.ok(afterCancel.operation_cancelled.cancelled_by.pid, 'the receipt names the process that asked');
+  assert.equal(afterCancel.operation, null, 'nothing holds the surface after cancel');
+  const freed = JSON.parse(succeeds(run(['product', 'locks', '--json'])));
+  assert.equal(freed.locks.find(row => row.path === lock).held, false, 'cancel releases the lock');
+  report.cancelled = cancelled;
+  report.afterCancel = afterCancel;
   report.result = 'passed';
 } catch (error) {
   report.error = error.stack || String(error);

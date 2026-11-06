@@ -1,5 +1,4 @@
 use super::{flag, positional, value};
-use anyhow::Context;
 use clap::{Arg, ArgAction, ArgGroup, Command};
 
 fn surface(required: bool) -> Arg {
@@ -105,13 +104,24 @@ pub fn installation(action: &'static str, about: &'static str, shape: Shape) -> 
 }
 
 /// The verbs that read or change one installation without building it:
-/// `status` (with the operation holding its lock), `remove` and `rollback`.
+/// `status` (with the operation holding its lock), `cancel` (ending that
+/// operation), `remove` and `rollback`.
 pub fn changes() -> Vec<Command> {
     vec![
         installation(
             "status",
             "Inspect recorded installation, source, signatures, actual readiness and the operation \
              holding its lock, with its step",
+            Shape::Reads,
+        ),
+        // `cancel` ends what status names on this machine's surface: no --wait,
+        // which only an installation reads; --host it refuses by name.
+        installation(
+            "cancel",
+            "End the operation status names on this surface (the lock holder, or an installation \
+             still running its after-install steps) with every process under it, take the lock \
+             once it has ended, and record the cancellation in the receipt; refused while files \
+             are being placed, or when nothing runs",
             Shape::Reads,
         ),
         installation(
@@ -137,40 +147,6 @@ pub fn locks() -> Command {
     Command::new("locks")
         .about("List every product surface lock, its recorded owner, process identity, observed state and corruption")
         .arg(flag("json", "Print the complete lock observations as JSON"))
-}
-
-pub fn report_locks(runtime: &crate::common::Runtime, as_json: bool) -> anyhow::Result<i32> {
-    let report = crate::common::files::locks_report(&runtime.home)?;
-    if as_json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        for row in report["locks"]
-            .as_array()
-            .context("lock report has no rows")?
-        {
-            let path = row["path"].as_str().context("lock row has no path")?;
-            if let Some(error) = row["error"].as_str() {
-                println!("{path}: unreadable or corrupt: {error}");
-                continue;
-            }
-            let state = match (row["held"].as_bool(), row["running"].as_bool()) {
-                (Some(true), Some(true)) => "held",
-                (Some(true), _) => "held with unverified process identity",
-                (_, Some(true)) => "released record",
-                _ => "stale record",
-            };
-            println!(
-                "{path}: {state}; pid {}, born {}, observed {}; phase {}, step {}; acquired {}",
-                row["pid"],
-                row["started_at"],
-                row["observed_start"],
-                row["phase"],
-                row["step"],
-                row["acquired_at"]
-            );
-        }
-    }
-    Ok(libc::EXIT_SUCCESS)
 }
 
 pub fn sync() -> Command {
