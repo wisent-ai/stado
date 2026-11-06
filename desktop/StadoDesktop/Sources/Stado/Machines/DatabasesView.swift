@@ -25,6 +25,7 @@ struct DatabasesView: View {
     @StateObject private var copies = DatabaseCopyStore()
     @State private var serving: DatabaseRestTarget?
     @State private var signing: DatabaseAuthTarget?
+    @State private var scheduling: DatabaseScheduleTarget?
     @StateObject private var bill = DatabaseBillStore()
 
     var body: some View {
@@ -97,7 +98,7 @@ struct DatabasesView: View {
         .sheet(item: $pendingDestruction) { row in
             destructionDialog(row)
         }
-        .databaseCopySheets(store: copies, moving: $moving, serving: $serving, signing: $signing)
+        .databaseCopySheets(store: copies, moving: $moving, serving: $serving, signing: $signing, scheduling: $scheduling)
     }
 
     private func removalDialog(_ row: DatabaseRow) -> WisentDecisionDialog {
@@ -213,7 +214,8 @@ struct DatabasesView: View {
                             Task { await store.adopt(name: row.database) }
                         }
                         DatabaseCopyMenuItems(
-                            database: row.database, store: copies, moving: $moving, serving: $serving, signing: $signing)
+                            database: row.database, store: copies, moving: $moving, serving: $serving, signing: $signing,
+                            scheduling: $scheduling)
                         Divider()
                         Button("Remove…", role: .destructive) {
                             pendingRemoval = row
