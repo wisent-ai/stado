@@ -65,7 +65,7 @@ pub fn overdue(schedule: &Schedule, sweep: Option<&Sweep>, now: DateTime<Utc>) -
         return Some(format!(
             "occurrence {} is reserved by {} (state {}) and not yet enqueued; the next coordinator \
              tick takes it over and enqueues it",
-            pending.occurrence_at, pending.owner, pending.state
+            pending.occurrence_at, pending.owner, pending.state.word()
         ));
     }
     let Some(sweep) = sweep else {

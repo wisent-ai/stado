@@ -5,7 +5,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::queue::{JobStorage, StorageError};
-use crate::schedules::Schedule;
+use crate::schedules::{ReservationState, Schedule};
 
 use super::path;
 
@@ -31,7 +31,7 @@ pub(in crate::schedules) async fn release_pending_occurrence(
         if pending.occurrence_key != occurrence_key || pending.owner != owner {
             return Ok(());
         }
-        pending.state = "claimed".into();
+        pending.state = ReservationState::Claimed;
         pending.owner.clear();
         pending.lease_expires_at = String::new();
         pending.owner_process = Default::default();
@@ -101,7 +101,7 @@ pub(in crate::schedules) async fn accept_pending_occurrence(
         };
         if pending.occurrence_key != occurrence_key
             || pending.owner != owner
-            || pending.state != "enqueuing"
+            || pending.state != ReservationState::Enqueuing
             || pending.run_id != job.run_id
         {
             return Ok(false);

@@ -36,12 +36,34 @@ pub enum OverlapPolicy {
     Allow,
 }
 
+/// Where a reserved occurrence stands: claimed by a firing process, then
+/// enqueuing its job. A record naming any other word is refused where it is
+/// read, so a misspelt state cannot pass a comparison it should fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReservationState {
+    /// A firing process holds the occurrence and has not enqueued it yet.
+    Claimed,
+    /// The holder is writing the occurrence's job to the queue.
+    Enqueuing,
+}
+
+impl ReservationState {
+    /// The state as the record stores it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Claimed => "claimed",
+            Self::Enqueuing => "enqueuing",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleOccurrenceReservation {
     pub occurrence_key: String,
     pub occurrence_at: String,
     pub run_id: String,
-    pub state: String,
+    pub state: ReservationState,
     pub owner: String,
     /// The expiry an older Stado stated for its reservation; empty when the
     /// holding process is recorded instead.

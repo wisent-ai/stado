@@ -16,7 +16,7 @@ use crate::queue::storage::JobStorage;
 use crate::queue::submit::SubmitError;
 use crate::queue::StorageError;
 
-use super::validate_run_manifest;
+use super::{validate_run_manifest, EntryState};
 
 pub(in crate::queue::submit) enum EntryClaim {
     Owned(Job),
@@ -98,7 +98,7 @@ pub(in crate::queue::submit) async fn claim_entry(
         let current = validated
             .get(index)
             .ok_or_else(|| SubmitError::Validation("run checkpoint entry is missing".into()))?;
-        if current.state == super::EntryState::Accepted {
+        if current.state == EntryState::Accepted {
             return Ok(EntryClaim::Accepted(current.planned_job.clone()));
         }
         if current.state.ended() {
@@ -119,10 +119,7 @@ pub(in crate::queue::submit) async fn claim_entry(
             .get("owner")
             .and_then(Value::as_str)
             .is_some_and(|held_by| held_by != owner);
-        if matches!(
-            entry.get("state").and_then(Value::as_str),
-            Some("claimed" | "enqueuing")
-        ) && held_by_another
+        if matches!(current.state, EntryState::Claimed | EntryState::Enqueuing) && held_by_another
         {
             if let Some(holder) = live_holder(entry) {
                 return Err(SubmitError::Validation(format!(
@@ -131,7 +128,7 @@ pub(in crate::queue::submit) async fn claim_entry(
             }
         }
         let holder = ProcessOwner::current();
-        entry.insert("state".into(), Value::from("claimed"));
+        entry.insert("state".into(), Value::from(EntryState::Claimed.word()));
         entry.insert("owner".into(), Value::from(owner));
         entry.insert("owner_host".into(), Value::from(holder.host));
         entry.insert("owner_pid".into(), Value::from(holder.pid));
@@ -155,7 +152,7 @@ pub(in crate::queue::submit) async fn claim_entry(
             .and_then(|entries| entries.get_mut(index))
             .and_then(Value::as_object_mut)
             .ok_or_else(|| SubmitError::Validation("run checkpoint entry is missing".into()))?;
-        entry.insert("state".into(), Value::from("enqueuing"));
+        entry.insert("state".into(), Value::from(EntryState::Enqueuing.word()));
         match store
             .compare_and_swap_text(
                 path,
@@ -200,7 +197,7 @@ pub(in crate::queue::submit) async fn checkpoint_accepted(
             .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?;
         let validated = validate_run_manifest(&manifest, run_id, request, request_digest)?;
         let current = &validated[index];
-        if current.state == super::EntryState::Accepted || current.state.ended() {
+        if current.state == EntryState::Accepted || current.state.ended() {
             return Ok(());
         }
         let entry = manifest
@@ -210,14 +207,14 @@ pub(in crate::queue::submit) async fn checkpoint_accepted(
             .and_then(Value::as_object_mut)
             .ok_or_else(|| SubmitError::Validation("run checkpoint entry is missing".into()))?;
         if entry.get("job_id").and_then(Value::as_str) != Some(job_id)
-            || entry.get("state").and_then(Value::as_str) != Some("enqueuing")
+            || EntryState::stored(entry)? != EntryState::Enqueuing
             || entry.get("owner").and_then(Value::as_str) != Some(owner)
         {
             return Err(SubmitError::Validation(
                 "run checkpoint ownership changed before acceptance".into(),
             ));
         }
-        entry.insert("state".into(), Value::from("accepted"));
+        entry.insert("state".into(), Value::from(EntryState::Accepted.word()));
         entry.insert(
             "accepted_at".into(),
             Value::from(chrono::Utc::now().to_rfc3339()),

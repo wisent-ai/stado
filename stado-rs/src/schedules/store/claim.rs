@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use crate::queue::leases::{OwnerState, ProcessOwner};
 use crate::queue::submit::stable_run_id;
 use crate::queue::{JobStorage, StorageError};
-use crate::schedules::{Schedule, ScheduleOccurrenceReservation};
+use crate::schedules::{ReservationState, Schedule, ScheduleOccurrenceReservation};
 
 use super::path;
 
@@ -52,7 +52,7 @@ pub(in crate::schedules) async fn reserve_due_occurrence(
         occurrence_key: stable_run_id("schedule-occurrence", &token),
         occurrence_at: occurrence_at.to_string(),
         run_id: stable_run_id("schedule", &token),
-        state: "claimed".into(),
+        state: ReservationState::Claimed,
         owner: owner.to_string(),
         lease_expires_at: String::new(),
         owner_process: ProcessOwner::current(),
@@ -90,7 +90,7 @@ pub(in crate::schedules) async fn reserve_manual_occurrence(
         occurrence_key: stable_run_id("schedule-occurrence", &token),
         occurrence_at,
         run_id: stable_run_id("schedule", &token),
-        state: "claimed".into(),
+        state: ReservationState::Claimed,
         owner: owner.to_string(),
         lease_expires_at: String::new(),
         owner_process: ProcessOwner::current(),
@@ -121,7 +121,7 @@ pub(in crate::schedules) async fn takeover_pending_occurrence(
     if occurrence_lease_live(pending) && pending.owner != owner {
         return Ok(None);
     }
-    pending.state = "claimed".into();
+    pending.state = ReservationState::Claimed;
     pending.owner = owner.to_string();
     pending.lease_expires_at = String::new();
     pending.owner_process = ProcessOwner::current();
@@ -151,11 +151,11 @@ pub(in crate::schedules) async fn begin_pending_occurrence(
     };
     if pending.occurrence_key != occurrence_key
         || pending.owner != owner
-        || pending.state != "claimed"
+        || pending.state != ReservationState::Claimed
     {
         return Ok(None);
     }
-    pending.state = "enqueuing".into();
+    pending.state = ReservationState::Enqueuing;
     match store
         .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
         .await
