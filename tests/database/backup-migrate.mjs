@@ -133,6 +133,28 @@ try {
   const fresh = doctorRows();
   assert.deepEqual(fresh, [], `a backup younger than its period must leave no doctor finding: ${JSON.stringify(fresh)}`);
   report.doctor = { before: noneYet, after: fresh };
+  // The backup becomes a routine of this host: declared once, the same
+  // declaration again changes nothing, another expression brings the one
+  // routine to it, an undeclared database and an invalid expression are
+  // refused. The routine is read back from the host store and removed.
+  refused(run(stado, ['database', 'backup', `${name}-undeclared`, '--schedule', '0 3 * * *', '--json']), 'is not declared');
+  refused(run(stado, ['database', 'backup', name, '--schedule', 'every night', '--json']), 'invalid cron expression');
+  const routine = JSON.parse(success(run(stado, ['database', 'backup', name, '--keep', '2', '--schedule', '0 3 * * *', '--json'])));
+  assert.equal(routine.cron, '0 3 * * *');
+  assert.equal(routine.declared, 'created', `the first declaration writes the routine: ${routine.declared}`);
+  assert.ok(routine.command.includes(`database backup ${name} --keep 2`), `the routine runs this backup: ${routine.command}`);
+  const redeclared = JSON.parse(success(run(stado, ['database', 'backup', name, '--keep', '2', '--schedule', '0 3 * * *', '--json'])));
+  assert.equal(redeclared.schedule, routine.schedule, 'declaring the same routine again must find the one it declared');
+  assert.equal(redeclared.declared, 'unchanged', `the same declaration again must change nothing: ${redeclared.declared}`);
+  const rescheduled = JSON.parse(success(run(stado, ['database', 'backup', name, '--keep', '2', '--schedule', '30 4 * * *', '--json'])));
+  assert.equal(rescheduled.schedule, routine.schedule, 'another expression must bring the one routine to it');
+  assert.equal(rescheduled.cron, '30 4 * * *');
+  assert.ok(rescheduled.declared.startsWith('changed '), `another expression changes the routine: ${rescheduled.declared}`);
+  const hostStore = { WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, '.stado', 'host-store') };
+  const shown = JSON.parse(success(run(stado, ['schedule', 'show', routine.schedule, '--json'], hostStore)));
+  assert.equal(shown.cron, '30 4 * * *', 'the host store holds the routine as declared');
+  success(run(stado, ['schedule', 'rm', routine.schedule], hostStore));
+  report.routine = { routine, redeclared, rescheduled };
   const kept = rows.find(row => row.database === name);
   assert.ok(kept?.backup, `backup answered no directory: ${JSON.stringify(rows)}`);
   const manifest = JSON.parse(readFileSync(join(kept.backup, 'manifest.json'), 'utf8'));

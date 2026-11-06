@@ -74,9 +74,73 @@ pub(crate) struct BackupArgs {
     /// each database it took, removing older ones; without it none is removed.
     #[arg(long)]
     pub(super) keep: Option<std::num::NonZeroUsize>,
+    /// Instead of backing up now, declare a routine of this host that runs
+    /// this same backup (`stado database backup [NAME] [--keep N]`) on this
+    /// 5-field cron expression (UTC), under an identity derived from NAME,
+    /// so declaring it again changes nothing and a different expression or
+    /// retention brings the routine to it. It runs whether or not the fleet
+    /// store answers (`schedule create --host-store`).
+    #[arg(long, value_name = "CRON")]
+    pub(super) schedule: Option<String>,
     /// Emit machine-readable output.
     #[arg(long)]
     pub(super) json: bool,
+}
+
+/// The identity of the backup routine of `name`, or of every declared
+/// postgres database when `None`: `sch-` and 32 hex digits of the SHA-256
+/// of what it backs up, the form every schedule id takes, so declaring it
+/// again finds the routine it declared before.
+fn backup_routine_id(name: Option<&str>) -> String {
+    use sha2::{Digest, Sha256};
+    let subject = format!("stado database backup {}", name.unwrap_or("--all"));
+    let digest = format!("{:x}", Sha256::digest(subject.as_bytes()));
+    format!("sch-{}", &digest[..32])
+}
+
+/// `stado database backup [NAME] [--keep N] --schedule CRON`: declare the
+/// host routine that runs this backup on CRON, instead of backing up now.
+/// NAME must be declared, as for a backup now; the routine runs the installed
+/// `stado` with the same name and retention.
+pub(super) async fn schedule_backup(
+    name: Option<&str>,
+    keep: Option<std::num::NonZeroUsize>,
+    cron: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    if let Some(name) = name {
+        if !super::declared_databases()?.contains_key(name) {
+            return Err(CmdError::usage(format!("database {name:?} is not declared")));
+        }
+    }
+    let mut command = String::from("\"$HOME/.stado/bin/stado\" database backup");
+    if let Some(name) = name {
+        command.push(' ');
+        command.push_str(&crate::deploy::shlex_quote(name));
+    }
+    if let Some(keep) = keep {
+        command.push_str(&format!(" --keep {keep}"));
+    }
+    command.push_str(" --json");
+    let id = backup_routine_id(name);
+    let (routine, said) = crate::cli::work::schedule::declare_host_routine(&id, cron, &command).await?;
+    let report = json!({
+        "database": name,
+        "schedule": routine.schedule_id,
+        "cron": routine.cron,
+        "command": routine.command,
+        "next_due_at": routine.next_due_at,
+        "declared": said,
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "backup routine {} {said}: {} at '{}' (UTC), next at {}",
+            routine.schedule_id, routine.command, routine.cron, routine.next_due_at
+        );
+    }
+    Ok(())
 }
 
 pub(super) async fn backup(

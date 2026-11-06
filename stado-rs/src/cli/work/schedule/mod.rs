@@ -31,6 +31,44 @@ pub fn stored_id(given: &str) -> String {
     given.to_owned()
 }
 
+/// Declare, in this host's own store, a routine that submits `command` on
+/// `cron` (UTC) under the stored id `schedule_id`: the same declaration again
+/// changes nothing, and a different command or expression brings the routine
+/// to it with its run history kept. Answers the routine as stored and what
+/// declaring it did: `created`, `unchanged`, or `changed <fields>`. For a
+/// product that keeps a routine of its own (`stado
+/// database backup --schedule`) as `schedule create --id ... --converge
+/// --host-store` does.
+pub async fn declare_host_routine(
+    schedule_id: &str,
+    cron: &str,
+    command: &str,
+) -> Result<(Schedule, String), CmdError> {
+    if !cron_is_valid(cron) {
+        return Err(CmdError::usage(format!("invalid cron expression: '{cron}'")));
+    }
+    let now = Utc::now();
+    let next_due = compute_next_due(cron, now, "UTC")
+        .map_err(|exc| CmdError::usage(format!("could not compute next run of '{cron}' (UTC): {exc}")))?;
+    let mut sched = Schedule::new(schedule_id, cron, command);
+    sched.tz = "UTC".to_string();
+    sched.enabled = true;
+    sched.provider = "local".to_string();
+    sched.pin_to_provider = true;
+    sched.overlap_policy = crate::schedules::OverlapPolicy::Skip;
+    sched.created_by =
+        crate::queue::submit::submitter().map_err(|error| CmdError::usage(error.to_string()))?;
+    sched.next_due_at = isoformat_utc(next_due);
+    let store = crate::providers::local::host_routines::open().map_err(CmdError::from)?;
+    let declared = declare::declare(&store, &sched, true, true).await.map_err(CmdError::from)??;
+    let said = match &declared {
+        declare::Declared::Created(_) => "created".to_string(),
+        declare::Declared::Unchanged(_) => "unchanged".to_string(),
+        declare::Declared::Converged(_, differs) => format!("changed {}", differs.join(", ")),
+    };
+    Ok((declared.schedule().clone(), said))
+}
+
 /// The caller named a schedule the store does not hold.
 fn unknown_schedule(schedule_id: &str) -> CmdError {
     CmdError::refused(format!("schedule {schedule_id} not found"))
