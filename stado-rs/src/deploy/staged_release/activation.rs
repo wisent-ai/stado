@@ -7,7 +7,16 @@ use super::*;
 /// once.
 ///
 /// Run `bash -n` first so an unparseable installer cannot change delivery state.
-pub fn activation_script(archive: &str, version: &str) -> String {
+///
+/// `settle_seconds` is the caller's `--settle-seconds`: how long after the
+/// installer the runtime link is read again. No window is chosen here; the
+/// operator states it for the host, whose restoring service has its own
+/// cycle this program cannot read.
+pub fn activation_script(
+    archive: &str,
+    version: &str,
+    settle_seconds: std::num::NonZeroU64,
+) -> String {
     let archive = super::shlex_quote(archive);
     let version = super::shlex_quote(version);
     format!(
@@ -17,27 +26,54 @@ version={version}
 work="$HOME/.stado/run/staged-release-activate"
 mkdir -p "$work"
 installer="$work/auto-deploy-$version.sh"
+log="$HOME/.local/state/weles/auto-deploy.log"
 umask 077
 tar -xzOf "$archive" ./{INSTALLER_MEMBER} > "$installer" 2>/dev/null \
   || tar -xzOf "$archive" {INSTALLER_MEMBER} > "$installer"
 test -s "$installer" || {{ echo "STADO_ACTIVATE installer-missing"; exit 3; }}
 bash -n "$installer" || {{ echo "STADO_ACTIVATE installer-unparseable"; exit 4; }}
+# Where the installer's log ends before it runs, and which file it is, so what
+# this run wrote is reported whole and nothing from earlier runs is: a window
+# of its last lines could leave out the one that says why it did nothing. The
+# file is known by its inode (`ls -i`, POSIX), because a replacement can be
+# longer than the log it replaced.
+if [ -f "$log" ]; then
+  log_before=$(wc -c < "$log")
+  log_inode_before=$(ls -i "$log" | awk '{{print $1}}')
+else
+  log_before=0
+  log_inode_before=
+fi
 echo "STADO_ACTIVATE installer-ready"
 bash "$installer"
 echo "STADO_ACTIVATE installer-exit=$?"
 rm -f "$installer"
-# The installer says why it did nothing only in its own log, which is far too
-# large to fetch whole. Its last lines, and what the runtime link actually
-# points at afterwards, are the report this verb owes its caller: a receipt
-# written for one release while the link still names another is exactly the
-# disagreement worth seeing.
-tail -n 6 "$HOME/.local/state/weles/auto-deploy.log" 2>/dev/null | sed 's/^/STADO_ACTIVATE_LOG /' || true
+# The installer says why it did nothing only in its own log. What it wrote
+# during this run, and what the runtime link actually points at afterwards,
+# are the report this verb owes its caller: a receipt written for one release
+# while the link still names another is exactly the disagreement worth seeing.
+if [ ! -f "$log" ]; then
+  printf 'STADO_ACTIVATE_LOG the installer wrote no log at %s\n' "$log"
+else
+  log_after=$(wc -c < "$log")
+  log_inode_after=$(ls -i "$log" | awk '{{print $1}}')
+  if [ -z "$log_inode_before" ]; then
+    printf 'STADO_ACTIVATE_LOG %s was created during the run; all of it follows\n' "$log"
+    sed 's/^/STADO_ACTIVATE_LOG /' "$log"
+  elif [ "$log_inode_after" != "$log_inode_before" ] || [ "$log_after" -lt "$log_before" ]; then
+    printf 'STADO_ACTIVATE_LOG %s was replaced during the run; all of it follows\n' "$log"
+    sed 's/^/STADO_ACTIVATE_LOG /' "$log"
+  elif [ "$log_after" -eq "$log_before" ]; then
+    printf 'STADO_ACTIVATE_LOG the installer wrote nothing to %s during this run\n' "$log"
+  else
+    tail -c "+$((log_before + 1))" "$log" | sed 's/^/STADO_ACTIVATE_LOG /'
+  fi
+fi
 printf 'STADO_ACTIVATE_LINK %s\n' "$(readlink "$HOME/weles" 2>/dev/null || echo not-a-symlink)"
 # Activated is not the same as held. This host has a documented service that
-# restores files it owns on every cycle, so the link is read again after it has
-# had time to be taken back. A caller told "activated" about a link that was
-# reverted thirty seconds later has been told nothing.
-sleep 30
+# restores files it owns on every cycle, so the link is read again after the
+# window the operator stated for that cycle.
+sleep {settle_seconds}
 printf 'STADO_ACTIVATE_SETTLED %s\n' "$(readlink "$HOME/weles" 2>/dev/null || echo not-a-symlink)"
 "#
     )

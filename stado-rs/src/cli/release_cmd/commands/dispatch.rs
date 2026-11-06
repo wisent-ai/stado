@@ -78,6 +78,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
                 &args.product,
                 &args.env_file,
                 args.port,
+                args.settle_seconds,
                 args.json,
             )
             .await

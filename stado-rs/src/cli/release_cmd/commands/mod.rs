@@ -257,6 +257,11 @@ pub struct ReleaseActivateStagedArgs {
     /// Port the activated release must answer on.
     #[arg(long)]
     port: u16,
+    /// Seconds after the installer to read the runtime link again, so a
+    /// restoring service on the host that takes it back is seen: that
+    /// service's own cycle, which the operator states for the host.
+    #[arg(long)]
+    settle_seconds: std::num::NonZeroU64,
     #[arg(long)]
     json: bool,
 }

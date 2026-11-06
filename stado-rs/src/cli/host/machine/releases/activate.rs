@@ -15,6 +15,7 @@ pub async fn activate_staged_release(
     product: &str,
     env_file: &str,
     port: u16,
+    settle_seconds: std::num::NonZeroU64,
     json: bool,
 ) -> Result<(), CmdError> {
     use crate::deploy::staged_release;
@@ -110,7 +111,7 @@ pub async fn activate_staged_release(
 
     let outcome = crate::deploy::host_channel::run_script(
         &resolved,
-        &staged_release::activation_script(&archive, &coordinate.version),
+        &staged_release::activation_script(&archive, &coordinate.version, settle_seconds),
         &runner,
     )
     .await
@@ -198,8 +199,9 @@ pub async fn activate_staged_release(
         (Some(activated), Some(settled)) if activated != settled => {
             return Err(CmdError::click(format!(
                 "{}: the staged installer activated {activated}, and something on that host put \
-                 the runtime link back to {settled} within thirty seconds; the release is \
-                 installed and something else is holding the host on the old one",
+                 the runtime link back to {settled} within the {settle_seconds}s settle window \
+                 (--settle-seconds); the release is installed and something else is holding the \
+                 host on the old one",
                 resolved.name
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown));

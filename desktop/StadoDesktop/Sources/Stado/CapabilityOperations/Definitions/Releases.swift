@@ -20,6 +20,7 @@ enum NativeHostReleaseOperations {
             .init(id: "product", label: "Product", option: "--product", required: true),
             .init(id: "environment", label: "Declared environment file on target", option: "--env-file", required: true),
             .init(id: "port", label: "Port the activated release must answer on", option: "--port", required: true),
+            .init(id: "settle", label: "Seconds after installing to read the runtime link again (the host's restoring service's cycle)", option: "--settle-seconds", required: true),
         ]),
         .init(id: "provenance", title: "Read installed artifact provenance", path: ["release", "provenance"], mutates: false),
         .init(id: "local-list", title: "Read this machine's retained Stado releases and any that failed here", path: ["release", "local", "list"], hostPlacement: .none, mutates: false),

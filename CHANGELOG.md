@@ -36,6 +36,16 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado release staged activate` takes the settle window from the operator and reports the
+  installer's whole run:** the activation slept 30 seconds before reading the runtime link again
+  and printed the last 6 lines of the installer's log, both numbers nobody stated. The window is
+  now the required `--settle-seconds` (the host's restoring service's cycle, which Stado cannot
+  read), refused by name with exit 2 when missing or zero, and Stado Desktop's **Activate a
+  verified staged release** form requires it too. The report carries every line the installer
+  wrote to its log during this run, says when it wrote none or no log exists, and gives the whole
+  log when the installer created it or replaced it (a different file, known by its inode, even a
+  longer one); a reverted link names the window it was reverted within.
+
 - **A resolver no longer holds every client for a host none of whose SSH paths answers:** each
   connection to a service placed on such a host tried every path again, so a service on a host
   that went away held each client for as long as its paths took to fail, and the caller gave up

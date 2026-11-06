@@ -340,6 +340,18 @@ path = "../tests/release/untested/enroll.rs"
 name = "release-history"
 path = "../tests/release/history/main.rs"
 
+# The staged activation's settle window is the operator's: missing or zero is
+# refused by name before any host is resolved.
+[[test]]
+name = "release-staged-settle"
+path = "../tests/release/staged/settle.rs"
+
+# The staged activation's own script, run against a home of the test's own:
+# the installer log's bytes of this run, a created or replaced log whole.
+[[test]]
+name = "release-staged-activation"
+path = "../tests/release/staged/activation.rs"
+
 # Reading a job after the run reaper retired its record; one binary over the
 # shared fixture.
 [[test]]
