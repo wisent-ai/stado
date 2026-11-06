@@ -1284,6 +1284,21 @@ products:
     for_surface: cli
     alternative: a release install writes a repository's own Git hooks only for a checkout present in the workspace; without the wisent-enterprise checkout its two registry entries are skipped and every other hook is installed and runs
     alternative_source: tama/rust/crates/tama-cli/src/hooks/install/entrypoints/mod.rs
+  - product: weles
+    surface: cli
+    for_surface: cli
+    alternative: 'Tama never runs Weles: block-browser-usage reads which hosts the Stado registry places a Weles runtime on and, with no registry or none placed, refuses a local browser as it always does; the evidence checks read run output under ~/.weles/runs (or WELES_RUN_OUTPUT_DIR) and, where no run wrote any, find no recording to require'
+    alternative_source: tama/rust/crates/tama-hook-tools/src/ports/block_browser_usage/placement.rs
+  - product: jeden
+    surface: cli
+    for_surface: cli
+    alternative: 'Tama never runs Jeden: block-credential-copies names Jeden''s model token store among the credential stores a command must not copy, a path pattern it matches in the command text whether or not Jeden is installed'
+    alternative_source: tama/rust/crates/tama-hook-tools/src/ports/block_credential_copies/stores.json
+  - product: skarbiec
+    surface: cli
+    for_surface: cli
+    alternative: 'Tama never runs Skarbiec: block-unauthorized-vault-write reads the skarbiec command line an agent is about to run, and the SKARBIEC_VAULT_FILE it names, to refuse a write to a live store; with Skarbiec absent no such command runs and the hook has nothing to judge'
+    alternative_source: tama/rust/crates/tama-hook-tools/src/ports/block_unauthorized_vault_write/mod.rs
 - id: byk
   name: Byk
   status: active
