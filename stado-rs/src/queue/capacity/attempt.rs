@@ -65,8 +65,17 @@ pub fn refused(step: &str, error: &str) {
 
 /// Write the record of this attempt. Every attempt is written, so the
 /// record's time is the time of the last attempt it reports: how often it is
-/// written is how often the worker attempts, which its declared poll period
-/// decides, not a refresh age of this module's own.
+/// written is how often the worker attempts, not a refresh age of this
+/// module's own. The worker attempts on its declared poll period, which
+/// `stado serve --worker` requires as `--poll-seconds` (an installed unit
+/// passes `STADO_AGENT_POLL_SECONDS`, config `agent.poll_seconds`). The
+/// agent tick writes the record at its capacity publication and again when
+/// one of its steps (or, before it starts, the agent start) meets a store
+/// that does not answer, and the capacity heartbeat at its republish; the
+/// tick and the heartbeat each run at most once per poll period, so this one
+/// small file is replaced, through a staged copy renamed over it, at most
+/// three times per poll period. Skipping a write whose bytes would not
+/// change saves none, since each write carries its own attempt time.
 ///
 /// The previous record is read only to carry when the current run of
 /// refusals began. A previous record that cannot be read is said on this
