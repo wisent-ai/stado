@@ -318,6 +318,8 @@ products:
     repository: wisent-ai/weles-web
   - kind: library
     repository: wisent-ai/weles-client
+  - kind: web
+    repository: wisent-ai/weles-landing
   - kind: cli
     repository: wisent-ai/weles
   installations:
@@ -885,6 +887,8 @@ products:
     repository: wisent-ai/stado
   - kind: desktop
     repository: wisent-ai/stado
+  - kind: web
+    repository: wisent-ai/stado-landing
   installations:
   - surface: cli
     kind: stado-release
@@ -1559,6 +1563,8 @@ products:
   - kind: desktop
     repository: wisent-ai/oko-desktop
     onboarding_id: oko-macos
+  - kind: web
+    repository: wisent-ai/oko-landing
   installations:
   - surface: cli
     kind: stado-release
