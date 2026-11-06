@@ -7,6 +7,7 @@ mod eviction;
 mod moves;
 mod rehome;
 mod role;
+mod take;
 
 pub(crate) use moves::placed_host;
 
@@ -94,6 +95,24 @@ pub enum PlacementCommands {
         #[arg(long)]
         portable_roots: bool,
         /// Run only the checks, claiming, fencing and changing nothing.
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Take one placement profile on this host from the host it is placed
+    /// on, which answers on no SSH path: start its units here from the
+    /// states this host holds, and place it here in one registry commit.
+    /// Refused while the source answers (move it), and when this host lacks
+    /// a required state; the source's units are named, not stopped.
+    Take {
+        /// Logical services naming one exact registry placement profile.
+        #[arg(required = true)]
+        services: Vec<String>,
+        /// Why, recorded in the placement history.
+        #[arg(long)]
+        reason: String,
+        /// Read the source's paths and this host's states; start and write nothing.
         #[arg(long)]
         check: bool,
         #[arg(long)]
@@ -275,6 +294,12 @@ pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
             outcome.map(|_| ())
         }
         PlacementCommands::Role(command) => role::run(command).await,
+        PlacementCommands::Take {
+            services,
+            reason,
+            check,
+            json,
+        } => take::take(&services, &reason, check, json).await,
         PlacementCommands::Evict {
             service,
             host,

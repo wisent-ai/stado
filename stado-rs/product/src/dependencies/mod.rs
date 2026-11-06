@@ -6,8 +6,12 @@
 //! product, falling to a popular solution when ours is absent. A product
 //! whose code reaches another, where the catalog declares no dependency, a
 //! dependency with no alternative, or an alternative with no code behind it,
-//! is refused by name with the line that reaches it.
+//! is refused by name with the line that reaches it. The same judgement,
+//! over only the lines one revision adds, refuses that revision in
+//! `stado quality check` ([`added::judge`]), so no push adds coupling the
+//! catalog cannot show the product running without.
 
+pub mod added;
 mod channel;
 mod report;
 mod scan;
@@ -81,26 +85,31 @@ pub(crate) fn repositories(product: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-/// The files of `repository`'s checkout that are not code the product runs:
-/// the release manifests the product's installations declare for it (how
-/// the product is built), and the catalog this command judges against when
-/// it lives in that checkout (it declares every product's names, programs
-/// and environment; naming them there is the declaration being read, not a
-/// call any product makes).
-fn not_run(
-    runtime: &Runtime,
-    product: &Value,
-    repository: &str,
-    checkout: &std::path::Path,
-) -> Vec<String> {
-    let mut files: Vec<String> = product["installations"]
+/// The release manifests `product`'s installations from `repository`
+/// declare: how the product is built, never what it runs.
+fn installation_manifests(product: &Value, repository: &str) -> Vec<String> {
+    product["installations"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|installation| installation["repository"].as_str() == Some(repository))
         .filter_map(|installation| installation["manifest"].as_str())
         .map(str::to_owned)
-        .collect();
+        .collect()
+}
+
+/// The files of `repository`'s checkout that are not code the product runs:
+/// its [`installation_manifests`], and the catalog this command judges
+/// against when it lives in that checkout (it declares every product's
+/// names, programs and environment; naming them there is the declaration
+/// being read, not a call any product makes).
+fn not_run(
+    runtime: &Runtime,
+    product: &Value,
+    repository: &str,
+    checkout: &std::path::Path,
+) -> Vec<String> {
+    let mut files = installation_manifests(product, repository);
     if let Ok(inside) = runtime.catalog.strip_prefix(checkout) {
         files.extend(inside.to_str().map(str::to_owned));
     }

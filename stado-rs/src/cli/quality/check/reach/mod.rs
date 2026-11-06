@@ -14,9 +14,14 @@
 //! them. Only the lines the revision adds against the published main are
 //! judged, so the base's lines are not every later push's refusal; prose,
 //! tests, documentation and the forge's automation are not read, and Stado,
-//! which serves the directory, is not judged by it.
+//! which serves the directory, is not judged by it. The same added lines are
+//! then judged for product independence ([`independence`]).
+
+mod independence;
 
 use std::path::Path;
+
+use stado_product::Added;
 
 use crate::capabilities::alternatives::{Family, Reach, FAMILIES};
 use crate::cli::CmdError;
@@ -96,12 +101,10 @@ fn git(checkout: &Path, arguments: &[&str]) -> Result<std::process::Output, CmdE
     })
 }
 
-/// One file's added lines: 1-based numbers, or `None` when every line of
-/// the file is the revision's own.
-type Added = (String, Option<Vec<usize>>);
-
-/// The lines `revision` adds against the published main, per file; every
-/// line of every file when the revision has no published base.
+/// The lines `revision` adds against the published main, per file (each a
+/// file and its 1-based added line numbers, or `None` when every line is
+/// the revision's own); every line of every file when the revision has no
+/// published base.
 fn added(checkout: &Path, revision: &str) -> Result<Vec<Added>, CmdError> {
     let base = git(checkout, &["merge-base", "origin/main", revision])?;
     if !base.status.success() {
@@ -170,20 +173,28 @@ fn added(checkout: &Path, revision: &str) -> Result<Vec<Added>, CmdError> {
 /// Refuse `revision` of `checkout`, exported at `tree`, when a line it adds
 /// outside `product`'s own service directory dials a family's service
 /// itself, or resolves a family products call, naming every such line and
-/// the command that replaces it.
-pub(super) fn check(
+/// the command that replaces it; then when a line it adds reaches a catalog
+/// product `product` cannot be shown to run without ([`independence`]).
+pub(super) async fn check(
     tree: &Path,
     checkout: &Path,
     revision: &str,
     product: &str,
+    report: super::Report,
 ) -> Result<(), CmdError> {
+    let added = added(checkout, revision)?;
+    dialling(tree, &added, revision, product)?;
+    independence::check(tree, added, revision, product, report).await
+}
+
+fn dialling(tree: &Path, added: &[Added], revision: &str, product: &str) -> Result<(), CmdError> {
     if product == DIRECTORY_OWNER {
         return Ok(());
     }
     let services = dialled();
     let mut found = Vec::new();
-    for (path, lines) in added(checkout, revision)? {
-        if !judged(&path) {
+    for (path, lines) in added {
+        if !judged(path) {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(tree.join(&path)) else {

@@ -63,6 +63,11 @@ pub use install::recipes::build::swift_without_keychain;
 /// builds; `stado quality check` reads its gates there too.
 pub use source::export as export_committed_source;
 
+/// What the lines one revision adds say about its product running without
+/// every other catalog product; `stado quality check` refuses the revision
+/// on [`IndependenceVerdict::Refused`].
+pub use dependencies::added::{judge as added_independence, Added, Verdict as IndependenceVerdict};
+
 /// Export the locked private Git crates for a credential-free release worker,
 /// and compare a published export with a checkout's Cargo.lock.
 pub use cargo::private_sources::{

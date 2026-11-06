@@ -8,79 +8,32 @@
 
 use std::time::Instant;
 
-use chrono::{SecondsFormat, Utc};
 use serde_json::Value;
 
-use super::cutover::promote_standby;
 use super::readiness::{apply_routes, await_healthy, preflight, stop_empty_copies};
 use super::state::{discard_staging, read_state, state_location, write_state};
 use super::units::{act_on_unit, UnitAction};
 use super::{MoveContext, Progress, RegistryCommitter, StepTiming};
-use crate::cli::placement::candidates::{deploy_error, managed_unit, profile_host, unit};
+use crate::cli::placement::candidates::{profile_host, unit};
 use crate::cli::CmdError;
-use crate::deploy::service::{self, ManagedService, SOURCE_REGISTRY};
 use crate::deploy::Runner;
-use crate::placement::{self, PlacementUnit};
-use crate::targets::ComputeTarget;
+use crate::placement;
 
+mod placed;
 mod rollback;
 mod timed;
 
+pub(in crate::cli::placement::transfer) use placed::placed_on;
 pub(in crate::cli::placement) use rollback::{release_claim, rollback};
 use timed::{step, steps_together};
 
-fn destination_record(
-    destination: &ComputeTarget,
-    spec: &PlacementUnit,
-    managed_since: &str,
-) -> Result<ManagedService, CmdError> {
-    let unit = managed_unit(spec)?;
-    let mut managed = match unit.kind {
-        crate::deploy::service::UnitKind::Launchd => service::launchd_service(
-            &destination.name,
-            &unit.unit,
-            &unit.path,
-            SOURCE_REGISTRY,
-            managed_since,
-        ),
-        crate::deploy::service::UnitKind::Systemd => service::systemd_service(
-            &destination.name,
-            &unit.unit,
-            &unit.path,
-            SOURCE_REGISTRY,
-            managed_since,
-        ),
-    };
-    managed.name = spec.name.clone();
-    managed.host_heuristic = destination.host_heuristic.clone();
-    Ok(managed)
-}
-
 fn prepare_committed_document(context: &MoveContext) -> Result<Value, CmdError> {
-    let source_profile = profile_host(&context.profile, &context.source.name)?;
-    let destination_profile = profile_host(&context.profile, &context.destination.name)?;
-    let mut document = context.claimed_document.clone();
-    let managed_since = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    for logical in &context.profile.services {
-        let source_spec = unit(source_profile, logical)?;
-        let source_unit = managed_unit(source_spec)?;
-        service::remove_service(&mut document, &context.source.name, &source_unit.unit)
-            .map_err(deploy_error)?;
-        let destination_spec = unit(destination_profile, logical)?;
-        let managed = destination_record(&context.destination, destination_spec, &managed_since)?;
-        service::add_service(&mut document, &managed).map_err(deploy_error)?;
-    }
-    promote_standby(
-        &mut document,
-        &context.profile.name,
-        &context.destination.name,
+    let mut document = placed_on(
+        context.claimed_document.clone(),
+        &context.profile,
+        &context.source,
+        &context.destination,
     )?;
-    crate::service_resolution::retarget_profile(
-        &mut document,
-        &context.profile.name,
-        &context.destination.name,
-    )
-    .map_err(CmdError::declaration)?;
     if !placement::release_transaction(&mut document, &context.transaction.id)
         .map_err(CmdError::declaration)?
     {

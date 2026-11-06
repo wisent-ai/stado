@@ -15,11 +15,13 @@
 //!
 //! This file is the root of the placement test binary: the open-move journey
 //! (`transactions`) and the fixed-route draft with the role moves (`draft`)
-//! run in it too, each against its own isolated deployment, and so does the
-//! role taken from a silent host (`take`).
+//! run in it too, each against its own isolated deployment, and so do the
+//! role taken from a silent host (`take`) and the profile taken from one
+//! (`take_profile`).
 mod deployment;
 mod draft;
 mod take;
+mod take_profile;
 mod transactions;
 
 use serde_json::{json, Value};

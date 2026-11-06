@@ -140,12 +140,65 @@ fn tracked(checkout: &Path, manifests: &[String]) -> Result<Vec<String>> {
     Ok(files)
 }
 
+/// The text of `file` below `root`, or `None` when it holds no source line:
+/// it is not there (a tracked file deleted from the working tree, a file a
+/// revision removes), it is a directory (a submodule, another repository's
+/// code), or it is not UTF-8 text. Any other file that cannot be read is
+/// refused by name.
+fn source_text(root: &Path, file: &str) -> Result<Option<String>> {
+    let path = root.join(file);
+    if path.is_dir() {
+        return Ok(None);
+    }
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    };
+    Ok(String::from_utf8(bytes).ok())
+}
+
+/// Every line of `text`, the file `file` of `repository`, whose number
+/// `counted` admits and that reaches one of `others`, added to `found` by the
+/// other product's id. A comment line calls nothing.
+fn read_lines(
+    repository: &str,
+    file: &str,
+    text: &str,
+    counted: impl Fn(usize) -> bool,
+    others: &[&Names],
+    found: &mut BTreeMap<String, Vec<Site>>,
+) {
+    let shell = Path::new(file)
+        .extension()
+        .is_some_and(|extension| extension == SHELL_EXTENSION);
+    for (number, line) in (FIRST_LINE..).zip(text.lines()) {
+        if !counted(number) {
+            continue;
+        }
+        let line = line.trim();
+        if COMMENT_OPENERS
+            .iter()
+            .any(|opener| line.starts_with(opener))
+        {
+            continue;
+        }
+        for other in others {
+            if let Some(channel) = other.channel(line, shell) {
+                found.entry(other.id.clone()).or_default().push(Site {
+                    repository: repository.to_owned(),
+                    file: file.to_owned(),
+                    line: number,
+                    channel,
+                });
+            }
+        }
+    }
+}
+
 /// Every line of `repository`'s checkout that reaches one of `others`, by the
 /// other product's id. `manifests` are the files of this checkout the caller
-/// names as not product code: its release manifests and the catalog. A
-/// file that is not UTF-8 text holds no source line; a tracked file deleted
-/// from the working tree is no longer the product's code; any other file that
-/// cannot be read is refused by name.
+/// names as not product code: its release manifests and the catalog.
 pub fn sites(
     repository: &str,
     checkout: &Path,
@@ -154,36 +207,36 @@ pub fn sites(
 ) -> Result<BTreeMap<String, Vec<Site>>> {
     let mut found: BTreeMap<String, Vec<Site>> = BTreeMap::new();
     for file in tracked(checkout, manifests)? {
-        let path = checkout.join(&file);
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
-            Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
-        };
-        let Ok(text) = String::from_utf8(bytes) else {
+        if let Some(text) = source_text(checkout, &file)? {
+            read_lines(repository, &file, &text, |_| true, others, &mut found);
+        }
+    }
+    Ok(found)
+}
+
+/// The lines one revision adds to one file: their numbers counted from one,
+/// or `None` when every line of the file is the revision's own.
+pub type Added = (String, Option<Vec<usize>>);
+
+/// Every line `added` names in `tree`, the exported revision of
+/// `repository`, that reaches one of `others`, by the other product's id.
+/// A file the product never runs ([`never_run`] with `manifests`) is not
+/// read, as in [`sites`].
+pub fn added_sites(
+    repository: &str,
+    tree: &Path,
+    manifests: &[String],
+    added: &[Added],
+    others: &[&Names],
+) -> Result<BTreeMap<String, Vec<Site>>> {
+    let mut found: BTreeMap<String, Vec<Site>> = BTreeMap::new();
+    for (file, lines) in added {
+        if never_run(file, manifests) {
             continue;
-        };
-        let shell = Path::new(&file)
-            .extension()
-            .is_some_and(|extension| extension == SHELL_EXTENSION);
-        for (number, line) in (FIRST_LINE..).zip(text.lines()) {
-            let line = line.trim();
-            if COMMENT_OPENERS
-                .iter()
-                .any(|opener| line.starts_with(opener))
-            {
-                continue;
-            }
-            for other in others {
-                if let Some(channel) = other.channel(line, shell) {
-                    found.entry(other.id.clone()).or_default().push(Site {
-                        repository: repository.to_owned(),
-                        file: file.clone(),
-                        line: number,
-                        channel,
-                    });
-                }
-            }
+        }
+        if let Some(text) = source_text(tree, file)? {
+            let counted = |number| lines.as_ref().is_none_or(|lines| lines.contains(&number));
+            read_lines(repository, file, &text, counted, others, &mut found);
         }
     }
     Ok(found)

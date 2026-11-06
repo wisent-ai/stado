@@ -7,7 +7,9 @@ mod execution;
 mod journal;
 mod readiness;
 mod role;
+mod serves;
 mod state;
+mod takeover;
 mod units;
 mod vault_fence;
 mod vault_reach;
@@ -24,6 +26,7 @@ pub(in crate::cli::placement) use role::{
     apply_role, ensure_runs_on, move_role, prepare_role, store_fence, take_role,
 };
 pub(in crate::cli::placement) use state::{discard_staging, rehome_states, settle_state_backup};
+pub(in crate::cli::placement) use takeover::take_profile;
 pub(in crate::cli::placement) use vault_fence::write_fenced;
 
 use std::sync::Arc;

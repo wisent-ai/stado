@@ -117,6 +117,14 @@ enum NativeRouteOperations {
             .init(id: "reason", label: "Why it moves (recorded with the source's write fence)", option: "--reason", required: true),
             .init(id: "with_authority", label: "Carry the registry authority in the same registry (required when the source holds it; run on the destination)", option: "--with-authority", flag: true),
         ]),
+        .init(id: "placement-take", title: "Take a placement profile on this API host from a host that answers on no path: start its units here from the states held here and place it here", path: ["placement", "take"], hostPlacement: .none, fields: [
+            .init(id: "services", label: "Logical services naming one placement profile (one per line)", required: true, multiple: true),
+            .init(id: "reason", label: "Why (recorded in the placement history)", option: "--reason", required: true),
+        ]),
+        .init(id: "placement-take-check", title: "Check whether this API host could take a placement profile from a host that does not answer: its paths, and the states held here", path: ["placement", "take"], hostPlacement: .none, fields: [
+            .init(id: "services", label: "Logical services naming one placement profile (one per line)", required: true, multiple: true),
+            .init(id: "reason", label: "Why", option: "--reason", required: true),
+        ], fixedArguments: ["--check"], mutates: false),
         .init(id: "placement-take-authority-check", title: "Check whether this API host could take the registry authority role, and how, writing nothing", path: ["placement", "move"], hostPlacement: .none, fields: [
             .init(id: "to_host", label: "This API host's registry target", option: "--to-host", required: true),
         ], fixedArguments: ["--authority", "--check"], mutates: false),

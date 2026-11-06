@@ -77,6 +77,39 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Added
 
+- **A push cannot add a call to a product the catalog does not show it running without:**
+  `stado product dependencies` reported every product's code that reaches another catalog
+  product with no declared alternative, but nothing refused a revision that added one, so new
+  coupling was found only by the failures it caused. `stado quality check`, which every pre-push,
+  change hand-off, release submission and delivery gate runs, now judges the lines a revision adds
+  against its published `origin/main` exactly as `dependencies` judges a whole checkout, and
+  refuses a reach that is undeclared, bound, has no `alternative_source`, or names one the
+  workspace does not hold, naming each file and line and the `stado product registry set
+  --add-dependency` that declares it. A line already on main is not a later push's refusal. A
+  product the catalog does not record, and Stado, the catalog's authority, are not judged, and the
+  check says so naming why. Every verdict names the catalog it read and at which commit, read as
+  every catalog reader reads it (a checkout behind its published main at `origin/main`). Real
+  journey: `tests/quality/independence.mjs`.
+
+- **A placement profile can be taken from a host that does not answer:** `stado placement move`
+  stops the source's units and copies its states over the source's channel, so a profile placed
+  on a host that is switched off or off the network could not leave it: every step stood until
+  its caller gave up, and every consumer of its services waited on a host nobody reached. `stado
+  placement take SERVICE... --reason WHY [--check] [--json]`, run on the host that takes it,
+  probes each SSH path of the source once and is refused while one answers (then the profile
+  moves with its states). SSH closed is not the units stopped, so it then asks each probe URL the
+  profile declares for the source at every name the source is known by, within the resolver's
+  refresh interval, and is refused while any answers (`<source> still serves <service> at
+  <url>`), since a copy started here would serve beside it and write diverging state. It is
+  refused when this host lacks a state the profile requires, when a routing unit sits on the
+  source, and for the fleet vault. Otherwise the profile's units start here, every probe must
+  answer 2xx, and one registry commit places the profile here, the same change a move commits
+  (now one function both share). The receipt gives the age of this host's copy of each state
+  (every write the source took after it is lost), the optional states not recovered and the
+  source's units left running, to retire before it serves again; it is kept in
+  `placement history` as `take`. Stado Desktop runs it and its check. Real journey:
+  `tests/placement/take_profile.rs`.
+
 - **A product's submit policy is declared through `stado product registry set --submit`:** the
   submit queue refuses every change of a product whose catalog record declares no `submit`
   policy, naming the declaration it needs, but no verb could write one, so such a product's

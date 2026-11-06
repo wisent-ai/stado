@@ -7,11 +7,13 @@
 //! host, so a store kept under a large volume on one host lands under the
 //! large volume of the other.
 
+mod age;
 mod copy;
 mod rehome;
 mod settle;
 mod space;
 
+pub(in crate::cli::placement::transfer) use age::state_newest;
 pub(in crate::cli::placement) use copy::discard_staging;
 pub(in crate::cli::placement::transfer) use copy::{read_state, state_exists, write_state};
 pub(in crate::cli::placement) use rehome::rehome_states;

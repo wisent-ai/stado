@@ -196,9 +196,9 @@ async fn check_tree(
     }
     report.say(&format!(
         "stado quality check: checking that the lines {revision} adds reach no other product's \
-         service without its alternatives"
+         service without its alternatives, nor a product it cannot be shown to run without"
     ));
-    reach::check(tree, checkout, revision, &declared.product)?;
+    reach::check(tree, checkout, revision, &declared.product, report).await?;
     // A pin whose object was never stored, or was stored for a lock the
     // product has since moved past, is refused here, while the session that
     // pushed it can still repair it, instead of by the build that fetches it;
