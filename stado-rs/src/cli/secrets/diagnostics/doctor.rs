@@ -7,6 +7,15 @@ use crate::cli::{reporting::table, CmdError};
 
 use crate::cli::secrets::store::resolve::skarbiec_binary;
 
+/// The states this report puts over the authority verdict's own, once the
+/// registry's owner is known: this host's name could not be read, a
+/// non-owner declares a local copy, or a non-owner reads the owner's vault —
+/// the configuration the report asks for, and so no refusal. The words are
+/// the ones `credential_store::owner::authority` and the fleet sweep read.
+const HOST_UNREADABLE: &str = "host_unreadable";
+const LOCAL_COPY_ON_NON_OWNER: &str = "local_copy_on_non_owner";
+const READS_OWNER: &str = "reads_owner";
+
 /// `stado credentials vault show [--json]` — the resolution itself, reported.
 ///
 /// The same rule the fleet sweep applies to another host's report is applied
@@ -40,7 +49,7 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
     if let (Some(owner), Err(error)) = (&owner_host, &this_host) {
         // Without this host's name the owner check below cannot run, and
         // skipping it judged a non-owner's local files as if it owned the vault.
-        state = "host_unreadable".to_string();
+        state = HOST_UNREADABLE.to_string();
         resolved = Err(format!(
             "which registry host this machine is could not be read ({error}), so whether it \
              may hold the fleet vault owned by {owner} cannot be judged"
@@ -48,7 +57,7 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
     }
     if let (Some(owner), Ok(here)) = (&owner_host, &this_host) {
         if owner != here && !declared.trim().is_empty() {
-            state = "local_copy_on_non_owner".to_string();
+            state = LOCAL_COPY_ON_NON_OWNER.to_string();
             resolved = Err(format!(
                 "{here} declares a local vault copy ({declared}) in secrets.skarbiec.vault_file, \
                  but the fleet vault is owned by {owner} (the registry's skarbiec active host); \
@@ -61,7 +70,7 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
             // afterwards would answer `ambiguous` and tell it to declare one
             // of them again, one command after
             // `stado config unset secrets.skarbiec.vault_file`.
-            state = "reads_owner".to_string();
+            state = READS_OWNER.to_string();
             resolved = Err(format!(
                 "{here} holds no fleet vault: it reads the vault on {owner} through \
                  secrets.skarbiec.url ({}); any vault file on this machine is a retired copy",
@@ -122,7 +131,7 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
     let Err(error) = resolved else {
         return Ok(());
     };
-    if state == "reads_owner" {
+    if state == READS_OWNER {
         return Ok(());
     }
     // With `--json` the document already carries `state` and `refusal`, and a
