@@ -318,7 +318,7 @@ products:
     repository: wisent-ai/weles-web
   - kind: library
     repository: wisent-ai/weles-client
-  - kind: web
+  - kind: docs
     repository: wisent-ai/weles-landing
   - kind: cli
     repository: wisent-ai/weles
