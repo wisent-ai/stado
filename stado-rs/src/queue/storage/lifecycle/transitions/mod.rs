@@ -57,7 +57,9 @@ impl JobStorage {
             if transition.state == state {
                 return Ok(true);
             }
-            transition.state = state;
+            // A lost race loops back with the same wanted state, so the
+            // record takes a copy of it.
+            transition.state = state.clone();
             match self
                 .compare_and_swap_text(
                     &transition_path(&expected.job_id),

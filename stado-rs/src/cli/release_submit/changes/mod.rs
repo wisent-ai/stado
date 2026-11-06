@@ -179,7 +179,7 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                 println!(
                     "{}: {} {} for {}; no build started",
                     receipt.change.id,
-                    receipt.state,
+                    receipt.state.word(),
                     receipt.change.source_commit,
                     receipt.change.task_id
                 );
