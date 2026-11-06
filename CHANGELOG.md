@@ -9,7 +9,7 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Released
 
-- [0.23.69](changelog/0.23.69.md)
+- [0.23.69 – 0.23.70](changelog/0.23.69-0.23.70.md)
 - [0.23.68 (part 1 of 10)](changelog/0.23.68-part-1.md)
 - [0.23.68 (part 2 of 10)](changelog/0.23.68-part-2.md)
 - [0.23.68 (part 3 of 10)](changelog/0.23.68-part-3.md)
@@ -33,7 +33,3 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
-
-### Fixed
-
-- **A host that went away no longer holds every command naming it:** each declared SSH path of a target is probed with `true` before the real operation, and the probe ran `ssh` with no connect deadline, so a powered-off Mac on the LAN and its tailnet held `stado placement holds`, `placement evacuate --check` and `service list --undeclared` in their first TCP handshake for as long as anyone waited. The probe now waits no longer than the directory refresh interval this host's resolver declares (`stado resolver` publishes it; `~/.stado/resolver-state.json`), ends the `ssh` process group at the bound, reports the path as `SSH path did not answer within the <N>s refresh interval this host's resolver declares` and tries the next. With no interval declared it is waited on as before, and an interval that cannot be read is said on stderr.
