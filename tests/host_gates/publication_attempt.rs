@@ -66,13 +66,17 @@ fn host_gates_names_a_worker_that_cannot_reach_the_fleet_store() {
     deployment.set("WC_STADO_STORAGE_URL", &unanswered);
     deployment.set("WC_STADO_STORAGE_NAMESPACE", "publication-attempt");
     deployment.set("WC_STADO_STORAGE_TOKEN_FILE", token.to_str().unwrap());
+    // The worker's declared poll period: how often it attempts, and so how
+    // often its record is written.
+    let poll = Duration::from_secs(1);
+    let launched = Instant::now();
     let lines = deployment.serve(&[
         "--worker",
         "--standalone",
         "--kind",
         "local",
         "--poll-seconds",
-        "1",
+        &poll.as_secs().to_string(),
     ]);
     let refusal = line_with(&lines, "the fleet store did not answer");
     deployment.report["worker_refusal"] = json!(refusal);
@@ -99,9 +103,13 @@ fn host_gates_names_a_worker_that_cannot_reach_the_fleet_store() {
     assert_eq!(kept["outcome"], json!("refused"), "{kept}");
     assert!(kept["refused_since"].is_string(), "{kept}");
     let words = kept["error"].as_str().expect("the store's words are kept");
-    // Every attempt is written: the next refused attempt of a worker polling
-    // each second moves the record's time, while the run of refusals keeps
-    // the moment it began.
+    // Every attempt is written: the next refused attempt moves the record's
+    // time, while the run of refusals keeps the moment it began. The next
+    // attempt starts one poll period after this one and lasts no longer than
+    // the launch up to the first record did, which held a start and a whole
+    // attempt, so that sum is the wait.
+    let seen = Instant::now();
+    let wait = poll + seen.duration_since(launched);
     let later: Value = loop {
         if let Ok(bytes) = fs::read(&record) {
             if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
@@ -111,10 +119,13 @@ fn host_gates_names_a_worker_that_cannot_reach_the_fleet_store() {
             }
         }
         assert!(
-            started.elapsed() < Duration::from_secs(60),
-            "the record at {} still names the attempt at {} after a minute of one-second polls",
+            seen.elapsed() < wait,
+            "the record at {} still names the attempt at {} after {:?}, one poll period of {:?} \
+             and the launch's own first attempt",
             record.display(),
-            kept["at"]
+            kept["at"],
+            wait,
+            poll
         );
         std::thread::sleep(Duration::from_millis(200));
     };
