@@ -6,16 +6,13 @@ pub(crate) use index::WorkspaceIndex;
 mod provenance;
 pub use provenance::{export, snapshot, verify_unchanged};
 
-use crate::common::{capture, checked, Runtime};
+use crate::common::{capture, checked, git_command, Runtime};
 use anyhow::{bail, Context, Result};
 use stado_wait as wait;
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::path::{Path, PathBuf};
 
 pub fn git(root: &Path, args: &[&str]) -> Result<String> {
-    let output = checked(Command::new("git").args(args).current_dir(root))?;
+    let output = checked(git_command()?.args(args).current_dir(root))?;
     Ok(String::from_utf8(output.stdout)?.trim().to_owned())
 }
 
@@ -150,7 +147,7 @@ fn create_checkout(runtime: &Runtime, repository: &str) -> Result<PathBuf> {
         .with_context(|| format!("{missing}: creating {}", runtime.workspace.display()))?;
     let origin = format!("https://github.com/{repository}.git");
     let output = capture(
-        Command::new("git")
+        git_command()?
             .args(["clone", "--quiet", &origin])
             .arg(&path)
             .env("GIT_TERMINAL_PROMPT", "0"),
@@ -237,7 +234,7 @@ pub fn canonical_commit(root: &Path, commit: &str) -> Result<CanonicalCommit> {
         bail!("--source-commit requires a full lowercase Git commit");
     }
     let fetched = wait::status(
-        Command::new("git")
+        git_command()?
             .args(["fetch", "--quiet", "origin", "main"])
             .current_dir(root),
     )?;
@@ -246,7 +243,7 @@ pub fn canonical_commit(root: &Path, commit: &str) -> Result<CanonicalCommit> {
     }
     let carried_by = |reference: &str| -> Result<bool> {
         Ok(wait::status(
-            Command::new("git")
+            git_command()?
                 .args(["merge-base", "--is-ancestor", commit, reference])
                 .current_dir(root),
         )?
@@ -284,7 +281,7 @@ pub fn advance(root: &Path, fetch: bool) -> Result<()> {
         );
     }
     let ancestor = capture(
-        Command::new("git")
+        git_command()?
             .args(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
             .current_dir(root),
     )?;

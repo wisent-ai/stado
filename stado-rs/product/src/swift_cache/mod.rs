@@ -2,7 +2,7 @@
 use crate::common::{atomic_json, checked, lock, relative, sha256, unpack};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::{fs, path::Path, process::Command};
+use std::{fs, path::Path};
 
 const STATE: &str = "workspace-state.json";
 const RECEIPT: &str = "stado-swiftpm-input.json";
@@ -101,7 +101,7 @@ fn pins(state: &Value, package: &Path, scratch: &Path) -> Result<()> {
         if !checkout.starts_with(scratch) {
             bail!("Swift checkout escapes its cache: {}", checkout.display());
         }
-        let actual = checked(Command::new("git").arg("-C").arg(&checkout).args([
+        let actual = checked(crate::common::git_command()?.arg("-C").arg(&checkout).args([
             "rev-parse",
             "--verify",
             "HEAD",

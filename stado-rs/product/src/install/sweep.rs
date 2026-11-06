@@ -1,7 +1,7 @@
 use super::{perform, policy, recipe, status, transaction::lifecycle::rollback};
 use crate::{
     catalog::{self, text},
-    common::{capture, emit, lock, Arguments, Busy, Runtime},
+    common::{capture, emit, git_command, lock, Arguments, Busy, Runtime},
     source,
 };
 use anyhow::{bail, Context, Result};
@@ -128,13 +128,15 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
             if let Some(root) = &root {
                 if args.has("--fetch") && !args.has("--dry-run") {
                     let fetched = fetched.entry(root.clone()).or_insert_with(|| {
-                        let output = capture(
-                            Command::new("git")
-                                .args(["fetch", "--quiet", "origin"])
-                                .env("GIT_TERMINAL_PROMPT", "0")
-                                .current_dir(root),
-                        )
-                        .map_err(|error| format!("{error:#}"))?;
+                        let output = git_command()
+                            .and_then(|mut git| {
+                                capture(
+                                    git.args(["fetch", "--quiet", "origin"])
+                                        .env("GIT_TERMINAL_PROMPT", "0")
+                                        .current_dir(root),
+                                )
+                            })
+                            .map_err(|error| format!("{error:#}"))?;
                         if output.status.success() {
                             Ok(())
                         } else {
@@ -189,7 +191,7 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
                     return Ok(());
                 }
                 let ancestor = capture(
-                    Command::new("git")
+                    git_command()?
                         .args(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
                         .current_dir(root),
                 )?;

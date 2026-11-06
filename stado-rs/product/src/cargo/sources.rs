@@ -1,5 +1,5 @@
 use crate::{
-    common::{atomic_json, checked, toolchain_command, Runtime},
+    common::{atomic_json, checked, git_command, toolchain_command, Runtime},
     source,
 };
 use anyhow::{bail, Context, Result};
@@ -8,7 +8,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use super::pinned::Pinned;
@@ -84,7 +83,7 @@ fn carries(root: &Path, identity: &str, rev: &str, by: &str) -> Result<()> {
     let head = source::git(root, &["rev-parse", "HEAD"])?;
     let known = source::git(root, &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")]);
     let carried = known.is_ok()
-        && Command::new("git")
+        && git_command()?
             .args(["merge-base", "--is-ancestor", rev, &head])
             .current_dir(root)
             .status()
@@ -110,7 +109,7 @@ fn carries(root: &Path, identity: &str, rev: &str, by: &str) -> Result<()> {
 
 fn package(root: &Path, name: &str) -> Result<PathBuf> {
     let output = checked(
-        Command::new("git")
+        git_command()?
             .args([
                 "ls-files",
                 "--cached",

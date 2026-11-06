@@ -1,11 +1,10 @@
-use crate::common::Runtime;
+use crate::common::{git_command, Runtime};
 use anyhow::{bail, Context, Result};
 use stado_wait as wait;
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
     time::SystemTime,
 };
 
@@ -36,7 +35,7 @@ fn origins(workspace: &Path) -> std::io::Result<Origins> {
         // The declared origin, not `git remote get-url`: that answer has the
         // host's `url.<base>.insteadOf` rewrites applied, and a host that
         // rewrites GitHub to an SSH alias would see none of its checkouts.
-        let output = Command::new("git")
+        let output = git_command()?
             .args(["config", "--get", "remote.origin.url"])
             .current_dir(&path)
             .output()?;

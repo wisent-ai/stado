@@ -7,14 +7,13 @@
 //! the moment a tag appears. A refusal from either read stays a refusal;
 //! silence is never read as absence.
 
-use crate::common::checked;
+use crate::common::{checked, git_command};
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::Value;
 use stado_wait as wait;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const REMOTE: &str = "origin";
 
@@ -63,7 +62,7 @@ impl Artifact {
 }
 
 fn git(root: &Path, arguments: &[&str]) -> Result<String> {
-    let output = checked(Command::new("git").arg("-C").arg(root).args(arguments))?;
+    let output = checked(git_command()?.arg("-C").arg(root).args(arguments))?;
     Ok(String::from_utf8(output.stdout)?)
 }
 
@@ -214,7 +213,7 @@ pub fn checkout_tag(root: &Path, tag: &str, destination: &Path) -> Result<PathBu
     std::fs::create_dir_all(destination)?;
     let archive =
         checked(
-            Command::new("git")
+            git_command()?
                 .arg("-C")
                 .arg(root)
                 .args(["archive", "--format=tar", tag]),

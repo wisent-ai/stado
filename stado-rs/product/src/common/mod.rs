@@ -12,6 +12,7 @@ pub use files::{
 pub use process::{
     capture, checked, step_program, step_search_path, toolchain_command, CommandFailed,
 };
+pub use process::git::{command as git_command, unbound};
 use serde_json::Value;
 use stado_wait as wait;
 use std::{

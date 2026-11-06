@@ -1,5 +1,5 @@
 use super::{origin, repository, revision};
-use crate::common::{atomic_json, atomic_write, checked};
+use crate::common::{atomic_json, atomic_write, checked, git_command};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use stado_wait as wait;
@@ -39,7 +39,7 @@ pub fn export(root: &Path, revision: &str, into: &Path) -> Result<String> {
     let base = revision.trim_end_matches("-dirty");
     fs::create_dir_all(into)?;
     let archive = checked(
-        Command::new("git")
+        git_command()?
             .args(["archive", "--format=tar", base])
             .current_dir(root),
     )?;
@@ -96,13 +96,13 @@ fn capture(root: &Path, scratch: &Path, patch_path: Option<&Path>) -> Result<Val
     let index = scratch.join(format!("index-{}", uuid::Uuid::new_v4()));
     let result: Result<Value> = (|| {
         checked(
-            Command::new("git")
+            git_command()?
                 .args(["read-tree", base])
                 .env("GIT_INDEX_FILE", &index)
                 .current_dir(root),
         )?;
         checked(
-            Command::new("git")
+            git_command()?
                 .args(["add", "--all", "--", "."])
                 .env("GIT_INDEX_FILE", &index)
                 .current_dir(root),
@@ -113,7 +113,7 @@ fn capture(root: &Path, scratch: &Path, patch_path: Option<&Path>) -> Result<Val
         // They leave the private index after the add: naming them in the add's
         // pathspec fails outright in a repository that does ignore them.
         checked(
-            Command::new("git")
+            git_command()?
                 .args([
                     "rm",
                     "-r",
@@ -131,7 +131,7 @@ fn capture(root: &Path, scratch: &Path, patch_path: Option<&Path>) -> Result<Val
                 .current_dir(root),
         )?;
         let tree = checked(
-            Command::new("git")
+            git_command()?
                 .arg("write-tree")
                 .env("GIT_INDEX_FILE", &index)
                 .current_dir(root),
@@ -139,7 +139,7 @@ fn capture(root: &Path, scratch: &Path, patch_path: Option<&Path>) -> Result<Val
         let tree = String::from_utf8(tree.stdout)?.trim().to_owned();
         if let Some(path) = patch_path {
             let patch = checked(
-                Command::new("git")
+                git_command()?
                     .args(["diff", "--cached", "--binary", "--full-index", base])
                     .env("GIT_INDEX_FILE", &index)
                     .current_dir(root),

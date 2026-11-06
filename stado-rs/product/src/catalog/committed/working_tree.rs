@@ -5,10 +5,9 @@
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::Provenance;
-use crate::common::capture;
+use crate::common::{capture, git_command};
 use crate::source::git;
 
 /// The checkout that tracks the catalog file `file` and the file's path in
@@ -28,7 +27,7 @@ pub fn tracked(file: &Path) -> Result<Option<(PathBuf, String)>> {
         return Ok(None);
     }
     let toplevel = capture(
-        Command::new("git")
+        git_command()?
             .args(["rev-parse", "--show-toplevel"])
             .current_dir(directory),
     )?;

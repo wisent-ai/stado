@@ -16,7 +16,7 @@ use crate::install::recipes;
 use crate::{common::Runtime, source, state::ProductState};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
-use std::{path::PathBuf, process::Command};
+use std::path::PathBuf;
 
 pub(in super::super) struct Request<'a> {
     pub runtime: &'a Runtime,
@@ -271,7 +271,7 @@ fn canonical_checkout(request: &Request) -> Result<PathBuf> {
     let root = source::required_checkout(request.runtime, repository)?;
     if source::git(&root, &["status", "--porcelain", "--untracked-files=no"])?.is_empty() {
         let ancestor = crate::common::capture(
-            Command::new("git")
+            crate::common::git_command()?
                 .args(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
                 .current_dir(&root),
         )?;

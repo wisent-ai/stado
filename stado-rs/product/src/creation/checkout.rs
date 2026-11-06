@@ -1,11 +1,13 @@
 use super::state::Journal;
-use crate::{common::capture, source::git};
+use crate::{
+    common::{capture, git_command},
+    source::git,
+};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 /// Where `repository`'s canonical checkout goes, refused when that path is
@@ -95,7 +97,7 @@ pub fn ensure(
         bail!("canonical checkout is not on main");
     }
     let head = capture(
-        Command::new("git")
+        git_command()?
             .args(["rev-parse", "--verify", "HEAD"])
             .current_dir(&path),
     )?;

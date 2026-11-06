@@ -75,7 +75,7 @@ fn renamed(text: &str) -> (Vec<(usize, String, String)>, String) {
 
 /// The tracked files of the repository holding `root`, under `root`.
 fn tracked(root: &Path) -> Result<Vec<PathBuf>> {
-    let output = std::process::Command::new("git")
+    let output = crate::common::git_command()?
         .arg("-C")
         .arg(root)
         .args(["ls-files", "-z", "--full-name", "--", "."])
@@ -88,7 +88,7 @@ fn tracked(root: &Path) -> Result<Vec<PathBuf>> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let top = std::process::Command::new("git")
+    let top = crate::common::git_command()?
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--show-toplevel"])

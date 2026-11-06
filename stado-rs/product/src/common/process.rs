@@ -1,5 +1,6 @@
 pub(crate) mod birth;
 mod failed;
+pub(crate) mod git;
 pub use failed::CommandFailed;
 
 use super::{atomic_json, now, sha256, Runtime};

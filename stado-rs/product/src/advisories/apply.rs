@@ -265,7 +265,7 @@ pub fn run(findings: &[Finding]) -> Result<Vec<Update>> {
         }
         let directory = lock::directory(&checkout, &lockfile)?;
         let mut cargo = toolchain_command("cargo")?;
-        lock::unbound(&mut cargo)?;
+        crate::common::unbound(&mut cargo)?;
         cargo
             .arg("update")
             .arg("--manifest-path")

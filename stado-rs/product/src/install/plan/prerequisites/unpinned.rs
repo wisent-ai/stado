@@ -10,12 +10,11 @@
 //! installed one is built again instead. What it chose, and why, is said.
 
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{bail, Result};
 
 use crate::{
-    common::{capture, Runtime},
+    common::{capture, git_command, Runtime},
     source,
     state::ProductState,
 };
@@ -76,7 +75,7 @@ pub(super) fn choose(
 /// Fetch the origin of `root` without ever asking for a credential.
 fn fetched(root: &Path) -> Result<()> {
     let output = capture(
-        Command::new("git")
+        git_command()?
             .args(["fetch", "--quiet", "origin"])
             .env("GIT_TERMINAL_PROMPT", "0")
             .current_dir(root),
@@ -98,7 +97,7 @@ fn fetched(root: &Path) -> Result<()> {
 /// anything this checkout can build.
 fn ancestor(root: &Path, older: &str, newer: &str) -> Result<bool> {
     let output = capture(
-        Command::new("git")
+        git_command()?
             .args(["merge-base", "--is-ancestor", older, newer])
             .current_dir(root),
     )?;

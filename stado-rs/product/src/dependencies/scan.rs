@@ -5,10 +5,9 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::Path;
-use std::process::Command;
 
 use super::channel::{Channel, Names};
-use crate::common::capture;
+use crate::common::{capture, git_command};
 
 /// Where the product's own tests live: what they call is not what the
 /// product needs to run.
@@ -107,7 +106,7 @@ fn never_run(path: &str, manifests: &[String]) -> bool {
 /// out what [`never_run`] names. A submodule is another repository's code and
 /// is not read as this one's.
 fn tracked(checkout: &Path, manifests: &[String]) -> Result<Vec<String>> {
-    let output = capture(Command::new("git").arg("-C").arg(checkout).args([
+    let output = capture(git_command()?.arg("-C").arg(checkout).args([
         "ls-files",
         "-z",
         "--format=%(objecttype)%x09%(path)",

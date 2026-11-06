@@ -2,7 +2,6 @@
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// The git repository inside `scratch` that holds `source`, when there is
 /// one: SwiftPM keeps its dependency clones in its build tree, and a source
@@ -15,7 +14,7 @@ pub(super) fn repository_inside(source: &Path, scratch: &Path) -> Result<Option<
         .parent()
         .with_context(|| format!("{} has no parent directory", source.display()))?;
     let answer = crate::common::capture(
-        Command::new("git")
+        crate::common::git_command()?
             .arg("-C")
             .arg(directory)
             .args(["rev-parse", "--absolute-git-dir"]),

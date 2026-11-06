@@ -7,12 +7,11 @@
 //! committed one. An untracked lock belongs to a build tree or a scratch
 //! export and is not read at all.
 
-use crate::common::{capture, checked, files};
+use crate::common::{capture, checked, files, git_command};
 use anyhow::{bail, Context, Result};
 use std::{
     path::{Path, PathBuf},
     process::Command,
-    sync::OnceLock,
 };
 
 /// The lockfile name Cargo writes beside a workspace's root manifest.
@@ -21,33 +20,11 @@ pub const LOCKFILE: &str = "Cargo.lock";
 /// The manifest beside a lockfile that `cargo update` resolves it from.
 pub const MANIFEST: &str = "Cargo.toml";
 
-/// The variables git reads as naming one repository, as git lists them.
-static LOCAL_VARIABLES: OnceLock<Vec<String>> = OnceLock::new();
-
-/// Clear from `command` every variable git reads as naming one repository
-/// (`git rev-parse --local-env-vars`: `GIT_DIR`, `GIT_INDEX_FILE`,
-/// `GIT_WORK_TREE` and the rest), so a run from a git hook or with an index
-/// of its own still reads, and Cargo still fetches into, the checkout the
-/// command names.
-pub fn unbound(command: &mut Command) -> Result<&mut Command> {
-    if LOCAL_VARIABLES.get().is_none() {
-        let output = checked(Command::new("git").args(["rev-parse", "--local-env-vars"]))?;
-        let listing = String::from_utf8(output.stdout)
-            .context("git rev-parse --local-env-vars printed no UTF-8")?;
-        LOCAL_VARIABLES.get_or_init(|| listing.lines().map(str::to_owned).collect());
-    }
-    for name in LOCAL_VARIABLES.get().into_iter().flatten() {
-        command.env_remove(name);
-    }
-    Ok(command)
-}
-
 /// `git -C <checkout> <args>`, reading `checkout` whatever repository the
 /// caller's environment names.
 fn git(checkout: &Path, args: &[&str]) -> Result<Command> {
-    let mut command = Command::new("git");
+    let mut command = git_command()?;
     command.arg("-C").arg(checkout).args(args);
-    unbound(&mut command)?;
     Ok(command)
 }
 
