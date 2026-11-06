@@ -99,6 +99,28 @@ fn host_gates_names_a_worker_that_cannot_reach_the_fleet_store() {
     assert_eq!(kept["outcome"], json!("refused"), "{kept}");
     assert!(kept["refused_since"].is_string(), "{kept}");
     let words = kept["error"].as_str().expect("the store's words are kept");
+    // Every attempt is written: the next refused attempt of a worker polling
+    // each second moves the record's time, while the run of refusals keeps
+    // the moment it began.
+    let later: Value = loop {
+        if let Ok(bytes) = fs::read(&record) {
+            if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+                if value["at"] != kept["at"] {
+                    break value;
+                }
+            }
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the record at {} still names the attempt at {} after a minute of one-second polls",
+            record.display(),
+            kept["at"]
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    deployment.report["later_record"] = later.clone();
+    assert_eq!(later["outcome"], json!("refused"), "{later}");
+    assert_eq!(later["refused_since"], kept["refused_since"], "{later}");
     deployment.stop();
 
     // The control plane reads its own store again; the host's record says

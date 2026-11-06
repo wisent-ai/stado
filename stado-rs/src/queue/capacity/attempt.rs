@@ -63,29 +63,35 @@ pub fn refused(step: &str, error: &str) {
     keep(step, Outcome::Refused, Some(error.to_string()));
 }
 
-/// How old a record that says the same thing may grow before it is written
-/// again: a worker polling every second rewrites it once a minute, not once a
-/// poll, and its time stays within a minute of the attempt it reports.
-const REFRESH_SECONDS: i64 = 60;
-
-/// Write the record. A record that cannot be written is said on this
-/// process's error output, which the resident unit's log keeps; the
-/// publication's own outcome stands either way.
+/// Write the record of this attempt. Every attempt is written, so the
+/// record's time is the time of the last attempt it reports: how often it is
+/// written is how often the worker attempts, which its declared poll period
+/// decides, not a refresh age of this module's own.
+///
+/// The previous record is read only to carry when the current run of
+/// refusals began. A previous record that cannot be read is said on this
+/// process's error output with its cause, and the run of refusals is counted
+/// from this attempt. A record that cannot be written is said the same way,
+/// which the resident unit's log keeps; the publication's own outcome stands
+/// either way.
 fn keep(step: &str, outcome: Outcome, error: Option<String>) {
     let written = path().and_then(|path| {
         let now = Utc::now();
-        let before =
-            crate::primitives::document::read::<Attempt>(&path, "capacity publication record")
-                .ok()
-                .flatten();
-        if before.as_ref().is_some_and(|before| {
-            before.outcome == outcome
-                && before.step == step
-                && before.error == error
-                && (now - before.at).num_seconds() < REFRESH_SECONDS
-        }) {
-            return Ok(());
-        }
+        let before = match crate::primitives::document::read::<Attempt>(
+            &path,
+            "capacity publication record",
+        ) {
+            Ok(before) => before,
+            Err(cause) => {
+                eprintln!(
+                    "stado: the previous record of this host's capacity publication attempts \
+                         at {} cannot be read ({cause}); this attempt replaces it and counts any \
+                         run of refusals from now",
+                    path.display()
+                );
+                None
+            }
+        };
         let refused_since = match outcome {
             Outcome::Published => None,
             Outcome::Refused => Some(

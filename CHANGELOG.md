@@ -36,6 +36,15 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The record of a worker's publication attempts follows the worker's own attempts, not a
+  minute of its own:** `~/.stado/logs/capacity-publication.json` skipped writing an attempt whose
+  outcome, step and error matched the record unless the record was a minute old, a refresh age
+  nobody declared; its time could stand up to that minute behind the attempt it reported. Every
+  attempt is now written, so the record is as fresh as the worker's declared poll period makes it.
+  A previous record that cannot be read is no longer read as absent in silence: the worker says on
+  stderr where it is and why it cannot be read, then counts any run of refusals from the attempt
+  it writes.
+
 - **The submit queue keeps a gate's whole report and a reviewer's whole answer:** a shard's record
   kept the last 60 lines of what its gate printed and a review the last 40 lines of what the
   reviewer said, numbers nobody stated, so a compiler error above its warnings or a finding above
