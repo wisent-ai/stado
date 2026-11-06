@@ -24,13 +24,16 @@ pub struct Product {
 }
 
 /// The surface kinds a repository is provisioned for; each word is the
-/// catalog's `surfaces[].kind` for that surface.
+/// catalog's `surfaces[].kind` for that surface. `docs` is a documentation
+/// site a product keeps in its own repository beside its `web` application,
+/// since a product holds one surface of each kind.
 #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum Surface {
     Cli,
     Desktop,
     Web,
+    Docs,
     Service,
     Ios,
     Android,
