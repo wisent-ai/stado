@@ -24,7 +24,10 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 mkdirSync(join(root, '.build'), { recursive: true });
 const build = realpathSync(join(root, '.build'));
 const output = mkdtempSync(join(build, 'credentials-vault-move-'));
-const report = { started_at: new Date().toISOString(), commands: [], result: 'blocked' };
+// The qualification's result: blocked until it can run, then passed, or
+// failed by a step or by a restore it owes.
+const RESULT = Object.freeze({ blocked: 'blocked', passed: 'passed', failed: 'failed' });
+const report = { started_at: new Date().toISOString(), commands: [], result: RESULT.blocked };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const succeeded = answer => answer.status !== null && !answer.status;
 const required = name => {
@@ -185,7 +188,7 @@ try {
   const before = digest(readFileSync(source.vault));
   const unchanged = () => assert.equal(digest(readFileSync(source.vault)), before);
   qualified = true;
-  report.result = 'failed';
+  report.result = RESULT.failed;
 
   const absent = `vault-move-absent-${randomUUID()}`;
   refused(move(destination.host, absent, true), `holds no secret half for ${absent}`);
@@ -258,14 +261,14 @@ try {
   assert.deepEqual(fields(source.host), expectedFields);
   assert.equal(json(['registry', 'pull']).service_directory.services.skarbiec.active_host, source.host);
   restoreRequired = false;
-  report.result = 'passed';
+  report.result = RESULT.passed;
 } catch (error) {
   report.error = error.stack || String(error);
-  if (!qualified) report.result = 'blocked';
+  if (!qualified) report.result = RESULT.blocked;
 } finally {
   if (heldUnit) {
     try { renameSync(heldUnit.held, heldUnit.unit); }
-    catch (error) { report.unit_restore_error = String(error); report.result = 'failed'; }
+    catch (error) { report.unit_restore_error = String(error); report.result = RESULT.failed; }
   }
   if (restoreRequired) {
     try {
@@ -287,7 +290,7 @@ try {
       fields(source.host);
     } catch (error) {
       report.fixture_restore_error = error.stack || String(error);
-      report.result = 'failed';
+      report.result = RESULT.failed;
     }
   }
   report.finished_at = new Date().toISOString();
@@ -295,4 +298,4 @@ try {
     { mode: constants.S_IRUSR | constants.S_IWUSR });
   console.log(`${report.result}: ${join(output, 'report.json')}`);
 }
-if (report.result !== 'passed') throw new Error(`vault-move qualification ${report.result}; report in ${output}`);
+if (report.result !== RESULT.passed) throw new Error(`vault-move qualification ${report.result}; report in ${output}`);

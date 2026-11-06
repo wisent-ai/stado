@@ -24,7 +24,10 @@ mkdirSync(parent, { recursive: true });
 const output = mkdtempSync(join(parent, 'run-'));
 const home = join(output, 'home');
 mkdirSync(home);
-const report = { started_at: new Date().toISOString(), verdict: 'blocked', commands: [], cases: [] };
+// A verdict, of the journey and of each case: blocked until it can run,
+// then passed or failed.
+const VERDICT = Object.freeze({ blocked: 'blocked', passed: 'passed', failed: 'failed' });
+const report = { started_at: new Date().toISOString(), verdict: VERDICT.blocked, commands: [], cases: [] };
 let child;
 let exited;
 
@@ -137,14 +140,14 @@ try {
     { name: 'missing-console-bound', value: JSON.stringify({ ...limits, operator_console: {} }), reason: 'argument_count' },
     { name: 'missing-join-bound', value: JSON.stringify({ ...limits, fleet_join: {} }), reason: 'request_bytes' },
   ];
-  report.verdict = 'failed';
+  report.verdict = VERDICT.failed;
   for (const entry of refusals) {
     const env = { ...environment };
     if (entry.value !== undefined) env.WC_DASHBOARD_REQUEST_LIMITS = entry.value;
     const run = await start(binary, args, env);
     await stop();
     const passed = run.endpoint === null && run.launch.signal === null && Boolean(run.launch.status) && run.launch.stderr.includes(entry.reason);
-    report.cases.push({ name: entry.name, verdict: passed ? 'passed' : 'failed' });
+    report.cases.push({ name: entry.name, verdict: passed ? VERDICT.passed : VERDICT.failed });
   }
   const run = await start(binary, args, { ...environment, WC_DASHBOARD_REQUEST_LIMITS: JSON.stringify(limits) });
   const { endpoint } = run;
@@ -166,13 +169,13 @@ try {
     { name: 'import-at-own-limit', request: bodyRequest('/api/registry/import', importAtLimit), status: 'HTTP/1.1 404 ' },
     { name: 'oversized-import-body', request: bodyRequest('/api/registry/import', importAtLimit + 'x'), status: 'HTTP/1.1 413 ', reason: `accepts at most ${limits.registry_import_bytes} bytes` },
   ];
-  report.verdict = 'failed';
+  report.verdict = VERDICT.failed;
   for (const entry of cases) {
     const response = await exchange(endpoint, entry.request);
-    const observation = { name: entry.name, request_bytes: Buffer.byteLength(entry.request), response, verdict: 'failed' };
+    const observation = { name: entry.name, request_bytes: Buffer.byteLength(entry.request), response, verdict: VERDICT.failed };
     report.cases.push(observation);
     if (response.startsWith(entry.status) && (!entry.reason || response.includes(entry.reason))) {
-      observation.verdict = 'passed';
+      observation.verdict = VERDICT.passed;
     }
   }
   for (const entry of joinCases) {
@@ -182,7 +185,7 @@ try {
     const response = await exchange(endpoint, request);
     const enrollmentWritten = existsSync(join(home, 'store', 'enrollments'));
     const passed = response.startsWith(entry.status) && (!entry.reason || response.includes(entry.reason)) && !enrollmentWritten;
-    report.cases.push({ name: entry.name, request_bytes: Buffer.byteLength(request), response, enrollment_written: enrollmentWritten, verdict: passed ? 'passed' : 'failed' });
+    report.cases.push({ name: entry.name, request_bytes: Buffer.byteLength(request), response, enrollment_written: enrollmentWritten, verdict: passed ? VERDICT.passed : VERDICT.failed });
   }
   await stop();
   const consoleRun = await start(binary, args.filter(value => value !== '--enrollment-only'), { ...environment, WC_DASHBOARD_REQUEST_LIMITS: JSON.stringify(limits) });
@@ -202,7 +205,7 @@ try {
   for (const entry of consoleCases) {
     const request = `POST /api/operator/run HTTP/1.1\r\nHost: ${consoleRun.endpoint.host}\r\nConnection: close\r\nX-Stado-Action: operator-command\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(entry.body)}\r\n\r\n${entry.body}`;
     const response = await exchange(consoleRun.endpoint, request);
-    const observation = { name: entry.name, request_bytes: Buffer.byteLength(request), response, verdict: 'failed' };
+    const observation = { name: entry.name, request_bytes: Buffer.byteLength(request), response, verdict: VERDICT.failed };
     report.cases.push(observation);
     let passed = response.startsWith(entry.status) && (!entry.reason || response.includes(entry.reason));
     if (passed && entry.execution) {
@@ -211,7 +214,7 @@ try {
       passed = Number.isInteger(receipt.exit_code) && !receipt.exit_code && typeof receipt.stdout === 'string';
       if (passed) observation.configuration = JSON.parse(receipt.stdout);
     }
-    if (passed) observation.verdict = 'passed';
+    if (passed) observation.verdict = VERDICT.passed;
   }
   const integrationBody = JSON.stringify({ host_id: joinReport.hostname }).padEnd(limits.body_bytes, ' ');
   const integrationCases = [
@@ -221,17 +224,17 @@ try {
   for (const entry of integrationCases) {
     const request = `POST /api/integration/oko/transcript-sources HTTP/1.1\r\nHost: ${consoleRun.endpoint.host}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(entry.body)}\r\n\r\n${entry.body}`;
     const response = await exchange(consoleRun.endpoint, request);
-    const observation = { name: entry.name, request_bytes: Buffer.byteLength(request), response, verdict: 'failed' };
+    const observation = { name: entry.name, request_bytes: Buffer.byteLength(request), response, verdict: VERDICT.failed };
     if (response.startsWith(entry.status) && (!entry.reason || response.includes(entry.reason))) {
-      observation.verdict = 'passed';
+      observation.verdict = VERDICT.passed;
     } else if (response.startsWith('HTTP/1.1 503 ')) {
-      observation.verdict = 'blocked';
+      observation.verdict = VERDICT.blocked;
       observation.blocker = 'The real integration verifier is unavailable; bearer refusal was not exercised.';
     }
     report.cases.push(observation);
   }
-  assert.ok(report.cases.every(entry => entry.verdict === 'passed'), JSON.stringify(report.cases));
-  report.verdict = 'passed';
+  assert.ok(report.cases.every(entry => entry.verdict === VERDICT.passed), JSON.stringify(report.cases));
+  report.verdict = VERDICT.passed;
 } catch (error) {
   report.error = String(error.stack ?? error);
   throw error;
