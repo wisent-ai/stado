@@ -85,6 +85,7 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         refuses_store_adapter,
         config: std::sync::RwLock::new(config.clone()),
         tunnels: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        unreached: std::sync::Mutex::new(std::collections::HashMap::new()),
         // Startup has not written a copy yet; the first `refresh` sets this
         // either way.
         last_good_refusal: RwLock::new(None),

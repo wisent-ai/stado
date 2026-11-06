@@ -36,6 +36,16 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A resolver no longer holds every client for a host none of whose SSH paths answers:** each
+  connection to a service placed on such a host tried every path again, so a service on a host
+  that went away held each client for as long as its paths took to fail, and the caller gave up
+  first. The resolver now remembers, per active host, that its last session attempt was refused
+  by every path and why, and refuses a connection to that host within the refresh interval at
+  once with an HTTP 502 naming that refusal (`not tried again: every SSH path of <host> refused
+  <N>s ago, within this resolver's <N>s refresh interval (…)`). The first connection after the
+  interval tries again; a session that opens forgets it. Real journey:
+  `tests/resolver/unreached.rs`.
+
 - **A CLI that carries a resource bundle passes readiness:** a CLI stage places a directory under
   `bin/` beside its commands (a SwiftPM `<Package>_<Target>.bundle` that `Bundle.module` reads)
   whole, with no link on PATH, but readiness judged every recorded path as an executable, so the

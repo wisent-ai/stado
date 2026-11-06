@@ -560,6 +560,12 @@ path = "../tests/resolver/unserved.rs"
 name = "resolver-shed"
 path = "../tests/resolver/shed/mod.rs"
 
+# A real resolver whose adapter's service is placed on a host no SSH path
+# reaches (`other-host.invalid`); shares the shed journey's deployment.
+[[test]]
+name = "resolver-unreached"
+path = "../tests/resolver/unreached.rs"
+
 [[test]]
 name = "resolver-answers"
 path = "../tests/resolver/answers/mod.rs"

@@ -1,12 +1,61 @@
 //! The native SSH sessions a resolver's adapters share, one per active host
-//! and service address.
+//! and service address, and the hosts none of whose paths answered.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::cli::resolver::authority::tunnel::Tunnel;
 use crate::targets;
 
+/// An active host whose every SSH path refused the last session this
+/// resolver tried, and the refusal: a connection to it within the refresh
+/// interval is answered with it at once, since another handshake started
+/// then would stand where this one stood. The first connection after the
+/// interval tries again.
+pub(in crate::cli::resolver::serve) struct Unreached {
+    at: Instant,
+    cause: String,
+}
+
 impl super::ResolverState {
+    /// Why `active_host` is refused without a handshake: its paths all
+    /// refused within the last refresh interval. `None` when it was not
+    /// tried, answered, or that refusal is older than the interval.
+    fn recently_unreached(&self, active_host: &str) -> Option<String> {
+        let interval = Duration::from_secs(self.config.read().ok()?.refresh_seconds);
+        let unreached = self.unreached.lock().ok()?;
+        let last = unreached.get(active_host)?;
+        let ago = last.at.elapsed();
+        (ago < interval).then(|| {
+            format!(
+                "not tried again: every SSH path of {active_host} refused {}s ago, within this \
+                 resolver's {}s refresh interval ({}); the first connection after it tries again",
+                ago.as_secs(),
+                interval.as_secs(),
+                last.cause
+            )
+        })
+    }
+
+    /// Keep what the last session attempt to `active_host` said: a refusal
+    /// is remembered for [`Self::recently_unreached`], a session forgets it.
+    fn note_attempt(&self, active_host: &str, refused: Option<&str>) {
+        if let Ok(mut unreached) = self.unreached.lock() {
+            match refused {
+                Some(cause) => {
+                    let record = Unreached {
+                        at: Instant::now(),
+                        cause: cause.to_string(),
+                    };
+                    unreached.insert(active_host.to_string(), record);
+                }
+                None => {
+                    unreached.remove(active_host);
+                }
+            }
+        }
+    }
+
     /// Open a channel and retain its session until the caller finishes copying.
     ///
     /// Two things would make connections through this adapter queue while the
@@ -16,7 +65,9 @@ impl super::ResolverState {
     /// services and consumers share, so each connection waits for every
     /// handshake queued before it. A session is opened without the shared
     /// lock, and it is dropped only when it is closed; a channel the service
-    /// refuses leaves it in place and is reported to the caller at once.
+    /// refuses leaves it in place and is reported to the caller at once. A
+    /// host none of whose paths answered within the refresh interval is
+    /// refused at once, naming that refusal ([`Self::recently_unreached`]).
     pub(in crate::cli::resolver::serve) async fn tunnel_connect(
         &self,
         active_host: &str,
@@ -25,7 +76,7 @@ impl super::ResolverState {
         port: u16,
     ) -> Result<(russh::ChannelStream<russh::client::Msg>, Arc<Tunnel>), String> {
         let key = format!("{active_host}|{host}:{port}");
-        let tunnel = self.shared_tunnel(&key, paths).await?;
+        let tunnel = self.shared_tunnel(active_host, &key, paths).await?;
         let ended = match tunnel.connect(host, port).await {
             Ok(stream) => return Ok((stream, tunnel)),
             // The session is alive: the service end refused this one
@@ -46,7 +97,7 @@ impl super::ResolverState {
             }
         }
         let replacement = self
-            .shared_tunnel(&key, paths)
+            .shared_tunnel(active_host, &key, paths)
             .await
             .map_err(|error| format!("{ended}; no session could replace it: {error}"))?;
         match replacement.connect(host, port).await {
@@ -57,8 +108,11 @@ impl super::ResolverState {
 
     /// The pooled session for `key`, or one opened without the shared lock
     /// and pooled; when another connection pooled one meanwhile, that one.
+    /// A host whose paths all refused within the refresh interval is not
+    /// tried again; a fresh attempt's outcome is remembered either way.
     async fn shared_tunnel(
         &self,
+        active_host: &str,
         key: &str,
         paths: &[targets::SshConnectionPath],
     ) -> Result<Arc<Tunnel>, String> {
@@ -75,7 +129,17 @@ impl super::ResolverState {
         if let Some(tunnel) = held {
             return Ok(tunnel);
         }
-        let opened = Arc::new(Tunnel::open(paths).await?);
+        if let Some(refused) = self.recently_unreached(active_host) {
+            return Err(refused);
+        }
+        let opened = match Tunnel::open(paths).await {
+            Ok(opened) => Arc::new(opened),
+            Err(refused) => {
+                self.note_attempt(active_host, Some(&refused));
+                return Err(refused);
+            }
+        };
+        self.note_attempt(active_host, None);
         let mut tunnels = self.tunnels.lock().await;
         Ok(Arc::clone(
             tunnels

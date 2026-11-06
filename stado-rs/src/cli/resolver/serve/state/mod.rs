@@ -50,6 +50,12 @@ pub(super) struct ResolverState {
     pub(super) config: std::sync::RwLock<ResolverConfig>,
     /// Native SSH sessions, shared without helper processes or intermediary listeners.
     pub(super) tunnels: tokio::sync::Mutex<std::collections::HashMap<String, Arc<Tunnel>>>,
+    /// Each active host whose every SSH path last refused a session, with
+    /// when and why ([`tunnels::Unreached`]): a connection to it within the
+    /// refresh interval is refused at once with that cause instead of
+    /// standing behind another handshake that will not answer.
+    pub(super) unreached:
+        std::sync::Mutex<std::collections::HashMap<String, tunnels::Unreached>>,
     /// Why this host last refused to refresh its last-known-good registry
     /// copy, as [`targets::LastGoodRefusal::kind`].
     ///
