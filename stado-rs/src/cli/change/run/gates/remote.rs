@@ -15,7 +15,7 @@ use std::time::Instant;
 
 use super::pool::pool;
 use super::shard::Work;
-use super::{cache, tail, Plan, Planned};
+use super::{cache, report, Plan, Planned};
 use crate::cli::change::record::Shard;
 use crate::cli::CmdError;
 use crate::deploy::host_run::HostCargoRequest;
@@ -257,7 +257,7 @@ async fn worker(
             cached: false,
             exit_code,
             seconds: started.elapsed().as_secs(),
-            report: tail(&format!("{stdout}\n{stderr}")),
+            report: report(&stdout, &stderr),
         };
         eprintln!(
             "stado change run: {} for {platform} on {} exited {} after {}s",

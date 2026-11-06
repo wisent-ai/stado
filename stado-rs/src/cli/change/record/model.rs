@@ -185,7 +185,8 @@ pub struct Shard {
     pub cached: bool,
     pub exit_code: i32,
     pub seconds: u64,
-    /// The end of what the gate printed, enough to read why it refused.
+    /// Everything the gate printed, its standard output then its error
+    /// output, so the line that says why it refused is kept wherever it is.
     pub report: String,
 }
 

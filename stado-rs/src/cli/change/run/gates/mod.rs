@@ -32,10 +32,6 @@ use crate::release_pipeline::{
     parse_product_manifest, GateKind, ProductManifest, PRODUCT_MANIFEST,
 };
 
-/// How much of a shard's report its record keeps: the end, where Cargo and
-/// test harnesses put the verdict.
-const REPORT_LINES: usize = 60;
-
 /// The kind the queue's record names the local source check by: it runs no
 /// declared gate, so it is none of the manifest's gate kinds.
 const SOURCE_KIND: &str = "source";
@@ -173,9 +169,12 @@ pub struct Outcome {
     pub refusal: Option<String>,
 }
 
-fn tail(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    lines[lines.len().saturating_sub(REPORT_LINES)..].join("\n")
+/// Everything a shard printed, its standard output then its error output:
+/// the line that says why a gate refused can sit anywhere in it (a compiler
+/// error above a long list of warnings, a failing test above the summary),
+/// so no end of it is chosen as enough.
+fn report(stdout: &str, stderr: &str) -> String {
+    format!("{stdout}\n{stderr}")
 }
 
 /// Run `plan` over `commit` (tree `tree`) of `checkout` on the pool of

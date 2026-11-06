@@ -36,6 +36,13 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The submit queue keeps a gate's whole report and a reviewer's whole answer:** a shard's record
+  kept the last 60 lines of what its gate printed and a review the last 40 lines of what the
+  reviewer said, numbers nobody stated, so a compiler error above its warnings or a finding above
+  the verdict was cut off and a refused candidate's refusal did not say why. Both are now kept
+  whole; the review still leaves out the wait mechanism's lines, which say what it waited on, not
+  what it found.
+
 - **A checkout whose origin's default branch was deleted and pruned is still read as canonical:** a
   clone records the default branch it saw (`origin/HEAD`), and once that branch was deleted on the
   origin the record named a branch that no longer exists. Stado read it as the branch the checkout

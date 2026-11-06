@@ -36,10 +36,6 @@ pub const REPAIRED: &str = "repaired";
 /// message its reviewer left.
 pub const NO_ROUND: &str = "no-round";
 
-/// How much of the reviewer's words a review keeps: the end, where Tama
-/// prints the rounds' verdict.
-const ANSWER_LINES: usize = 40;
-
 /// The wait mechanism's lines on a program's error output: what it waited
 /// on, not what it found.
 pub const WAIT_LINES: [&str; 3] = ["czekam: ", "koniec czekania: ", "blad czekania: "];
@@ -429,15 +425,16 @@ async fn reviewed(
     // covers what the reviewer left; only the second leaves its standard
     // output empty and says why on its error output.
     let round = output.status.success() || !stdout.trim().is_empty();
-    // The verdict is the end of its standard output; the wait mechanism's
-    // lines on its error output say what it waited on, not what it found.
+    // Everything the reviewer said is kept, its verdict at the end of its
+    // standard output and each finding above it; the wait mechanism's lines
+    // on its error output say what it waited on, not what it found.
     let lines: Vec<&str> = stderr
         .lines()
         .filter(|line| !WAIT_LINES.iter().any(|wait| line.starts_with(wait)))
         .chain(stdout.lines())
         .filter(|line| !line.trim().is_empty())
         .collect();
-    let mut answer = lines[lines.len().saturating_sub(ANSWER_LINES)..].join("\n");
+    let mut answer = lines.join("\n");
     if let Some(why) = undeclared {
         // Kept first, so the reviewer's last line stays the verdict.
         answer = format!(
