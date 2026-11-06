@@ -10,7 +10,7 @@ use super::super::{
     build_planned_job, checkpoint_accepted, claim_entry, digest_value, hostname, job_id_from_key,
     migrate_v2_run_manifest, resolve_hardware, submission_input_digest, submission_job_key,
     submission_request, submission_source_digest, submitter, validate_recovered_job,
-    validate_run_manifest, EntryClaim, ResolvedHardwareProjection, SubmissionContext,
+    validate_run_manifest, EntryClaim, EntryState, ResolvedHardwareProjection, SubmissionContext,
     SubmissionProvenance, SubmitError, SubmitOptions,
 };
 
@@ -139,7 +139,7 @@ pub(super) async fn submit(
                     "command": command,
                     "job_key": key,
                     "job_id": job_id,
-                    "state": "planned",
+                    "state": EntryState::Planned.word(),
                     "planned_job": job,
                 }));
             }

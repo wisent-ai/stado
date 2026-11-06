@@ -4,6 +4,7 @@ use chrono::Utc;
 use serde_json::Value;
 
 use crate::queue::storage::JobStorage;
+use crate::queue::submit::EntryState;
 use crate::queue::StorageError;
 
 use super::super::prefixes::{RUN_PREFIX, TERMINAL_PREFIXES};
@@ -141,7 +142,7 @@ async fn record_terminal_outcome_inner(
                 job.job_id
             )));
         }
-        if entry.get("state").and_then(Value::as_str) == Some("reaped") {
+        if entry.get("state").and_then(Value::as_str) == Some(EntryState::Reaped.word()) {
             return index_retained_job(store, &job.job_id, run_id).await;
         }
         if let Some(existing) = entry.get("outcome") {
@@ -166,7 +167,7 @@ async fn record_terminal_outcome_inner(
                 job.job_id
             )));
         }
-        entry.insert("state".into(), Value::from("terminal"));
+        entry.insert("state".into(), Value::from(EntryState::Terminal.word()));
         entry.remove("owner");
         entry.remove("lease_expires_at");
         entry.insert(

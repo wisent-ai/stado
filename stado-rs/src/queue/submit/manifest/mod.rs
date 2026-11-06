@@ -24,9 +24,11 @@ pub(in crate::queue::submit) use validate::validate_run_manifest;
 /// Where one entry of a run manifest stands. The stored word is parsed into
 /// this once by [`validate`]; a word outside it is an invalid manifest, and
 /// every write stores [`EntryState::word`], so no state is spelled twice.
+/// The queue's run documents (`queue::runs`) record terminal outcomes in
+/// the same entries, so they read and write it through the same names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(in crate::queue::submit) enum EntryState {
+pub(in crate::queue) enum EntryState {
     Planned,
     Claimed,
     Enqueuing,
@@ -44,7 +46,7 @@ impl EntryState {
     }
 
     /// The state as a manifest stores it.
-    pub(in crate::queue::submit) fn word(self) -> &'static str {
+    pub(in crate::queue) fn word(self) -> &'static str {
         match self {
             Self::Planned => "planned",
             Self::Claimed => "claimed",
