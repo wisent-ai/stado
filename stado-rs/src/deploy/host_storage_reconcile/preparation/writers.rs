@@ -77,7 +77,7 @@ pub(super) async fn fence_writers(
         if fence.writers[index].status == WriterStatus::Stopped {
             continue;
         }
-        if fence.writers[index].role == "object-api" {
+        if fence.writers[index].role == WriterRole::ObjectApi {
             acquire_storage_write_fence(storage_target, transaction, fence, write_guard, runner)
                 .await?;
             capture_fenced_preflight(storage_target, transaction, fence, runner).await?;

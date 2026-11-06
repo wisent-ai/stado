@@ -22,9 +22,28 @@ const STORAGE_ROUTE_KEYS: &[&str] = &[
     "WC_STADO_STORAGE_TOKEN_FILE",
 ];
 
+/// What a unit fenced for a storage move is to the store: the object API
+/// (the host process), a CI runner, the runner the move itself runs under,
+/// another Stado writer, or another unit that only carries storage evidence.
+/// The words are those a stored fence records under `role`; a fence naming
+/// another role is refused when it is read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(in crate::deploy::host_storage_reconcile) enum WriterRole {
+    #[serde(rename = "object-api")]
+    ObjectApi,
+    #[serde(rename = "runner")]
+    Runner,
+    #[serde(rename = "current-runner")]
+    CurrentRunner,
+    #[serde(rename = "writer")]
+    Writer,
+    #[serde(rename = "other")]
+    Other,
+}
+
 /// The order units are stopped in: runners first, so no job is claimed
 /// against a store that is moving, the object API last.
-const STOP_ORDER: &[&str] = &["runner", "current-runner"];
+const STOP_ORDER: &[WriterRole] = &[WriterRole::Runner, WriterRole::CurrentRunner];
 
 fn command_tokens(command: &str) -> Vec<&str> {
     command
@@ -48,26 +67,26 @@ pub(in crate::deploy::host_storage_reconcile) fn storage_route_key(key: &str) ->
 pub(in crate::deploy::host_storage_reconcile) fn service_role(
     label: &str,
     command: &str,
-) -> &'static str {
+) -> WriterRole {
     // The compiled catalog is validated before anything runs, so an error
     // here only means no unit is the host process.
     let line = command_tokens(command).join(" ");
     if crate::deploy::service_catalog::runs_host_process(label, &line) == Ok(true) {
-        return "object-api";
+        return WriterRole::ObjectApi;
     }
     let tokens = command_tokens(command);
     if tokens
         .iter()
         .any(|token| executable_name(token) == "Runner.Listener")
     {
-        return "runner";
+        return WriterRole::Runner;
     }
     if tokens.iter().any(|token| executable_name(token) == "stado") {
         // Every resident Stado role runs in the host process above; any other
         // Stado unit is a writer of the store.
-        return "writer";
+        return WriterRole::Writer;
     }
-    "other"
+    WriterRole::Other
 }
 
 pub(in crate::deploy::host_storage_reconcile) fn managed_from_unit(
@@ -133,8 +152,8 @@ pub(in crate::deploy::host_storage_reconcile) enum StopPriority {
     ObjectApi,
 }
 
-pub(in crate::deploy::host_storage_reconcile) fn stop_priority(role: &str) -> StopPriority {
-    if role == "object-api" {
+pub(in crate::deploy::host_storage_reconcile) fn stop_priority(role: WriterRole) -> StopPriority {
+    if role == WriterRole::ObjectApi {
         return StopPriority::ObjectApi;
     }
     match STOP_ORDER.iter().position(|ordered| *ordered == role) {

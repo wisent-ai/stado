@@ -43,12 +43,12 @@ pub(in crate::deploy::host_storage_reconcile) enum RestoreOrder {
     CurrentRunner,
 }
 
-pub(in crate::deploy::host_storage_reconcile) fn restore_priority(role: &str) -> RestoreOrder {
+pub(in crate::deploy::host_storage_reconcile) fn restore_priority(role: WriterRole) -> RestoreOrder {
     match role {
-        "object-api" => RestoreOrder::ObjectApi,
-        "runner" => RestoreOrder::Runner,
-        "current-runner" => RestoreOrder::CurrentRunner,
-        _ => RestoreOrder::Other,
+        WriterRole::ObjectApi => RestoreOrder::ObjectApi,
+        WriterRole::Runner => RestoreOrder::Runner,
+        WriterRole::CurrentRunner => RestoreOrder::CurrentRunner,
+        WriterRole::Writer | WriterRole::Other => RestoreOrder::Other,
     }
 }
 
@@ -212,7 +212,7 @@ pub(in crate::deploy::host_storage_reconcile) fn recovered_object_store(
     let endpoint = fence
         .writers
         .iter()
-        .find(|writer| writer.role == "object-api")
+        .find(|writer| writer.role == WriterRole::ObjectApi)
         .and_then(|writer| writer.restored_route.as_ref())
         .and_then(|proof| proof.get("served_store"))
         .and_then(|proof| proof.get("endpoint"))

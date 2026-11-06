@@ -12,7 +12,7 @@ pub(super) async fn fenced_writer(
     runner: &Runner,
 ) -> Result<Option<WriterFence>, DeployError> {
     let observed_role = service_role(candidate.declared.unit_id(), &candidate.observed_command);
-    if observed_role == "other" && candidate.storage_evidence.is_empty() {
+    if observed_role == WriterRole::Other && candidate.storage_evidence.is_empty() {
         non_storage_retained.push(json!({
             "target": candidate.target.name.clone(),
             "label": candidate.declared.unit_id(),
@@ -28,20 +28,23 @@ pub(super) async fn fenced_writer(
         Some(runs) => runs,
         None => &candidate.observed_command,
     };
-    let mut role = service_role(candidate.declared.unit_id(), command).to_string();
-    if role == "other" {
-        role = "writer".to_string();
-    }
-    if role == "runner"
-        && current_runner
-            .is_some_and(|current| current_runner_candidate(candidate, command, current))
-    {
-        role = "current-runner".to_string();
-        *owning_runner_found = true;
-    }
+    // The role the fence records: a unit that only carries storage evidence
+    // is fenced as a writer, and the runner this move itself runs under is
+    // the current runner.
+    let role = match service_role(candidate.declared.unit_id(), command) {
+        WriterRole::Other => WriterRole::Writer,
+        WriterRole::Runner
+            if current_runner
+                .is_some_and(|current| current_runner_candidate(candidate, command, current)) =>
+        {
+            *owning_runner_found = true;
+            WriterRole::CurrentRunner
+        }
+        observed => observed,
+    };
     let autostart =
         service::label_autostart(&candidate.target, candidate.declared.unit_id(), runner).await?;
-    if role == "object-api" {
+    if role == WriterRole::ObjectApi {
         let backup_backend = state.loaded_environment.get("WC_BACKUP_STORAGE_BACKEND");
         let backup_path = state.loaded_environment.get("WC_BACKUP_LOCAL_STORAGE_PATH");
         if state.pid.is_none()
@@ -78,7 +81,7 @@ pub(super) async fn fenced_writer(
         }
         *object_port = command_u16_option(command, "--port");
     }
-    if role == "current-runner" {
+    if role == WriterRole::CurrentRunner {
         if state.pid.is_none() {
             return Err(DeployError::unreachable(
                 "Actions runner gate did not map its owning live native process".to_string(),
@@ -132,8 +135,8 @@ pub(super) async fn fenced_writer(
             candidate.declared.unit_id()
         )));
     }
-    let listener_port = (role == "object-api").then_some(*object_port).flatten();
-    if role == "object-api" && listener_port.is_none() {
+    let listener_port = (role == WriterRole::ObjectApi).then_some(*object_port).flatten();
+    if role == WriterRole::ObjectApi && listener_port.is_none() {
         return Err(DeployError::unreachable(
             "object API listener port is absent from its loaded argv".to_string(),
         ));

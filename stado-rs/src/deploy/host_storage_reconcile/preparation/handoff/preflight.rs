@@ -108,7 +108,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn capture_fenced_preflight(
     let writer = fence
         .writers
         .iter()
-        .find(|writer| writer.role == "object-api")
+        .find(|writer| writer.role == WriterRole::ObjectApi)
         .ok_or_else(|| DeployError::unreachable("fence omitted its object API".to_string()))?;
     let roots = fence.roots.as_ref().unwrap();
     let prior_root = if roots.prior_primary == roots.primary {

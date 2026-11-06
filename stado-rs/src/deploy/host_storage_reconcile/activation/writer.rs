@@ -21,7 +21,7 @@ pub(super) async fn restore_fenced_writer(
     )
     .await?;
     let mut autostart = service::label_autostart(storage_target, label, runner).await?;
-    let unit_matches = if fence.writers[index].role == "object-api" {
+    let unit_matches = if fence.writers[index].role == WriterRole::ObjectApi {
         true
     } else {
         snapshot_unit_file(storage_target, &fence.writers[index].path, runner).await?
@@ -48,13 +48,13 @@ pub(super) async fn restore_fenced_writer(
             fence.writers[index].status = WriterStatus::RestoreIntent;
             write_fence(storage_target, transaction, fence, runner).await?;
         }
-        if fence.writers[index].role != "object-api" && fence.writers[index].unit_snapshot.is_some()
+        if fence.writers[index].role != WriterRole::ObjectApi && fence.writers[index].unit_snapshot.is_some()
         {
             restore_unit_snapshot(storage_target, &fence.writers[index], runner).await?;
         }
         let requires_load = fence.writers[index].was_loaded || fence.writers[index].was_runnable;
         if requires_load {
-            if fence.writers[index].role == "object-api" {
+            if fence.writers[index].role == WriterRole::ObjectApi {
                 let prepared = if rollback {
                     fence.writers[index].rollback_object_recovery.as_ref()
                 } else {
@@ -125,7 +125,7 @@ pub(super) async fn restore_fenced_writer(
             ))
             .stating(FailureCode::InfraDown));
         }
-        if fence.writers[index].role != "object-api"
+        if fence.writers[index].role != WriterRole::ObjectApi
             && snapshot_unit_file(storage_target, &fence.writers[index].path, runner).await?
                 != fence.writers[index].unit_snapshot
         {

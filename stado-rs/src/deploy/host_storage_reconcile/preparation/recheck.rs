@@ -210,7 +210,7 @@ pub(in crate::deploy::host_storage_reconcile) fn validate_prepared_fence(
                 .stating(crate::primitives::failure::FailureCode::Refused));
             }
         }
-        if writer.role == "object-api"
+        if writer.role == WriterRole::ObjectApi
             && (writer.forward_object_recovery.is_none()
                 || writer.rollback_object_recovery.is_none())
         {

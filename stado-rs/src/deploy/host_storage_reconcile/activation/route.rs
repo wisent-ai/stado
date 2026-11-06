@@ -14,13 +14,13 @@ pub(super) async fn restored_object_route(
     conflict_winner: crate::deploy::host_storage_reconcile::ConflictWinner,
     runner: &Runner,
 ) -> Result<Option<Value>, DeployError> {
-    let restored_route = if fence.writers[index].role == "object-api" && was_durably_restored {
+    let restored_route = if fence.writers[index].role == WriterRole::ObjectApi && was_durably_restored {
         Some(fence.writers[index].restored_route.clone().ok_or_else(|| {
             DeployError::unreachable(
                 "durable object API result omitted its route proof".to_string(),
             )
         })?)
-    } else if fence.writers[index].role == "object-api" {
+    } else if fence.writers[index].role == WriterRole::ObjectApi {
         let port = fence.writers[index].listener_port.ok_or_else(|| {
             DeployError::unreachable(
                 "object API listener port is absent from its fence".to_string(),

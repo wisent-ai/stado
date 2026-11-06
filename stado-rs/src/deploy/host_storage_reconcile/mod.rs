@@ -86,7 +86,7 @@ struct PreparedScript {
 struct WriterFence {
     target: String,
     label: String,
-    role: String,
+    role: WriterRole,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     storage_evidence: Vec<String>,
     path: String,

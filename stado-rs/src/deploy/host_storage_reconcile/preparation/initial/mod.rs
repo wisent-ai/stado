@@ -80,8 +80,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn initial_lifecycle_fence(
             writers.push(writer);
         }
     }
-    writers.sort_by_key(|writer| stop_priority(&writer.role));
-    if !writers.iter().any(|writer| writer.role == "object-api") {
+    writers.sort_by_key(|writer| stop_priority(writer.role));
+    if !writers.iter().any(|writer| writer.role == WriterRole::ObjectApi) {
         return Err(DeployError(
             "fleet service inventory did not resolve the canonical object API".to_string(),
         )
@@ -101,7 +101,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn initial_lifecycle_fence(
     .await?;
     let object_writer = writers
         .iter_mut()
-        .find(|writer| writer.role == "object-api")
+        .find(|writer| writer.role == WriterRole::ObjectApi)
         .expect("canonical object API writer was required above");
     let roots = capture_storage_roots(transaction, runtime, object_writer, &staged_runtime)?;
     object_writer.forward_object_recovery = Some(object_recovery_script(

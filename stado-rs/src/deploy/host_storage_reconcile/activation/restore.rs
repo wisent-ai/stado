@@ -69,7 +69,7 @@ pub(super) fn restored_state_matches(
         {
             return false;
         }
-        let expected_sha256 = if writer.role == "object-api"
+        let expected_sha256 = if writer.role == WriterRole::ObjectApi
             || writer
                 .prior_executable
                 .as_deref()
@@ -82,7 +82,7 @@ pub(super) fn restored_state_matches(
         if state.process_sha256.as_deref() != expected_sha256 {
             return false;
         }
-    } else if writer.role == "object-api"
+    } else if writer.role == WriterRole::ObjectApi
         || (state.state.is_none()
             && state.last_exit_code.is_none()
             && state.restart.is_none()
@@ -90,7 +90,7 @@ pub(super) fn restored_state_matches(
     {
         return false;
     }
-    if writer.role != "object-api" {
+    if writer.role != WriterRole::ObjectApi {
         return true;
     }
     let loaded = &state.loaded_environment;
@@ -130,7 +130,7 @@ pub(super) fn durable_restored_state_matches(
     writer: &WriterFence,
     state: &crate::deploy::service_label_print::LabelState,
 ) -> bool {
-    (writer.role != "object-api" || writer.restored_route.is_some())
+    (writer.role != WriterRole::ObjectApi || writer.restored_route.is_some())
         && state.pid == writer.restored_pid
         && state.process_started_at == writer.restored_started_at
         && state.loaded_environment == writer.restored_loaded_environment

@@ -135,7 +135,7 @@ pub(super) async fn activate_lifecycle_fence(
     write_fence(storage_target, transaction, &fence, runner).await?;
 
     let mut order = (0..fence.writers.len()).collect::<Vec<_>>();
-    order.sort_by_key(|index| restore_priority(&fence.writers[*index].role));
+    order.sort_by_key(|index| restore_priority(fence.writers[*index].role));
     let mut restored_store = None;
     for index in order {
         let label = fence.writers[index].label.clone();
@@ -175,7 +175,7 @@ pub(super) async fn activate_lifecycle_fence(
         fence.writers[index].restored_route = restored_route;
         fence.writers[index].status = WriterStatus::Restored;
         write_fence(storage_target, transaction, &fence, runner).await?;
-        if fence.writers[index].role == "object-api" {
+        if fence.writers[index].role == WriterRole::ObjectApi {
             release_storage_write_fence(
                 storage_target,
                 transaction,
