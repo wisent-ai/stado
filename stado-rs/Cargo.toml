@@ -393,6 +393,10 @@ name = "quality-absent-manifest"
 path = "../tests/quality/absent_manifest.rs"
 
 [[test]]
+name = "quality-hooks-dangling-head"
+path = "../tests/quality/hooks_dangling_head.rs"
+
+[[test]]
 name = "quality-instance-values"
 path = "../tests/quality/instance_values.rs"
 

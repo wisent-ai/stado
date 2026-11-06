@@ -36,6 +36,14 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A checkout whose origin's default branch was deleted and pruned is still read as canonical:** a
+  clone records the default branch it saw (`origin/HEAD`), and once that branch was deleted on the
+  origin the record named a branch that no longer exists. Stado read it as the branch the checkout
+  must work on, so a checkout on the origin's real default was refused as "not on <deleted branch>"
+  and `stado quality hooks` could not install its push gate. A recorded `origin/HEAD` is now read
+  only while the branch it names is a remote-tracking branch of the checkout; otherwise the origin
+  is asked for its default.
+
 - **`stado host run attach` says what to run instead when it is handed an installed program:**
   attach runs only a program delivered into a run of its own below `$HOME/.stado/work/runs`, and
   handed the host's installed `~/.stado/bin/stado` it answered only `path … must be an absolute

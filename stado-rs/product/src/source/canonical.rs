@@ -34,14 +34,22 @@ pub fn hold(root: &Path, revision: &str) -> Result<()> {
 /// The branch a canonical checkout works on: the default branch its origin
 /// names. A clone records it (`origin/HEAD`); a checkout that never did (one
 /// made by `git init` and a remote) asks its origin, which names it in the
-/// symbolic `HEAD` it advertises. No organization or repository is told
-/// apart by name, and nothing is written into the checkout.
+/// symbolic `HEAD` it advertises. A recorded `origin/HEAD` is read only while
+/// the branch it names is still a remote-tracking branch of the checkout: a
+/// clone keeps the default it saw when it was made, and once that branch is
+/// deleted on the origin (and pruned here) the recorded name is a dangling
+/// symbolic ref naming a branch nobody works on, so the origin is asked
+/// instead. No organization or repository is told apart by name, and nothing
+/// is written into the checkout.
 pub(super) fn canonical_branch(root: &Path) -> Result<String> {
     if let Ok(head) = git(
         root,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     ) {
-        return Ok(head.trim_start_matches("origin/").to_owned());
+        let tracking = format!("refs/remotes/{head}");
+        if git(root, &["rev-parse", "--verify", "--quiet", &tracking]).is_ok() {
+            return Ok(head.trim_start_matches("origin/").to_owned());
+        }
     }
     let advertised =
         git(root, &["ls-remote", "--symref", "origin", "HEAD"]).with_context(|| {
