@@ -42,7 +42,10 @@ async function fileDigest(path) {
   for await (const bytes of createReadStream(path)) hash.update(bytes);
   return hash.digest('hex');
 }
-const report = { started_at: new Date().toISOString(), binary, binary_sha256: await fileDigest(binary), commands: [], cases: [], verdict: 'running' };
+// The journey's verdict: running until every case is checked, then passed,
+// or failed at the first case that is not.
+const VERDICT = Object.freeze({ running: 'running', passed: 'passed', failed: 'failed' });
+const report = { started_at: new Date().toISOString(), binary, binary_sha256: await fileDigest(binary), commands: [], cases: [], verdict: VERDICT.running };
 function retain() {
   writeFileSync(join(output, 'report.json'), JSON.stringify(report, null, '\t'));
 }
@@ -207,9 +210,9 @@ try {
   refusal('swiftpm-bundle-conflict', [...pin, '--git-bundle']);
   refusal('unknown-revision', pin.map(value => value === revision ? `refs/heads/example-absent-${randomUUID()}` : value));
   refusal('missing-source', pin.map(value => value === source ? join(fixture, 'absent-source') : value));
-  report.verdict = 'passed';
+  report.verdict = VERDICT.passed;
 } catch (error) {
-  report.verdict = 'failed';
+  report.verdict = VERDICT.failed;
   report.error = String(error);
 } finally {
   report.finished_at = new Date().toISOString();
@@ -217,4 +220,4 @@ try {
   retain();
   console.log(`${report.verdict}: ${join(output, 'report.json')}`);
 }
-if (report.verdict !== 'passed') throw new Error(report.error);
+if (report.verdict !== VERDICT.passed) throw new Error(report.error);
