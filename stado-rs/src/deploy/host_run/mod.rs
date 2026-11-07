@@ -32,9 +32,10 @@ pub use validate::{
 };
 
 /// Where every managed run lives below the target account's home; a cloud
-/// host with nothing here runs no Stado-delivered work.
-pub(crate) const RUN_AREA: &str = ".stado/work/runs";
-const SIGNAL_AREA: &str = ".stado/work/run-signals";
+/// host with nothing here runs no Stado-delivered work. Declared in the host
+/// tree register, with the stage that takes an ended run.
+pub(crate) const RUN_AREA: &str = crate::host_trees::RUN_AREA;
+const SIGNAL_AREA: &str = crate::host_trees::SIGNAL_AREA;
 const PATH_REFUSAL: &str =
     "must be an absolute path below the target account's $HOME/.stado/work/runs, with no '.' or '..' component";
 

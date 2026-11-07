@@ -63,16 +63,16 @@ pub(crate) async fn collect(job_id: &str, into: &Path, json_output: bool) -> Res
         )));
     }
     let target = pinned_target(&job.pinned_host).await?;
-    let jobs = match target.work_root.as_deref() {
-        Some(root) => format!("{}/jobs", crate::deploy::shlex_quote(root)),
-        None => "\"$HOME/.stado/work/jobs\"".to_string(),
-    };
+    // The job tree the agent made, as the host tree register names it: a
+    // reader that spelled it by hand named `<jobs>/<job>` where the worker
+    // makes `<jobs>/wc-<job>`, and read the absent tree as no results.
     let directory = format!(
-        "{jobs}/{}/{RESULTS_DIRECTORY}",
-        crate::deploy::shlex_quote(job_id)
+        "{}/{RESULTS_DIRECTORY}",
+        crate::host_trees::job_tree_word(&target, job_id)
     );
     let script = format!(
-        "set -u\n[ -d {directory} ] || exit 0\nfor file in {directory}/*.jsonl; do\n  \
+        "set -u\n[ -d {directory} ] || {{ printf 'STADO_RESULTS_ABSENT\\t%s\\n' {directory}; exit 0; }}\n\
+         for file in {directory}/*.jsonl; do\n  \
          [ -f \"$file\" ] || continue\n  printf '{FILE_MARKER}%s\\n' \"${{file##*/}}\"\n  \
          cat \"$file\" || exit\n  printf '\\n'\ndone\n"
     );
@@ -87,6 +87,19 @@ pub(crate) async fn collect(job_id: &str, into: &Path, json_output: bool) -> Res
             output.detail().trim()
         ))
         .stating(FailureCode::InfraDown));
+    }
+    if let Some(absent) = output
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("STADO_RESULTS_ABSENT\t"))
+    {
+        return Err(CmdError::click(format!(
+            "{} holds no results directory at {absent} for job {job_id} (state {}): the worker \
+             has not made the job's tree yet, or the janitor took it after the job ended; `stado \
+             results {job_id} <DIR>` downloads what the job uploaded",
+            target.name, job.state
+        ))
+        .stating(FailureCode::NotFound));
     }
     std::fs::create_dir_all(into)
         .map_err(|error| CmdError::click(format!("cannot create {}: {error}", into.display())))?;

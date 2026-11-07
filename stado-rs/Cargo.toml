@@ -635,5 +635,9 @@ name = "workload-browser-task-params"
 path = "../tests/workload/browser_task_params.rs"
 
 [[test]]
+name = "host-trees-register"
+path = "../tests/space_reclaim/host_trees.rs"
+
+[[test]]
 name = "wait-operations"
 path = "../tests/wait/operations.rs"

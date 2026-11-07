@@ -26,6 +26,7 @@ pub mod fleet_needs;
 pub mod fleet_shape;
 pub mod github_identity;
 pub mod host_software;
+pub mod host_trees;
 pub mod inference;
 pub mod machine;
 pub mod mail;

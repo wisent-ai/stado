@@ -92,7 +92,7 @@ pub const BRAMA_RUNNER_CORECLR_SIGNATURE: &[&str] = &[
 /// The operator can select this exact entry but cannot append a run name or
 /// redirect it to another path. Individual canonical UUID children are made
 /// by `stado host deliver`, which validates them before reaching the host.
-pub const PROBIERZ_RUN_ROOT_CREATE: &[&str] = &["/bin/mkdir", "-p", ".stado/work/runs"];
+pub const PROBIERZ_RUN_ROOT_CREATE: &[&str] = &["/bin/mkdir", "-p", crate::host_trees::RUN_AREA];
 
 /// Every entry whose fixed path arguments name something inside the managed
 /// account's home rather than a system path.
