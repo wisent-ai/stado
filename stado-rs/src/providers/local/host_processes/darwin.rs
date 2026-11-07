@@ -41,17 +41,19 @@ struct Clock {
 }
 
 impl Clock {
+    // libc marks both the `mach_timebase_info` struct and the function
+    // deprecated in favour of the mach2 crate; the kernel interface they name
+    // is the same, and the allow covers every use of both in this function.
+    #[allow(deprecated)]
     fn read() -> Result<Self, String> {
         let mut info = MaybeUninit::<libc::mach_timebase_info>::uninit();
         // SAFETY: the buffer is one mach_timebase_info, which the call fills.
-        // libc marks the binding deprecated in favour of the mach2 crate; the
-        // kernel interface it calls is the same.
-        #[allow(deprecated)]
         let status = unsafe { libc::mach_timebase_info(info.as_mut_ptr()) };
         if status != libc::KERN_SUCCESS {
             return Err(format!(
                 "mach_timebase_info failed with kern_return_t {status}, so no CPU counter can be \
-                 converted to time"
+                 converted to time and no process reading can be taken on this host until the \
+                 kernel answers it"
             ));
         }
         // SAFETY: the call succeeded, so the record is filled.

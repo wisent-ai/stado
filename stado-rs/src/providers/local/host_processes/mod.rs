@@ -127,13 +127,30 @@ pub fn read() -> Result<Reading, String> {
 /// report says so and lists no load, and the next one is measured from it.
 /// A kept reading whose CPU counters were converted another way, or by a
 /// build that did not say how, is no earlier reading of the same counters:
-/// this one is reported as a first reading and the next is measured from it.
+/// this one is reported as a first reading naming why, and the next is
+/// measured from it.
 pub fn read_and_compare() -> Result<ProcessesReport, String> {
     let now = read()?;
     let previous = store::previous()?;
     store::keep(&now)?;
     match previous {
         Some(previous) if previous.conversion == now.conversion => report::compare(&previous, &now),
-        _ => Ok(report::first(&now)),
+        Some(previous) => Ok(report::first(&now, Some(not_compared(&previous, &now)))),
+        None => Ok(report::first(&now, None)),
     }
+}
+
+/// Why `kept` is not compared with `now`: how each converted its CPU
+/// counters to nanoseconds.
+fn not_compared(kept: &Reading, now: &Reading) -> String {
+    let said = |reading: &Reading| match &reading.conversion {
+        Some(conversion) => format!("by {conversion}"),
+        None => "by a build that did not record how".to_string(),
+    };
+    format!(
+        "the reading kept before converted CPU counters {}, this one {}, so it measures no \
+         interval of the same counters; the next run is measured from this one",
+        said(kept),
+        said(now)
+    )
 }

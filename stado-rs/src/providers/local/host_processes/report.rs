@@ -47,9 +47,15 @@ pub struct Unreadable {
 /// The per-process load of one host between two readings.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProcessesReport {
-    /// `compared` when an earlier reading was kept, `first_reading` when
-    /// this reading is the first and the next one is measured from it.
+    /// `compared` when the kept reading was compared with this one,
+    /// `first_reading` when there was none to compare with or the kept one
+    /// could not be (`not_compared` says why); the next one is measured from
+    /// this one either way.
     pub state: &'static str,
+    /// Why a kept reading was not compared with this one: its CPU counters
+    /// were converted another way. Absent when it was compared, or when this
+    /// host kept no reading before.
+    pub not_compared: Option<String>,
     /// The measured time between the two readings.
     pub interval_seconds: Option<f64>,
     /// Every process that started in the interval or spent CPU or moved
@@ -73,10 +79,12 @@ fn unreadable(reading: &Reading) -> Vec<Unreadable> {
         .collect()
 }
 
-/// The report of a host's first reading: nothing to measure from yet.
-pub fn first(now: &Reading) -> ProcessesReport {
+/// The report of a reading with nothing to measure from yet: `not_compared`
+/// says why the reading kept before could not be, when one was kept.
+pub fn first(now: &Reading, not_compared: Option<String>) -> ProcessesReport {
     ProcessesReport {
         state: "first_reading",
+        not_compared,
         interval_seconds: None,
         processes: Vec::new(),
         read: now.processes.len(),
@@ -174,6 +182,7 @@ pub fn compare(earlier: &Reading, now: &Reading) -> Result<ProcessesReport, Stri
     processes.sort_by_key(|process| std::cmp::Reverse(process.spent));
     Ok(ProcessesReport {
         state: "compared",
+        not_compared: None,
         interval_seconds: Some(Duration::from_nanos(interval).as_secs_f64()),
         processes,
         read: now.processes.len(),

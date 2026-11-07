@@ -54,6 +54,9 @@ fn render(host: &str, report: &Value) {
              since this one",
             cell(report.get("read"))
         );
+        if let Some(cause) = report.get("not_compared").and_then(Value::as_str) {
+            println!("not compared with the kept reading: {cause}");
+        }
     } else {
         println!(
             "{host}: over {} s, {} of {} process(es) spent CPU or moved bytes; {} ended in between",

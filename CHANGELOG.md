@@ -42,10 +42,14 @@ The version-bump commit moves them with `stado product changelog --version V`;
   readings, so a long-lived process's converted total went down, the process was taken for a new
   one that took the pid, and two runs seconds apart reported every process as spending its
   lifetime's CPU in the interval and most as ended. The counters are now converted by the
-  kernel's declared `mach_timebase_info`, the same in every reading. Journey
-  `tests/host_processes/journey.rs` reads a busy child through two readings and checks it stays
-  one process with no more CPU than the interval allows. A reading kept by a build that converted
-  another way is not compared with: the first run after the update reports a first reading.
+  kernel's declared `mach_timebase_info`, the same in every reading, read under one
+  `#[allow(deprecated)]` that covers both the libc struct and the function, so the macOS build
+  passes the clippy gate's `-D warnings`. A reading kept by a build that converted another way, or
+  did not record how, is not compared with: the run reports `first_reading` and says why in
+  `not_compared` (printed as `not compared with the kept reading: …`), and the next run compares.
+  Journey `tests/host_processes/journey.rs` reads a busy child through two readings and checks it
+  stays one process with no more CPU than the interval allows, checks that a child sleeping
+  through both readings is neither listed nor ended, and runs over an older build's kept reading.
 
 - **`stado database client` grants a client the addresses its item holds after the database moved onto the fleet:** a consumer on the hosted provider's client library reads `provider`, then a fleet item's `rest_url`, `auth_url` and `realtime_url`, or a hosted item's `url`, with its keys. `client` granted only `rest_url`, `anon_key` and `service_role_key`, so after `stado database migrate` a consumer such as Oko was refused its item's `provider` with Skarbiec's 403 (`consumer not authorized to read item field`) and could not learn that its database had moved. It now grants, by the provider the item records, every one of those fields the item holds, names each missing one with the command that writes it (`rest place`, `auth place`, `adopt`), and refuses an item recording a provider Stado does not know. Journey: `tests/database/client_grant/journey.rs`.
 
