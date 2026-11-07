@@ -50,6 +50,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado space scratch register` refuses an owner PID no process on the host is running, and
+  its own:** it refused only a PID below 1, so a tree registered under a PID no process ever had,
+  or under the registering command's own, was handed to the janitor at once and removed at its
+  next pass as its owner had ended. The refusal names the PID and writes no row. Stado Desktop's
+  Disk screen, its Hosts **Reclaim disk…** sheet, the `registry_cleanup` stage description that
+  `stado space report` prints, the space page and the operations storage page no longer say a
+  pass under 80% deletes nothing:
+  every applied pass takes what nothing uses any more, and the Hosts sheet says which declared
+  stages take on the apply it confirms and which only on a later look. Journey
+  `tests/space_reclaim/scratch.rs`.
+
 - **`stado space reclaim TARGET --apply` reaches the second look on Linux, and says why and how
   to repair it when a look cannot be recorded:** the reclaim program asked for a modification
   time with `stat -f %m PATH || stat -c %Y PATH`; GNU stat reads `-f` as "the file system", so on

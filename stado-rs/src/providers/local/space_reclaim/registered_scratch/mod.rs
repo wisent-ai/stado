@@ -11,13 +11,14 @@
 //!
 //! A creator registers each tree it makes with `stado space scratch
 //! register`, naming itself, why the tree exists, the session that owns it
-//! and that session's process. Above the disk-full rule the janitor removes
-//! every registered tree whose owner process has ended, least recently
-//! changed first, records each removal in its removal record
+//! and that session's process. At every pass, whatever the volume reads,
+//! the janitor removes every registered tree whose owner process has ended,
+//! least recently changed first, records each removal in its removal record
 //! ([`super::candidates::ledger`]), and forgets the rows whose tree is gone.
 //! A tree that was never registered is never taken here: what the person
 //! keeps stays theirs.
 
+mod owner;
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -180,13 +181,7 @@ pub fn register(
                 .to_string(),
         ));
     }
-    if owner_pid <= 0 {
-        return Err(invalid(format!(
-            "--owner-pid {owner_pid} names no process; give the process of the session that \
-             owns the tree (the agent's or job's own process, not a shell that ends with the \
-             command)"
-        )));
-    }
+    owner::check(owner_pid)?;
     let info = std::fs::symlink_metadata(path).map_err(|error| {
         io::Error::new(
             error.kind(),

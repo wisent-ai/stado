@@ -3,7 +3,7 @@
   "reclaim_stages": [
     {
       "name": "registry_cleanup",
-      "description": "The host janitor runs one pass of the disk-full rule: at 80% used it deletes everything every cleaner finds; below it, nothing.",
+      "description": "The host janitor runs one pass of the disk-full rule: every applied pass takes what nothing uses any more (finished jobs' trees and outputs, registered scratch whose owner ended, proven backup twins, release versions nothing names, run evidence, delivered copies and binary backups, browser clones and Weles recordings) and, short of the room the next build needs, package downloads; at 80% used every cleaner takes everything it finds.",
       "roots": [],
       "roots_from": "the janitor's cleaners, each in its own fleet-owned area"
     },

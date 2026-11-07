@@ -10,7 +10,7 @@ use crate::providers::local::space_reclaim::janitor::{ifmt, IFREG};
 /// Empty every owner-written service log under `~/.stado/logs`.
 ///
 /// Runs only in a pass the disk-full rule started: the logs are something
-/// the fleet put on the host, and below the threshold a pass deletes nothing.
+/// the fleet put on the host, and below the threshold no log is emptied.
 /// launchd appends forever to `StandardOutPath` and `StandardErrorPath`, so a
 /// log is emptied in place (`set_len(0)`) and an already-open `O_APPEND`
 /// descriptor keeps writing the same inode. Symlinks, hard links, foreign

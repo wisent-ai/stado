@@ -280,7 +280,7 @@ struct DiskView: View {
             ]
         }
         return [
-            "This host's volume is under 80% used, so the pass reads it and deletes nothing.",
+            "This host's volume is under 80% used. The pass takes what nothing uses any more — finished jobs' trees and outputs, registered scratch whose owner ended, proven backup copies, release versions nothing names, run evidence, delivered copies and binary backups, browser clones and recordings — and, when the next build would not fit, package downloads. Build caches, model files, the compiler cache, harness logs, Docker, local snapshots and service logs wait for 80%.",
         ]
     }
 }

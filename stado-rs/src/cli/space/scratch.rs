@@ -15,7 +15,7 @@ use crate::providers::local::space_reclaim::registered_scratch;
 /// Register, list and forget scratch on this machine.
 #[derive(Subcommand)]
 pub enum SpaceScratchCommands {
-    /// Register PATH as scratch that CREATOR made for an owner session; at the disk-full rule the janitor removes it once that session's process has ended.
+    /// Register PATH as scratch that CREATOR made for an owner session; the janitor's next pass, whatever the volume reads, removes it once that session's process has ended.
     Register {
         path: PathBuf,
         /// Who made it: a product, an agent or a verb.
@@ -29,7 +29,9 @@ pub enum SpaceScratchCommands {
         owner_session: String,
         /// The owner session's process; the tree is kept while it runs. It
         /// is the agent's or job's own process: a tool call's shell ends
-        /// with the command, which would hand the tree over at once.
+        /// with the command, which would hand the tree over at once. A PID
+        /// no process on this host is running, or this command's own, is
+        /// refused.
         #[arg(long)]
         owner_pid: i32,
         #[arg(long)]

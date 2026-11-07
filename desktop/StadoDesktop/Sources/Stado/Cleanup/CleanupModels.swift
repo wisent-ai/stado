@@ -76,7 +76,7 @@ struct CleanupReport: Codable, Sendable {
         case "never_run":
             OutcomePresentation(title: "No cleanup pass yet", detail: "The dashboard has no completed cleanup report.", symbol: "clock.badge.questionmark", severity: .neutral)
         case "healthy_noop":
-            OutcomePresentation(title: "Under the threshold", detail: "The volume is under 80% used, so the pass deleted nothing.", symbol: "checkmark.circle.fill", severity: .healthy)
+            OutcomePresentation(title: "Under the threshold", detail: "The volume is under 80% used; the pass took only what nothing uses any more and, when the next build would not have fit, package downloads.", symbol: "checkmark.circle.fill", severity: .healthy)
         case "reclaimed_below_threshold":
             OutcomePresentation(title: "Back under the threshold", detail: "The pass deleted what the fleet put on the host and the volume is under 80% used again.", symbol: "checkmark.circle.fill", severity: .healthy)
         case "still_full":

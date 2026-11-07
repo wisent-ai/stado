@@ -3,9 +3,9 @@
 //! process has ended goes, one whose owner still runs stays, an unregistered
 //! tree beside them stays, and the removal is in the janitor's record. A
 //! registration outside the home, inside Stado's own tree or `~/.ssh`, of a
-//! link, through a link or `..`, or without its owner's process is refused
-//! naming it. Run on a real APFS volume under the repository's build
-//! directory.
+//! link, through a link or `..`, without its owner's process, or naming a
+//! process that is not running is refused naming it. Run on a real APFS
+//! volume under the repository's build directory.
 
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -37,14 +37,14 @@ fn a_registered_tree_of_an_ended_session_goes_at_the_rule_and_the_rest_stays() {
         fs::write(tree.join("src/main.rs"), vec![b'x'; 64 * 1024]).unwrap();
     }
     let mut owner = live_owner();
-    for (tree, pid, session) in [
-        (&ended, ended_owner(), "agent-session-ended"),
-        (
-            &running,
-            i32::try_from(owner.id()).unwrap(),
-            "agent-session-live",
-        ),
+    // The ended session's owner runs when it registers and ends before the
+    // pass, as an agent's process does.
+    let mut ending = live_owner();
+    for (tree, owner, session) in [
+        (&ended, &ending, "agent-session-ended"),
+        (&running, &owner, "agent-session-live"),
     ] {
+        let pid = owner.id();
         native.success(&[
             "space",
             "scratch",
@@ -60,6 +60,8 @@ fn a_registered_tree_of_an_ended_session_goes_at_the_rule_and_the_rest_stays() {
             &pid.to_string(),
         ]);
     }
+    ending.kill().unwrap();
+    ending.wait().unwrap();
     let listed = native.json(&["space", "scratch", "list", "--json"]);
     native.observe("scratch list", listed.clone());
     assert_eq!(listed["entries"].as_array().unwrap().len(), 2, "{listed}");
@@ -213,6 +215,74 @@ fn a_registration_outside_the_home_inside_stado_or_of_a_link_is_refused() {
         !empty.status.success() && stderr.contains("pass --creator, --purpose and --owner-session"),
         "an empty creator was registered: {stderr}"
     );
+    // An owner that cannot keep the tree: no process id, a process that is
+    // not running, and the registering command itself, named through a
+    // shell that execs the real stado with its own process id.
+    let tree = target.to_str().unwrap();
+    let register = |owner_pid: &str| {
+        native.run(&[
+            "space",
+            "scratch",
+            "register",
+            tree,
+            "--creator",
+            "t",
+            "--purpose",
+            "p",
+            "--owner-session",
+            "s",
+            "--owner-pid",
+            owner_pid,
+        ])
+    };
+    let gone = ended_owner().to_string();
+    let own_args = [
+        "-c",
+        "exec \"$0\" \"$@\" --owner-pid $$",
+        env!("CARGO_BIN_EXE_stado"),
+        "space",
+        "scratch",
+        "register",
+        tree,
+        "--creator",
+        "t",
+        "--purpose",
+        "p",
+        "--owner-session",
+        "s",
+    ];
+    let own = Command::new("/bin/sh")
+        .args(own_args)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").expect("PATH is set"))
+        .env("HOME", &native.home)
+        .env("STADO_CONFIG", native.home.join(".stado/config.json"))
+        .output()
+        .expect("the shell runs the real stado");
+    native.record("/bin/sh", &own_args, &own);
+    for (output, expected) in [
+        (
+            register("0"),
+            "--owner-pid 0 is not a process id".to_string(),
+        ),
+        (
+            register(&gone),
+            format!("--owner-pid {gone} names no running process on this host"),
+        ),
+        (
+            own,
+            "is this command's own process, which ends when it returns".to_string(),
+        ),
+    ] {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        native.observe("owner refused", serde_json::json!({"stderr": stderr}));
+        assert!(
+            !output.status.success() && stderr.contains(&expected),
+            "an owner that cannot keep the tree was not refused with {expected:?}: {stderr}"
+        );
+    }
+    let listed = native.json(&["space", "scratch", "list", "--json"]);
+    assert_eq!(listed["entries"], serde_json::json!([]), "{listed}");
     let register = native.home.join(".stado/space/scratch.json");
     fs::create_dir_all(register.parent().unwrap()).unwrap();
     fs::write(&register, b"not a register").unwrap();

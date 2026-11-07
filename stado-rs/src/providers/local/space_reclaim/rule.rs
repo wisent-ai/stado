@@ -3,9 +3,11 @@
 //! When the volume holding the agent's home is at least [`DISK_FULL_PERCENT`]
 //! used, a pass deletes everything the fleet put on the host — every
 //! candidate of every cleaner in [`CLEANERS`], with no age, count, byte or
-//! scan limit. Below it a pass deletes nothing. Nothing about cleanup is
-//! declared per host: the fleet policy alone supplies the threshold and
-//! the cleaner set, rather than per-target ages, caps or watermarks.
+//! scan limit. Below it a pass takes only what nothing uses any more, and
+//! package downloads when the next build would not fit. Nothing about
+//! cleanup is declared per host: the fleet policy alone supplies the
+//! threshold and the cleaner set, rather than per-target ages, caps or
+//! watermarks.
 //!
 //! What a pass keeps is what is not the fleet's to take: `~/.ssh` and
 //! anything outside a cleaner's fleet-owned area (the user's data), a backup
