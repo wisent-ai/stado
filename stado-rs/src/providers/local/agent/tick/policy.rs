@@ -1,6 +1,6 @@
-//! The canonical registry target, the disk-full rule's verdict on the volume
-//! the fleet writes to, and the two things a tick does once both are known:
-//! republish, and flush staging.
+//! The canonical registry target, the volume the fleet writes to against the
+//! room work needs there, and the two things a tick does once both are
+//! known: republish, and flush staging.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -18,12 +18,13 @@ use super::super::capacity::snapshot::{measured_capacity, publish_branch};
 use super::super::{lookup_self_auto, Step};
 
 /// What one tick learns about the disk it admits against: the canonical
-/// registry target, the free bytes measured on the fleet's volume, and
-/// whether that volume is at the disk-full threshold.
-pub(super) type DiskPolicy = (Option<ComputeTarget>, Option<i64>, bool);
+/// registry target, and the sentence a refusal carries when the volume's free
+/// bytes do not cover the room work here needs (`None` when they do).
+pub(super) type DiskPolicy = (Option<ComputeTarget>, Option<String>);
 
 /// Read the disk this tick admits against, and report
-/// `(registry target, free bytes, pressure active)`.
+/// `(registry target, room short)`. `janitor_report` is the janitor's latest
+/// completed pass report, whose margin is part of the room.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn disk_policy(
     store: &JobStorage,
@@ -33,8 +34,8 @@ pub(super) async fn disk_policy(
     fleet_staging: &Option<String>,
     total_vram_gb: i64,
     slots: &[ActiveSlot],
+    janitor_report: &Value,
     agent_diag: &mut Map<String, Value>,
-    disk_low_bytes: &mut Option<i64>,
     last_cap: &mut Option<CapacitySnapshot>,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<Step<DiskPolicy>> {
@@ -84,14 +85,19 @@ pub(super) async fn disk_policy(
         }
     }
     // The volume the fleet writes to: the declared work root, or the home.
-    // The disk-full rule judges it: at 80% used the janitor deletes
-    // everything the fleet put here, and this agent claims no new work while
-    // that is so, because the jobs themselves are what consume the disk.
+    // Two decisions read it. The disk-full rule is the janitor's: at 80% used
+    // it deletes everything the fleet put here, and this agent publishes that
+    // the rule holds (`disk_pressure_active`). Whether work fits is
+    // admission's: this agent claims work while the free bytes are above the
+    // room work here needs (the largest release scratch recorded on this host
+    // plus the janitor's margin), at any percentage used, and otherwise
+    // refuses with `disk_room_short` naming both figures. A percentage of a
+    // workstation's disk says nothing about whether the next job fits in the
+    // hundreds of GiB it may still have free.
     //
-    // Pressure does not suppress the BROADCAST, only claiming: a host which
-    // stops claiming must still say why, so capacity is published every loop
-    // with `disk_pressure_active` in the diagnostics, and `host gates`
-    // reports the numbers.
+    // Neither suppresses the BROADCAST, only claiming: a host which stops
+    // claiming must still say why, so capacity is published every loop with
+    // `disk_room` in the diagnostics, and `host gates` reports the numbers.
     let volume = crate::providers::local::work_base::measured_volume();
     // The cause is published with the capacity diagnostics, which carry no
     // local path, so it names the fleet volume rather than where it is.
@@ -102,9 +108,6 @@ pub(super) async fn disk_policy(
             Some(format!("the fleet volume could not be read: {error}")),
         ),
     };
-    let current_free_bytes = reading.map(|reading| reading.free_bytes);
-    *disk_low_bytes =
-        reading.map(|reading| space_reclaim::rule::reserve_bytes(reading.total_bytes));
     let pressure_active = reading.is_some_and(|reading| reading.full());
     // The volume as measured, null with the cause beside it when it was not,
     // so a reader judges a build's need against the bytes themselves rather
@@ -129,6 +132,30 @@ pub(super) async fn disk_policy(
         Value::from(reading.is_none()),
     );
     agent_diag.insert("disk_pressure_active".into(), Value::from(pressure_active));
+    // The room, judged once the volume is read: what the free bytes are
+    // measured against, published whole so every reader states the same two
+    // figures, or why it could not be judged.
+    let room_short = match reading {
+        Some(reading) => {
+            let room = space_reclaim::margin::Room::judge(reading.free_bytes, janitor_report);
+            agent_diag.insert(
+                space_reclaim::margin::ROOM_KEY.into(),
+                match &room {
+                    Ok(room) => room.to_json(),
+                    Err(cause) => serde_json::json!({ "unread": cause }),
+                },
+            );
+            space_reclaim::margin::admission(&room, reading)
+        }
+        None => {
+            agent_diag.remove(space_reclaim::margin::ROOM_KEY);
+            None
+        }
+    };
+    agent_diag.insert(
+        crate::deploy::host_gates::DISK_ROOM_SHORT.into(),
+        Value::from(room_short.is_some()),
+    );
     if reading.is_none() {
         let snapshot = measured_capacity(
             slots,
@@ -176,9 +203,5 @@ pub(super) async fn disk_policy(
             spawn_fleet_flush(Path::new(fleet_staging), log_fn).await?;
         }
     }
-    Ok(Step::Go((
-        registry_target,
-        current_free_bytes,
-        pressure_active,
-    )))
+    Ok(Step::Go((registry_target, room_short)))
 }

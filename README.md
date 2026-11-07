@@ -275,9 +275,9 @@ operator pages carry each contract in full:
 
 - [Operations](https://stado.wisent.com/docs/operations) — host health
   publication, service reconciliation, storage-root handoff and disk cleanup;
-- [Host space](https://stado.wisent.com/docs/capabilities/space) — the one
-  disk-full rule: at 80% used a host's janitor deletes everything the fleet
-  put there, and nothing about cleanup is declared per host;
+- [Host space](https://stado.wisent.com/docs/capabilities/space) — at 80% used
+  the janitor deletes everything the fleet put there; the host takes work while
+  its free bytes exceed its largest release scratch plus the janitor's margin;
 - [Release and compatibility](https://stado.wisent.com/docs/release) — one
   version, one build, immutable publication, promotion and rollback;
 - [Runbook](https://stado.wisent.com/docs/runbook) and

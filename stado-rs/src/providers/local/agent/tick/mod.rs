@@ -84,9 +84,6 @@ pub async fn run_agent(
     let mut placement_policy_state: Option<PlacementPolicyState> = None;
     // The registry's ComputeTarget.pinned_only, refreshed per poll.
     let mut pinned_only = false;
-    // The free bytes the disk-full rule keeps: a fifth of the fleet's volume,
-    // re-read every tick in `policy::disk_policy`.
-    let mut disk_low_bytes: Option<i64> = None;
     // One tick at once, then one every `poll`; a tick that started a job is
     // followed at once by the next.
     let mut schedule = tokio::time::interval(poll);
@@ -110,7 +107,10 @@ pub async fn run_agent(
             .await,
             log_fn
         );
-        let (registry_target, current_free_bytes, pressure_active) = tick_step!(
+        // The janitor's latest completed pass, read without waiting: its
+        // margin is part of the room work here needs.
+        let janitor_report = janitor_reports.margin();
+        let (registry_target, room_short) = tick_step!(
             heartbeat,
             policy::disk_policy(
                 &store,
@@ -120,8 +120,8 @@ pub async fn run_agent(
                 &fleet_staging,
                 total_vram_gb,
                 &slots,
+                &janitor_report,
                 &mut agent_diag,
-                &mut disk_low_bytes,
                 &mut last_cap,
                 log_fn,
             )
@@ -201,7 +201,7 @@ pub async fn run_agent(
                 total_vram_gb,
                 free_vram_gb,
                 idle_shutdown,
-                pressure_active,
+                room_short.as_deref(),
                 available_accelerators,
                 &mut slots,
                 &mut agent_diag,
@@ -221,9 +221,7 @@ pub async fn run_agent(
                 total_vram_gb,
                 free_vram_gb,
                 pinned_only,
-                pressure_active,
-                current_free_bytes,
-                disk_low_bytes,
+                room_short.as_deref(),
                 &slots,
                 &mut agent_diag,
                 log_fn,

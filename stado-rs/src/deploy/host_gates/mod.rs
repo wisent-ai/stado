@@ -2,9 +2,11 @@
 //! claiming nothing".
 //!
 //! Admission depends on the agent's observed state, not merely on a running
-//! process or a recent heartbeat. For example, a volume at the disk-full
-//! threshold makes the agent publish `accepting_jobs: false` and deliberately
-//! claim no work. This command exposes that decision together with its inputs.
+//! process or a recent heartbeat. For example, a volume whose free bytes do
+//! not cover the room work there needs makes the agent publish
+//! `accepting_jobs: false` with `disk_room_short` and deliberately claim no
+//! ordinary work. This command exposes that decision together with its
+//! inputs.
 //!
 //! Diagnostic sources, joined here and re-derived nowhere:
 //!
@@ -45,7 +47,7 @@ pub use verdict::{assemble, gates_section, to_report, Presence};
 pub use words::{
     AGENT_DECLARED_NOT_LOADED, AGENT_STORE_DEVICE_ONLY, AGENT_STORE_UNKNOWN,
     AGENT_STORE_UNREADABLE, CAPACITY_PUBLICATION_STALE, CLEANUP_IN_PROGRESS,
-    DISK_ATTACHED_UNMOUNTED, DISK_PRESSURE_ACTIVE, DISK_PRESSURE_UNRESOLVED,
+    DISK_ATTACHED_UNMOUNTED, DISK_PRESSURE_ACTIVE, DISK_PRESSURE_UNRESOLVED, DISK_ROOM_SHORT,
     LOCAL_SNAPSHOTS_UNRECLAIMABLE, NO_CAPACITY_PUBLICATION, PINNED_ONLY, QUEUE_PAUSED,
     RELEASE_SCRATCH_SHORT, SPACE_RECLAIM_LOCK_HELD, SPACE_RECLAIM_STALLED, SWAP_CEILING_EXCEEDED,
 };

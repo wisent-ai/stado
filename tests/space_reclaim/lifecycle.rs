@@ -19,6 +19,9 @@ mod product_hold;
 mod retirement;
 #[path = "guards/rollback_target.rs"]
 mod rollback_target;
+// Admission by room beside the rule, on the same isolated volume.
+#[path = "../agent_capacity/room_admission.rs"]
+mod room_admission;
 mod scratch;
 #[path = "workdirs/session_checkouts.rs"]
 mod session_checkouts;

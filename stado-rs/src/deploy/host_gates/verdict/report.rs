@@ -64,6 +64,11 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             "full": gates.used_percent.map(|used| {
                 used >= f64::from(crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT)
             }),
+            // Admission's measure, as the agent judged it: the free bytes,
+            // the room work there needs and where each part of it was
+            // measured. `full` above is the janitor's rule; this decides
+            // whether work is taken. Null without a live publication.
+            "room": gates.room,
             // Snapshot space is reported separately: on a Mac deleted bytes
             // stay pinned until local Time Machine snapshots are thinned.
             // Null where unsupported.
@@ -193,6 +198,8 @@ pub fn gates_section(gates: &HostGates) -> Value {
         "free_gb": gates.free_gb,
         "used_percent": gates.used_percent,
         "headroom_gb": gates.headroom_gb,
+        // What the free bytes are judged against before work is taken.
+        "room": gates.room,
         // The memory readings ride here too: a release verdict is where this
         // fleet actually looks, and a builder that stops publishing is most
         // often one that has run out of memory.

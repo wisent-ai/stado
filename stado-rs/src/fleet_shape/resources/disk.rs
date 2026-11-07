@@ -6,7 +6,8 @@ use crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT;
 use crate::targets::ComputeTarget;
 
 /// A finding when a host's volume is at the disk-full threshold: its janitor
-/// is deleting everything the fleet put there and it refuses work meanwhile.
+/// is deleting everything the fleet put there. Whether the host still takes
+/// work is its room, which `stado host gates` reports.
 pub(in crate::fleet_shape) async fn disk_headroom(
     target: &ComputeTarget,
     runner: &Runner,
@@ -47,8 +48,9 @@ pub(in crate::fleet_shape) async fn disk_headroom(
             subject: target.name.clone(),
             declared: format!("the volume stays under {DISK_FULL_PERCENT}% used"),
             observed: format!(
-                "{:.1}% used, so the janitor deletes everything the fleet put there and the host refuses work",
-                volume.used_percent()
+                "{:.1}% used, so the janitor deletes everything the fleet put there; whether the host still takes work is its room in `stado host gates {}`",
+                volume.used_percent(),
+                target.name
             ),
             command: format!("stado space report {}", target.name),
         });

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
+use crate::deploy::host_gates::DISK_ROOM_SHORT;
 use crate::providers::local::agent::capacity::snapshot::{measured_capacity, publish_branch};
 use crate::providers::local::agent::{maybe_yield_for_priority, Step};
 use crate::providers::local::self_terminate;
@@ -26,7 +27,7 @@ pub(crate) async fn publish_and_admit(
     total_vram_gb: i64,
     free_vram_gb: i64,
     idle_shutdown: bool,
-    pressure_active: bool,
+    room_short: Option<&str>,
     available_accelerators: BTreeMap<String, i64>,
     slots: &mut Vec<ActiveSlot>,
     agent_diag: &mut Map<String, Value>,
@@ -42,20 +43,11 @@ pub(crate) async fn publish_and_admit(
     // tick with the store's error.
     let queue_control = control::read(store).await?;
     agent_diag.insert("queue_paused".into(), Value::from(queue_control.paused));
-    // Which build is answering for this host. The broadcast carried a
-    // capacity verdict, a claim-loop census and a disk report and never the
-    // version that produced them, so after `host release` installed 0.9.5
-    // and `release version show` reported `installed 0.9.5, in-sync`, there was
-    // no way to tell whether the process still refusing every pinned job
-    // was the new binary or one of the older ones the same host was running
-    // — and the question had to be answered by reading process ages out of
-    // `ps`, on a machine whose pid counter had wrapped.
-    // The version alone did not finish the job. One version string can name
-    // several different trees of this crate, and a host publishing only
-    // `agent_version` still leaves "which build is this" to be
-    // answered by reading symbols out of the binary. The identity carries
-    // the revision, and the revision is published beside it so a reader
-    // does not have to parse the sentence to get at it.
+    // Which build is answering for this host: without it, whether the process
+    // still refusing pinned jobs was the newly installed binary or an older
+    // one could only be read from process ages in `ps`. One version string can
+    // name several trees of this crate, so the identity carries the revision,
+    // also published on its own so a reader need not parse the sentence.
     agent_diag.insert(
         "agent_version".into(),
         Value::from(crate::binary::build_identity::BUILD_IDENTITY),
@@ -154,14 +146,14 @@ pub(crate) async fn publish_and_admit(
         Some("demand_response")
     } else if drain.is_some() {
         Some("drain_requested")
-    } else if pressure_active {
-        Some("disk_pressure_active")
+    } else if room_short.is_some() {
+        Some(DISK_ROOM_SHORT)
     } else if swap_full.is_some() {
         Some(crate::deploy::host_gates::SWAP_CEILING_EXCEEDED)
     } else {
         lock_reason
     };
-    let snapshot = measured_capacity(
+    let mut snapshot = measured_capacity(
         slots,
         policy_reason.is_none(),
         policy_reason,
@@ -170,6 +162,11 @@ pub(crate) async fn publish_and_admit(
         total_vram_gb,
         agent_diag.clone(),
     );
+    // The room refusal names both figures, in the sentence every reader repeats.
+    if let (Some(DISK_ROOM_SHORT), Some(detail)) = (policy_reason, room_short) {
+        let detail = Value::from(detail);
+        snapshot.diag.insert("admission_detail".into(), detail);
+    }
     let accepting_jobs = snapshot.accepting_jobs;
     publish_branch(
         store,
@@ -258,7 +255,7 @@ pub(crate) async fn publish_and_admit(
         ));
         return Ok(Step::Done);
     }
-    if !accepting_jobs && !pressure_active {
+    if !accepting_jobs && room_short.is_none() {
         match last_cap
             .as_ref()
             .and_then(|capacity| capacity.diag.get("admission_reason"))
@@ -274,16 +271,14 @@ pub(crate) async fn publish_and_admit(
         }
         return Ok(Step::Done);
     }
-    // Disk pressure is enforced after the assigned queue is read. One exact
-    // signed release-delivery command remains admissible so Stado can repair
-    // the agent binary that owns this gate; every ordinary workload remains
-    // blocked below the watermark.
+    // Short of room, the claim path admits only a signed Stado release
+    // delivery (which repairs this gate's agent) and pinned in-place jobs.
 
     // Cooperative yield: if a higher-priority queued job can't fit, evict
     // just enough lower-priority yieldable slots to make room. Runs BEFORE
     // the full-GPU early-return below because that is exactly when it's
     // needed. Inert (single any() over slots) unless a yieldable job runs.
-    if !pressure_active
+    if room_short.is_none()
         && !maybe_yield_for_priority(
             store,
             sizing,

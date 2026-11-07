@@ -43,6 +43,8 @@ struct NetRoom {
     held: Option<u64>,
     accepting: bool,
     reason: Option<String>,
+    /// The agent's sentence behind `reason`, when it published one.
+    detail: Option<String>,
 }
 
 /// The room `publication` states, or the refusal naming the field it does
@@ -75,6 +77,9 @@ fn net_room(
         held: payload["running_workloads"].as_u64(),
         accepting,
         reason: payload["diag"]["admission_reason"]
+            .as_str()
+            .map(str::to_string),
+        detail: payload["diag"]["admission_detail"]
             .as_str()
             .map(str::to_string),
     })
@@ -190,8 +195,11 @@ fn refusal(
         Some(reason) if !room.accepting && !reason.is_empty() => reason,
         _ => return None,
     };
+    // `disk_pressure_active` is the word an agent from before the room was
+    // judged refuses with; a current one says `disk_room_short`.
     let reason_kind = match reason {
-        "disk_pressure_active"
+        crate::deploy::host_gates::DISK_ROOM_SHORT
+        | "disk_pressure_active"
         | "disk_unreadable"
         | "disk_gate_refused"
         | "cleanup_in_progress"
@@ -199,10 +207,14 @@ fn refusal(
         "reservations_exhausted" => UnmetReason::ReservationsExhausted,
         _ => UnmetReason::CapacityExhausted,
     };
+    let detail = match room.detail.as_deref() {
+        Some(detail) => format!(": {detail}"),
+        None => String::new(),
+    };
     Some(ReservationRefusal {
         target: target.name.clone(),
         sentence: format!(
-            "{} is not accepting placements ({reason}); pick another host with --target or wait for it to clear",
+            "{} is not accepting placements ({reason}{detail}); pick another host with --target or wait for it to clear",
             target.name
         ),
         reason: reason_kind,

@@ -61,6 +61,18 @@ pub(super) async fn host_blockers(
     if fresh && diag_flag(payload, host_gates::DISK_PRESSURE_UNRESOLVED) == Some(true) {
         blockers.push(Blocker::bare(host_gates::DISK_PRESSURE_UNRESOLVED));
     }
+    // Short of the room work there needs, in the agent's own sentence naming
+    // the free bytes and the need.
+    if fresh && diag_flag(payload, host_gates::DISK_ROOM_SHORT) == Some(true) {
+        let detail = payload
+            .and_then(|payload| payload.get("diag"))
+            .and_then(|diag| diag.get("admission_detail"))
+            .and_then(Value::as_str);
+        blockers.push(match detail {
+            Some(detail) => Blocker::new(host_gates::DISK_ROOM_SHORT, detail),
+            None => Blocker::bare(host_gates::DISK_ROOM_SHORT),
+        });
+    }
 
     // Pinned-only is a blocker only when the queue holds nothing addressed to
     // this host. A pinned host with a matching queued job is a host that

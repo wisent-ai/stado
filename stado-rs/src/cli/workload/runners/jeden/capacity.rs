@@ -86,8 +86,18 @@ pub(super) fn admission_refusal(target: &ComputeTarget, capacity: &[Value]) -> O
                 Some(reason) => reason.to_string(),
                 None => "its agent published no reason".to_string(),
             };
+            // The agent's sentence beside its word: a room refusal names the
+            // free bytes and the room work there needs.
+            let detail = match live
+                .get("diag")
+                .and_then(|diag| diag.get("admission_detail"))
+                .and_then(Value::as_str)
+            {
+                Some(detail) => format!(": {detail}"),
+                None => String::new(),
+            };
             Some(format!(
-                "{} is not accepting placements ({reason})",
+                "{} is not accepting placements ({reason}{detail})",
                 target.name
             ))
         }

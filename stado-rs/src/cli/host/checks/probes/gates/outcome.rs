@@ -1,4 +1,4 @@
-//! What the answer means: the exit status, and the two clauses that need a
+//! What the answer means: the exit status, and the clauses that need a
 //! sentence rather than a number.
 
 use crate::cli::CmdError;
@@ -10,6 +10,23 @@ pub(super) fn gigabytes(value: Option<f64>) -> String {
     match value {
         Some(gb) => format!("{gb:.1} GiB"),
         None => "not observed".to_string(),
+    }
+}
+
+/// The room the agent judged, in the sentence its refusal carries: whether
+/// work fits, both figures and where each part of the need was measured, or
+/// why there is no room to show.
+pub(super) fn room_line(gates: &crate::deploy::host_gates::HostGates) -> String {
+    use crate::providers::local::space_reclaim::margin::Room;
+    match gates.room.as_ref().map(Room::from_json) {
+        Some(Ok(room)) if room.fits() => format!("work fits: {}", room.sentence()),
+        Some(Ok(room)) => format!(
+            "{}: {}",
+            crate::deploy::host_gates::DISK_ROOM_SHORT,
+            room.sentence()
+        ),
+        Some(Err(cause)) => format!("not judged by the agent: {cause}"),
+        None => "not published: no live capacity publication carries the agent's room".to_string(),
     }
 }
 

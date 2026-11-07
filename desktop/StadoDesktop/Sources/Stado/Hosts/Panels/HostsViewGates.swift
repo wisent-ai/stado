@@ -64,7 +64,14 @@ extension HostsView {
             WisentField(
                 label: "Free space",
                 value: diskDescription(gates.disk),
-                tone: gates.disk?.full == true ? .danger : .neutral
+                tone: gates.disk?.roomShort == true ? .danger : .neutral
+            )
+            // Admission's measure beside the janitor's rule: the rule says
+            // what the janitor deletes, the room whether work is taken.
+            WisentField(
+                label: "Room for work",
+                value: gates.disk?.roomSummary ?? "Volume not read",
+                tone: gates.disk?.roomShort == true ? .danger : .neutral
             )
             WisentField(
                 label: "Disk-full rule",

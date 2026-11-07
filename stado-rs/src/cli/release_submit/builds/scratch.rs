@@ -2,12 +2,14 @@
 //! one candidate builder has room for that much again.
 //!
 //! A build pinned to a host with too little room can compile for half an hour
-//! and die writing rustc metadata with no space left — or take the volume to
-//! the disk-full threshold, where the janitor deletes everything the fleet put
-//! there, the build's own cache included. The builder measures its scratch
-//! tree before removing it and leaves [`ScratchReceipt`] beside its receipt,
-//! [`super::history`] finds the newest one among the product's own builds, and
-//! this module turns that record into a placement verdict.
+//! and die writing rustc metadata with no space left — or fill the volume
+//! until the janitor deletes everything the fleet put there, the build's own
+//! cache included. The builder measures its scratch tree before removing it
+//! and leaves [`ScratchReceipt`] beside its receipt, [`super::history`] finds
+//! the newest one among the product's own builds, and this module turns that
+//! record into a placement verdict: the host's free bytes against that
+//! scratch plus the janitor's margin the host publishes, the same measure its
+//! agent admits work by.
 
 use serde_json::Value;
 
@@ -46,18 +48,43 @@ pub(crate) fn published_free_bytes(publication: &Value) -> Option<i64> {
 
 /// The reason a host cannot take this build, or `None` when it can.
 ///
-/// The build must fit in the headroom the disk-full rule leaves: a build that
-/// takes the volume past the threshold has the janitor delete its own cache
-/// under it. A publication that states no volume gets no verdict; silence is
-/// not a refusal.
+/// The build fits when the host's free bytes are above its scratch plus the
+/// janitor's margin the host published with its room, whatever percentage of
+/// the volume is used. A host whose agent publishes no room is judged as it
+/// was before the room was measured: by the headroom under the janitor's
+/// rule. A publication that states no volume gets no verdict; silence is not
+/// a refusal.
 pub(crate) fn scratch_verdict(publication: &Value, evidence: &ScratchReceipt) -> Option<String> {
+    use crate::providers::local::space_reclaim::{margin::Room, rule};
     let volume = published_volume(publication)?;
-    let headroom = crate::providers::local::space_reclaim::rule::headroom_bytes(
-        volume.total_bytes,
-        volume.free_bytes,
-    );
     // A need past i64 does not fit any volume a publication can state.
-    let fits = i64::try_from(evidence.bytes).is_ok_and(|need| headroom >= need);
+    let scratch = i64::try_from(evidence.bytes);
+    let (fits, against) = match Room::published(&publication["diag"]) {
+        Ok(room) => (
+            scratch
+                .as_ref()
+                .is_ok_and(|bytes| volume.free_bytes > bytes.saturating_add(room.margin_bytes)),
+            format!(
+                "{:.1} GiB needed: this build's scratch and the janitor's margin of {:.1} GiB \
+                 ({})",
+                gib(evidence.bytes as f64 + room.margin_bytes as f64),
+                gib(room.margin_bytes as f64),
+                room.margin_source
+            ),
+        ),
+        Err(cause) => {
+            let headroom = rule::headroom_bytes(volume.total_bytes, volume.free_bytes);
+            (
+                scratch.as_ref().is_ok_and(|bytes| headroom >= *bytes),
+                format!(
+                    "{:.1} GiB before the janitor's {}% rule, since the host publishes no room \
+                     ({cause})",
+                    gib(headroom as f64),
+                    rule::DISK_FULL_PERCENT
+                ),
+            )
+        }
+    };
     if fits {
         return None;
     }
@@ -78,12 +105,9 @@ pub(crate) fn scratch_verdict(publication: &Value, evidence: &ScratchReceipt) ->
         )
     };
     Some(format!(
-        "{RELEASE_SCRATCH_SHORT} ({:.1} GiB free, {:.1} GiB before the {}% disk-full threshold; \
-         the last {} build of {} wrote {history}; `stado space report <host>` shows what holds \
-         the volume)",
+        "{RELEASE_SCRATCH_SHORT} ({:.1} GiB free, {against}; the last {} build of {} wrote \
+         {history}; `stado space report <host>` shows what holds the volume)",
         gib(volume.free_bytes as f64),
-        gib(headroom as f64),
-        crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT,
         evidence.platform,
         evidence.product,
     ))

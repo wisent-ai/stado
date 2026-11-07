@@ -10,7 +10,7 @@ use super::super::payload::diag_flag;
 use super::janitor::JanitorHealth;
 use crate::deploy::host_disk;
 use crate::deploy::host_gates::words::DISK_PRESSURE_UNRESOLVED;
-use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
+use crate::deploy::host_gates::{DISK_PRESSURE_ACTIVE, DISK_ROOM_SHORT};
 use crate::providers::local::host_memory::constants::GIB;
 use crate::providers::local::space_reclaim::rule::VolumeReading;
 use crate::queue::capacity::Publication;
@@ -26,8 +26,18 @@ pub(super) struct Facts {
     /// The agent cannot read its volume, so it claims nothing.
     pub disk_pressure_unresolved: bool,
     /// The volume is at the disk-full threshold, published by the agent while
-    /// its row is live, measured here otherwise.
+    /// its row is live, measured here otherwise: the janitor's rule, which
+    /// decides deletion and is reported as a note.
     pub disk_full: bool,
+    /// The agent refuses work because the volume's free bytes do not cover
+    /// the room work there needs, as its live publication says.
+    pub room_short: bool,
+    /// The agent's live publication carries no room verdict and refuses at
+    /// the rule: a Stado from before admission judged the room, whose own
+    /// word for the refusal is [`DISK_PRESSURE_ACTIVE`].
+    pub pressure_refuses: bool,
+    /// The room the agent judged (`diag.disk_room`) while its row is live.
+    pub room: Option<Value>,
     pub pressure_source: Option<&'static str>,
     /// Why this command's own disk reading gave no volume to judge by, when
     /// it gave none: no `df` row, or a field that is not a block count.
@@ -81,6 +91,18 @@ impl Facts {
                 None => (false, None),
             },
         };
+        // Admission's own verdict, while the row is live: once it is stale
+        // the agent is not talking, and the need it judged the free bytes
+        // against is not something this command can measure from outside.
+        let published_short = diag_flag(payload, DISK_ROOM_SHORT);
+        let room_short = publication_current && published_short == Some(true);
+        let pressure_refuses =
+            publication_current && published_short.is_none() && published_full == Some(true);
+        let room = payload
+            .filter(|_| publication_current)
+            .and_then(|payload| payload.get("diag"))
+            .and_then(|diag| diag.get(crate::providers::local::space_reclaim::margin::ROOM_KEY))
+            .cloned();
 
         // How long since a pass last completed, reported beside the verdict;
         // the verdict itself is the janitor's own promise, read in
@@ -100,6 +122,9 @@ impl Facts {
             publication_current,
             disk_pressure_unresolved,
             disk_full,
+            room_short,
+            pressure_refuses,
+            room,
             pressure_source,
             local_disk_unread,
             cleanup_success_age_seconds,

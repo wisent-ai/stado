@@ -74,6 +74,7 @@ pub(super) fn print_report(gates: &HostGates) {
         gigabytes(gates.headroom_gb),
         crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT,
     );
+    println!("room:     {}", super::outcome::room_line(gates));
     // Beside the disk line and never inside it: the disk and memory refuse
     // work for different reasons and are repaired differently.
     println!("memory:   {}", observed(gates.memory.line()));

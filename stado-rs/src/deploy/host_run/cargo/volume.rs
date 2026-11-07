@@ -8,8 +8,15 @@
 //! work-root volume. The volume measured is the one holding the build cache,
 //! read with `df` at its nearest existing directory, so a cache not created
 //! yet is measured where it will be created.
+//!
+//! Its free bytes are judged against the room work on that host needs, as
+//! the host's agent published it ([`Room`]): the largest release scratch
+//! recorded there plus the janitor's margin. The janitor's 80% rule decides
+//! what it deletes, not whether a compile fits; it decides admission here only
+//! when the host publishes no room to judge by.
 
 use crate::deploy::{host_channel, DeployError, Runner};
+use crate::providers::local::space_reclaim::margin::Room;
 use crate::targets::ComputeTarget;
 
 /// What separates the fields of the one line the measurement prints.
@@ -23,24 +30,76 @@ pub(super) struct Measured {
     path: String,
 }
 
-/// Refuse a compile on `target` when the volume its build cache is on is at
-/// or past the disk-full threshold, naming the volume and its mount; the
-/// reading admitted is returned, its free bytes the receipt's `before`.
+/// Refuse a compile on `target` when the free bytes of the volume its build
+/// cache is on do not cover the room work there needs, naming both figures,
+/// the volume and its mount; the reading admitted is returned, its free
+/// bytes the receipt's `before`. Where the host publishes no room, the volume
+/// at or past the janitor's threshold is refused, saying why the room could
+/// not be judged.
 pub(super) async fn admit(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<Measured, DeployError> {
     let measured = measure(target, runner).await?;
+    // The agent's room with this volume's free bytes as just measured.
+    let room = published_room(target).await.and_then(|room| {
+        i64::try_from(measured.free_bytes)
+            .map(|free_bytes| Room { free_bytes, ..room })
+            .map_err(|error| {
+                format!(
+                    "its build cache's volume states {} free bytes: {error}",
+                    measured.free_bytes
+                )
+            })
+    });
     let threshold = crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT;
-    if measured.used_percent >= f64::from(threshold) {
-        return Err(DeployError::unreachable(format!(
-            "{}: the volume at {} holding its build cache ({}) is {:.1}% used, at the \
-             {threshold}% disk-full threshold; a compile would fill it while its janitor deletes \
-             everything the fleet put there (`stado space report {}`)",
-            target.name, measured.mount, measured.path, measured.used_percent, target.name
-        )));
+    match room {
+        Ok(room) if room.fits() => Ok(measured),
+        Ok(room) => Err(DeployError::unreachable(format!(
+            "{}: {} at {} holding its build cache ({}): {}; a compile there would run out of \
+             disk (`stado host gates {}` names what holds the room)",
+            target.name,
+            crate::deploy::host_gates::DISK_ROOM_SHORT,
+            measured.mount,
+            measured.path,
+            room.sentence(),
+            target.name
+        ))),
+        Err(cause) if measured.used_percent >= f64::from(threshold) => {
+            Err(DeployError::unreachable(format!(
+                "{}: the volume at {} holding its build cache ({}) is {:.1}% used, at the \
+                 {threshold}% disk-full threshold, and the room work there needs could not be \
+                 judged ({cause}); a compile would fill it while its janitor deletes everything \
+                 the fleet put there (`stado space report {}`)",
+                target.name, measured.mount, measured.path, measured.used_percent, target.name
+            )))
+        }
+        Err(_) => Ok(measured),
     }
-    Ok(measured)
+}
+
+/// The room `target`'s agent published in its live capacity publication, or
+/// why there is none to judge by: the registry, the fleet store or the
+/// publications unreadable, no publication, a stale one, or one from a Stado
+/// that judges no room.
+async fn published_room(target: &ComputeTarget) -> Result<Room, String> {
+    let (registry, _notice) = crate::targets::fetch_registry_or_last_good()
+        .await
+        .map_err(|error| format!("the registry cannot be read: {error}"))?;
+    let store = crate::queue::submit::default_store("")
+        .await
+        .map_err(|error| format!("the fleet store cannot be opened: {error}"))?;
+    let publications = crate::queue::capacity::read_publications(&store)
+        .await
+        .map_err(|error| format!("the hosts' capacity publications cannot be read: {error}"))?;
+    let publication = crate::queue::capacity::publication_of(&registry, target, &publications)
+        .map_err(|error| format!("its capacity publication cannot be matched: {error}"))?
+        .map(|(_, publication)| publication)
+        .ok_or_else(|| "it publishes no capacity".to_string())?;
+    if publication.stale(chrono::Utc::now()) {
+        return Err("its capacity publication is stale".to_string());
+    }
+    Room::published(&publication.payload["diag"])
 }
 
 /// Read the volume holding `target`'s build cache.

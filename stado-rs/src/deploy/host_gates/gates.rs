@@ -50,6 +50,12 @@ pub struct HostGates {
     /// GiB that may still be written before the volume reaches the rule's
     /// threshold; negative once it has.
     pub headroom_gb: Option<f64>,
+    /// The room the host's agent judged on its volume (`diag.disk_room` of a
+    /// live publication): free bytes, the room work there needs and where each
+    /// part of it was measured, or the cause it could not be judged. `None`
+    /// when no live publication carries one. Admission's measure, beside the
+    /// rule's percentage above, which decides only what the janitor deletes.
+    pub room: Option<serde_json::Value>,
     pub published_at: Option<String>,
     pub age_seconds: Option<i64>,
     /// The worker's current admission decision and the measured resources that

@@ -1,5 +1,5 @@
 //! What this host may claim right now: the bounded claimable-job listing and
-//! the one exception disk pressure still admits.
+//! the exceptions a volume short of the room work needs still admits.
 
 use serde_json::{Map, Value};
 
@@ -9,10 +9,10 @@ use crate::providers::local::helpers;
 use crate::providers::local::slots::{job_system_packages_eligible, ActiveSlot};
 use crate::queue::JobStorage;
 
-/// The one job a host under disk pressure still runs: a signed Stado release
-/// delivery pinned to it, which is how a release reaches the agent that owns
-/// the pressure rule. It is also the one job that starts while a janitor pass
-/// holds the workload lock ([`super::start`]).
+/// The one job a host short of the room work needs still runs whatever it
+/// writes: a signed Stado release delivery pinned to it, which is how a
+/// release reaches the agent that owns the room gate. It is also the one job
+/// that starts while a janitor pass holds the workload lock ([`super::start`]).
 pub(crate) fn is_signed_stado_delivery(job: &Job) -> bool {
     !job.gpu_mem_gb.is_positive()
         && job.priority == crate::primitives::constants::RELEASE_JOB_PRIORITY
@@ -28,11 +28,11 @@ pub(crate) fn is_signed_stado_delivery(job: &Job) -> bool {
 
 /// A job that stages nothing on this host's disk: a command pinned to this
 /// host that clones no repository, installs no packages, runs no pre-command
-/// and mirrors no output. Disk pressure blocks work because work fills the
-/// disk; a pinned in-place command (an Oko routine reading this host's own
-/// transcripts and terminals) adds nothing the janitor could reclaim, so
-/// refusing it only stops the host's upkeep — forever on a host whose disk
-/// the user's own data keeps above the rule.
+/// and mirrors no output. A volume short of the room blocks work because work
+/// fills the disk; a pinned in-place command (an Oko routine reading this
+/// host's own transcripts and terminals) adds nothing the janitor could
+/// reclaim, so refusing it only stops the host's upkeep — forever on a host
+/// whose disk the user's own data keeps full.
 pub(crate) fn stages_nothing(job: &Job) -> bool {
     !job.gpu_mem_gb.is_positive()
         && !job.pinned_host.is_empty()
@@ -43,7 +43,9 @@ pub(crate) fn stages_nothing(job: &Job) -> bool {
 }
 
 /// Read the fresh queue documents this tick may admit, newest operator intent
-/// first while the host is under its disk watermark.
+/// first. `room_short` is the sentence naming the free bytes and the room work
+/// here needs when they fall short; only the exceptions above are admitted
+/// then.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn claimable(
     store: &JobStorage,
@@ -53,9 +55,7 @@ pub(crate) async fn claimable(
     total_vram_gb: i64,
     free_vram_gb: i64,
     pinned_only: bool,
-    pressure_active: bool,
-    current_free_bytes: Option<i64>,
-    disk_low_bytes: Option<i64>,
+    room_short: Option<&str>,
     slots: &[ActiveSlot],
     agent_diag: &mut Map<String, Value>,
     log_fn: &mut dyn FnMut(&str),
@@ -105,51 +105,54 @@ pub(crate) async fn claimable(
             .cmp(&a.priority)
             .then_with(|| a.created_at.cmp(&b.created_at))
     });
-    if pressure_active {
-        // A host can accumulate deliveries while it is under pressure.
-        // The newest submission is the current operator intent; replaying
-        // them FIFO briefly downgrades the installed agent before climbing
-        // through every superseded coordinate.
-        let (mut deliveries, others): (Vec<Job>, Vec<Job>) =
-            queued.into_iter().partition(is_signed_stado_delivery);
-        let matched_deliveries = deliveries.len();
-        deliveries.sort_by(|a, b| {
-            b.created_at
-                .cmp(&a.created_at)
-                .then_with(|| b.job_id.cmp(&a.job_id))
-        });
-        // Only the newest delivery runs; the rest are superseded.
-        let deliveries: Vec<Job> = deliveries.into_iter().next().into_iter().collect();
-        let in_place: Vec<Job> = others.into_iter().filter(stages_nothing).collect();
-        agent_diag.insert(
-            "disk_pressure_superseded_deliveries".into(),
-            Value::from(matched_deliveries.saturating_sub(deliveries.len()) as i64),
-        );
-        agent_diag.insert(
-            "disk_pressure_recovery_jobs".into(),
-            Value::from(deliveries.len() as i64),
-        );
-        agent_diag.insert(
-            "disk_pressure_in_place_jobs".into(),
-            Value::from(in_place.len() as i64),
-        );
-        let (delivery_count, in_place_count) = (deliveries.len(), in_place.len());
-        queued = deliveries.into_iter().chain(in_place).collect();
-        if queued.is_empty() {
-            log_fn(&format!(
-                "loop: disk-pressure-active: free bytes {current_free_bytes:?} are under the \
-                 {disk_low_bytes:?} byte low watermark; ordinary work remains blocked and \
-                 neither a signed Stado release delivery nor a pinned job that stages nothing \
-                 is assigned to this host"
-            ));
-            return Ok(Step::Done);
+    // The counts below describe the tick that was short of room; a tick with
+    // room publishes none of them.
+    const SUPERSEDED: &str = "disk_room_short_superseded_deliveries";
+    const RECOVERY: &str = "disk_room_short_recovery_jobs";
+    const IN_PLACE: &str = "disk_room_short_in_place_jobs";
+    let Some(room_short) = room_short else {
+        for key in [SUPERSEDED, RECOVERY, IN_PLACE] {
+            agent_diag.remove(key);
         }
+        return Ok(Step::Go(queued));
+    };
+    // A host can accumulate deliveries while it is short of room. The newest
+    // submission is the current operator intent; replaying them FIFO briefly
+    // downgrades the installed agent before climbing through every
+    // superseded coordinate.
+    let (mut deliveries, others): (Vec<Job>, Vec<Job>) =
+        queued.into_iter().partition(is_signed_stado_delivery);
+    let matched_deliveries = deliveries.len();
+    deliveries.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.job_id.cmp(&a.job_id))
+    });
+    // Only the newest delivery runs; the rest are superseded.
+    let deliveries: Vec<Job> = deliveries.into_iter().next().into_iter().collect();
+    let in_place: Vec<Job> = others.into_iter().filter(stages_nothing).collect();
+    agent_diag.insert(
+        SUPERSEDED.into(),
+        Value::from(matched_deliveries.saturating_sub(deliveries.len()) as i64),
+    );
+    agent_diag.insert(RECOVERY.into(), Value::from(deliveries.len() as i64));
+    agent_diag.insert(IN_PLACE.into(), Value::from(in_place.len() as i64));
+    let (delivery_count, in_place_count) = (deliveries.len(), in_place.len());
+    let queued: Vec<Job> = deliveries.into_iter().chain(in_place).collect();
+    let word = crate::deploy::host_gates::DISK_ROOM_SHORT;
+    // The journeys that need this host to run ordinary work wait for either
+    // a started job or "ordinary work remains blocked", and say which.
+    if queued.is_empty() {
         log_fn(&format!(
-            "loop: disk-pressure-active: free bytes {current_free_bytes:?} are under the \
-             {disk_low_bytes:?} byte low watermark; admitting {delivery_count} signed Stado \
-             release delivery, {in_place_count} pinned job(s) that stage nothing on this disk, \
-             and no ordinary work"
+            "loop: {word}: {room_short}; ordinary work remains blocked until the free bytes \
+             cover the room, and neither a signed Stado release delivery nor a pinned job that \
+             stages nothing is assigned to this host"
         ));
+        return Ok(Step::Done);
     }
+    log_fn(&format!(
+        "loop: {word}: {room_short}; admitting {delivery_count} signed Stado release delivery, \
+         {in_place_count} pinned job(s) that stage nothing on this disk, and no ordinary work"
+    ));
     Ok(Step::Go(queued))
 }

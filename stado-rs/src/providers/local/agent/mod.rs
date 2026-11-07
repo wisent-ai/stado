@@ -18,7 +18,9 @@
 //!
 //! The local space-reclaim engine ([`super::space_reclaim`]) runs outside the
 //! publication tick at its declared cadence and holds a shared workload lock
-//! per running job, and refuses new jobs while disk pressure is unresolved.
+//! per running job; the tick refuses new jobs while it cannot read the
+//! volume the fleet writes to, or while that volume's free bytes do not cover
+//! the room work there needs ([`super::space_reclaim::margin::Room`]).
 //! One behavioral simplification: Python releases a finished job's workload
 //! lock explicitly and logs release failures; the Rust port lets the
 //! [`super::slots::ActiveSlot`]'s `Drop` close the lock file (flock is

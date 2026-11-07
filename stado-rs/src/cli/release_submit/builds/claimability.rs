@@ -79,12 +79,24 @@ fn publication_flag(publication: &Value, name: &str) -> Option<bool> {
 /// vocabulary so the selector and diagnostics cannot drift apart.
 fn publication_blockers(publication: &Value) -> Vec<String> {
     use crate::deploy::host_gates::{
-        DISK_PRESSURE_ACTIVE, DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED, SPACE_RECLAIM_STALLED,
+        DISK_PRESSURE_ACTIVE, DISK_PRESSURE_UNRESOLVED, DISK_ROOM_SHORT, QUEUE_PAUSED,
+        SPACE_RECLAIM_STALLED,
     };
     let flag = |name: &str| publication_flag(publication, name);
     let mut blockers = Vec::new();
-    if flag(DISK_PRESSURE_ACTIVE) == Some(true) {
-        blockers.push(format!("{DISK_PRESSURE_ACTIVE} (release deliveries only)"));
+    // The room the agent judged, with the sentence naming both figures. An
+    // agent from before the room was judged publishes no such flag and
+    // refuses at the janitor's rule, in its own word.
+    match flag(DISK_ROOM_SHORT) {
+        Some(true) => blockers.push(match publication["diag"]["admission_detail"].as_str() {
+            Some(detail) => format!("{DISK_ROOM_SHORT} ({detail})"),
+            None => DISK_ROOM_SHORT.to_string(),
+        }),
+        Some(false) => {}
+        None if flag(DISK_PRESSURE_ACTIVE) == Some(true) => {
+            blockers.push(format!("{DISK_PRESSURE_ACTIVE} (release deliveries only)"))
+        }
+        None => {}
     }
     if flag(DISK_PRESSURE_UNRESOLVED) == Some(true) {
         blockers.push(DISK_PRESSURE_UNRESOLVED.to_string());
@@ -111,7 +123,9 @@ fn publication_blockers(publication: &Value) -> Vec<String> {
         .and_then(|diag| diag.get("admission_reason"))
         .and_then(Value::as_str)
     {
-        if !blockers.iter().any(|blocker| blocker == reason) {
+        let said =
+            |blocker: &String| blocker == reason || blocker.starts_with(&format!("{reason} ("));
+        if !blockers.iter().any(said) {
             blockers.push(reason.to_string());
         }
     }
