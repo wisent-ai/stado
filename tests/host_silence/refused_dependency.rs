@@ -10,9 +10,14 @@
 //! the byte the cut reached, is answered with the whole object again instead
 //! of that range, and exits non-zero naming the refused range; the listener
 //! saw exactly two requests, so a dependency that cannot serve the rest is
-//! not asked again.
+//! not asked again. In the third the real `stado host ping` has the closed
+//! port as its beacon store's object API: it asks that store once, exits
+//! non-zero naming itself, the address and the refused connection, and runs
+//! no registry read and no SSH step behind it.
+use std::fs::Permissions;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, TcpListener};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
@@ -20,6 +25,10 @@ use std::sync::{Arc, Mutex};
 const OBJECT: &str = "stado://journey/refused-dependency.json";
 const BODY: &str = "an object the listener declares whole and sends in part";
 const REFUSED: &str = "the object API refused the connection";
+const HOST: &str = "refused-dependency-host";
+const NAMESPACE: &str = "refused-dependency";
+const LAYOUT: &str = "system/storage-layout.json";
+const OWNER_READ_WRITE: u32 = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
 
 struct Run {
     root: PathBuf,
@@ -67,19 +76,39 @@ impl Run {
         }
     }
 
-    /// `stado storage get` of one object from the object API at `address`,
-    /// its stderr kept beside the run.
-    fn storage_get(&self, address: &str) -> Output {
-        let output = stado_wait::output(
-            self.stado()
-                .args(["storage", "get", OBJECT, "-"])
-                .env("STADO_API_URL", format!("http://{address}"))
-                .env("STADO_API_TOKEN", "refused-dependency-probe"),
-        )
-        .expect("run the real stado");
-        std::fs::write(self.root.join("storage-get.stderr"), &output.stderr)
+    /// `command` run to its end, its stderr kept beside the run as `name`.
+    fn kept(&self, command: &mut Command, name: &str) -> Output {
+        let output = stado_wait::output(command).expect("run the real stado");
+        std::fs::write(self.root.join(name), &output.stderr)
             .expect("keep the command's stderr beside the run");
         output
+    }
+
+    /// `stado storage get` of one object from the object API at `address`.
+    fn storage_get(&self, address: &str) -> Output {
+        let mut command = self.stado();
+        command
+            .args(["storage", "get", OBJECT, "-"])
+            .env("STADO_API_URL", format!("http://{address}"))
+            .env("STADO_API_TOKEN", "refused-dependency-probe");
+        self.kept(&mut command, "storage-get.stderr")
+    }
+
+    /// `stado host ping HOST` whose beacon store is the object API at
+    /// `address`, reached with the owner-only token file that store requires.
+    fn host_ping(&self, address: &str) -> Output {
+        let token = self.root.join("object-api.token");
+        std::fs::write(&token, "refused-dependency-probe").expect("write the store token");
+        std::fs::set_permissions(&token, Permissions::from_mode(OWNER_READ_WRITE))
+            .expect("make the store token owner-only");
+        let mut command = self.stado();
+        command
+            .args(["host", "ping", HOST])
+            .env("WC_STORAGE_BACKEND", "stado")
+            .env("WC_STADO_STORAGE_URL", format!("http://{address}"))
+            .env("WC_STADO_STORAGE_NAMESPACE", NAMESPACE)
+            .env("WC_STADO_STORAGE_TOKEN_FILE", &token);
+        self.kept(&mut command, "host-ping.stderr")
     }
 }
 
@@ -234,4 +263,38 @@ fn a_body_cut_short_is_asked_once_for_the_rest_and_a_refused_range_ends_the_get(
              {asked:?}"
         ),
     }
+}
+
+/// `stado host ping` opens its beacon store before it resolves or reaches
+/// the host, so a store nobody listens for ends it with that refusal.
+#[test]
+fn a_refused_object_api_ends_host_ping_at_once() {
+    let run = Run::new("ping");
+    let address = format!("{}:{}", Ipv4Addr::LOCALHOST, run.free_port());
+    let output = run.host_ping(&address);
+    let said = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    assert!(!output.status.success(), "a refused store ended the ping well: {said}");
+    let refusal = format!("stado host ping {HOST}: the beacon store did not open");
+    assert!(said.contains(&refusal), "the refusal names the command: {said}");
+    let cause = said.to_lowercase().contains("connection refused");
+    assert!(cause, "the refusal names its cause: {said}");
+    // The waits on the object API, by the event their line opens with.
+    let place = format!("object API http://{address}");
+    let waits = |event: &'static str| {
+        said.lines()
+            .filter(|line| line.starts_with(event) && line.contains("/api/object"))
+            .collect::<Vec<_>>()
+    };
+    match (waits("czekam: ").as_slice(), waits("blad czekania: ").as_slice()) {
+        ([asked], [failed]) => assert!(
+            asked.contains(LAYOUT) && asked.contains(&place) && failed.contains(&place),
+            "the one request is the store's layout marker at {place}: {asked} / {failed}"
+        ),
+        (asked, failed) => panic!(
+            "the store is asked once and its refusal ends the ping: {asked:?} / {failed:?}"
+        ),
+    }
+    let ssh = said.lines().any(|line| line.starts_with("czekam: ") && line.contains("ssh"));
+    assert!(!ssh, "an SSH step ran after the store refused: {said}");
 }
