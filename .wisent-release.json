@@ -45,6 +45,13 @@
           ]
         },
         {
+          "name": "lock-steps",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "quality-lock-steps"
+          ]
+        },
+        {
           "name": "service-directory-beside",
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
@@ -94,6 +101,13 @@
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
             "--test", "service-directory-beside"
+          ]
+        },
+        {
+          "name": "lock-steps",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "quality-lock-steps"
           ]
         },
         {
