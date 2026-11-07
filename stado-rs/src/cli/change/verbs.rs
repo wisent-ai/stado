@@ -426,8 +426,7 @@ pub fn waits(candidate: &Candidate) -> Option<String> {
                  the gates of {product}, so whether the operator's rulings allow them was \
                  never read (the refusal names why); a gate the rulings rule out is left out, \
                  never waited on here (such a candidate waits on a review round instead); \
-                 unblock: make {} answer, then `{run}` from no \
-                 agent session",
+                 unblock: make {} answer, then `{run}` from no agent session",
                 super::run::gates::asks(product, &candidate.defects, candidate.session.as_deref())
             ),
             Some(WaitsOn::Gate) => format!(
