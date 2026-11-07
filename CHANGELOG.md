@@ -50,6 +50,26 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado space reclaim TARGET --apply` reaches the second look on Linux, and says why and how
+  to repair it when a look cannot be recorded:** the reclaim program asked for a modification
+  time with `stat -f %m PATH || stat -c %Y PATH`; GNU stat reads `-f` as "the file system", so on
+  Linux the look was several lines about the file system followed by the time, and the record's
+  first line, read back, never equalled it: every apply on a Linux host kept every second-look
+  candidate as unheld on its first look. The program reads the kernel's name once and spells
+  `stat` for it, taking one integer (negative before 1970) and nothing else, so on Linux these
+  are now taken on the apply after the one that found them unheld and unchanged: stale
+  `build_scratch` work, superseded service versions and delivery roots (`delivered_trees`),
+  delivered copies and binary backups (`delivery_leftovers`), declared caches
+  (`rebuildable_caches`), Cargo build directories (`cargo_build_dirs`), `stado-bootstrap-*` trees,
+  and, while the queue store does not answer, `queue_workdirs` job work trees. A time that cannot
+  be read, a record that cannot be written or one that reads back otherwise keeps the candidate
+  with the cause and the repair: `its modification time cannot be read (…); retained: …`, `its
+  age cannot be read (…), so the newest entry is unknown and none is taken: …`, `the second-look
+  record <path> cannot be written (…); retained: …`, `the second-look record <path> reads back
+  '…', not '…'; retained: remove <path>, then apply again`. Journey
+  `tests/space_reclaim/workdirs/second_look.rs`, run on
+  darwin-arm64 and linux-amd64 by the release gate `second-look-reclaim`.
+
 - **A janitor pass that meets running workloads' recorded holds still runs the cleaners no
   running workload needs kept whole:** it returned before any cleaner after the lock ran, so
   while release jobs compiled the volume filled with almost nothing freed. Beside the holds it now

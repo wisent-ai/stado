@@ -5,8 +5,8 @@
 //! The opening `df` reading is here because it is the reading the first stage
 //! measures against.
 
-/// `registry_cleanup` through `delivered_trees`, the second segment of the
-/// remote program.
+/// `registry_cleanup` through `delivered_trees`, the third segment of the
+/// remote program, after the second look (`super::settled`).
 pub(super) const PRODUCT_STAGES: &str = r#"printf 'STADO_RECLAIM_FREE\tbefore\t%s\n' "$(free_kb)"
 
 if stage_enabled registry_cleanup; then
@@ -82,7 +82,7 @@ before=$(free_kb)
 # such tree can hold gigabytes of build cache on a builder.
 # The uname gate makes this stage a no-op on every macOS host, where /Users is
 # the real home root; held() still protects a tree a live process names.
-if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" = "Linux" ] && [ -d /Users ]; then
+if [ "$platform" = "Linux" ] && [ -d /Users ]; then
   for entry in /Users/*; do
     [ -d "$entry" ] || continue
     reclaim "$entry" foreign_home_trees

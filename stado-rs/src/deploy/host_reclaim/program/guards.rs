@@ -2,8 +2,10 @@
 //! the guards that decide whether a candidate may be taken at all.
 //!
 //! `reclaim` is here because it is the only place anything is removed, and
-//! `held`, `unit_named`, `declared_named`, `process_absent` and `settled` are here because
-//! every stage below asks them rather than carrying its own answer.
+//! `held`, `unit_named`, `declared_named` and `process_absent` are here
+//! because every stage below asks them rather than carrying its own answer.
+//! The second look (`settled`) and the modification time it reads are the
+//! next segment, [`super::settled`].
 
 /// `lsof_holds PATH`: 0 when a process has PATH (or, for a directory,
 /// anything below it) open or as its working directory, 1 when none does, 2
@@ -40,6 +42,9 @@ services="$HOME/@SERVICES_ROOT@"
 keep_mode="@LOCAL_EVIDENCE_MODE@"
 local_evidence="$HOME/@LOCAL_EVIDENCE_ROOT@"
 stages=" @STAGES@ "
+# The kernel's name, read once; every stat spelling and platform gate
+# follows it.
+platform=$(/usr/bin/uname -s 2>/dev/null || /bin/uname -s)
 
 stage_enabled() {
   case "$stages" in
@@ -82,142 +87,6 @@ process_absent() {
     1) return 0 ;;
     *) return 2 ;;
   esac
-}
-
-# A path no process holds, found so by an earlier apply and unchanged since.
-# The first apply that finds it unheld records its modification time and
-# keeps it; a later apply takes it only when no process holds it then either
-# and nothing has been added to or removed from it in between. Age is not the
-# evidence: a tree can be old and in use, or young and abandoned. Answers 0
-# when the stage may take it. A dry run records nothing, so it names exactly
-# what the next apply would take.
-settled() {
-  # A declared tree is never a candidate, so it records no first look and a
-  # preview names the declaration that keeps it.
-  if declared_named "$1"; then
-    printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" "a registry service declaration names $declared_by; retained"
-    return 1
-  fi
-  process_absent "$1"
-  case $? in
-    0) ;;
-    1) return 1 ;;
-    *)
-      printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" 'process ownership could not be read; retained'
-      return 1
-      ;;
-  esac
-  settled_mtime=$(mtime_seconds "$1") || return 1
-  settled_key=$(printf '%s' "$1" | /usr/bin/cksum | /usr/bin/cut -d' ' -f1)
-  settled_record="$local_evidence/settled/$2-$settled_key"
-  settled_seen=""
-  if [ -r "$settled_record" ]; then
-    read -r settled_seen < "$settled_record" || true
-  fi
-  if [ "$settled_seen" = "$settled_mtime" ]; then
-    if [ "$apply" = 1 ]; then
-      /bin/rm -f "$settled_record" 2>/dev/null || true
-    fi
-    return 0
-  fi
-  if [ "$apply" = 1 ]; then
-    /bin/mkdir -p "$local_evidence/settled" 2>/dev/null &&
-      printf '%s\n' "$settled_mtime" > "$settled_record" 2>/dev/null
-  fi
-  printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" 'unheld on this look; the next apply takes it if no process holds it and it is unchanged'
-  return 1
-}
-
-mtime_seconds() {
-  /usr/bin/stat -f %m "$1" 2>/dev/null || /usr/bin/stat -c %Y "$1" 2>/dev/null
-}
-
-# The newest of the given entries that PREDICATE accepts, by modification
-# time, left in $newest. Every keep-the-newest stage chooses with this one
-# function. An accepted entry whose age cannot be read leaves the newest
-# unknown: the stage is refused naming that entry and the operating system's
-# answer, and the caller takes nothing, because leaving the entry out would
-# shield an older one instead.
-newest_by_age() {
-  newest_stage="$1"
-  newest_predicate="$2"
-  shift 2
-  newest=""
-  newest_age=""
-  for newest_candidate in "$@"; do
-    "$newest_predicate" "$newest_candidate" || continue
-    if [ "$(/usr/bin/uname -s)" = Darwin ]; then
-      newest_read=$(/usr/bin/stat -f %m -- "$newest_candidate" 2>&1)
-    else
-      newest_read=$(/usr/bin/stat -c %Y -- "$newest_candidate" 2>&1)
-    fi || {
-      printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$newest_stage" "$newest_candidate" "its age cannot be read ($(printf '%s' "$newest_read" | /usr/bin/tr '\t\n' '  ')), so the newest entry is unknown and none is taken"
-      return 1
-    }
-    if [ -z "$newest" ] || [ "$newest_read" -gt "$newest_age" ]; then
-      newest="$newest_candidate"
-      newest_age="$newest_read"
-    fi
-  done
-}
-
-local_evidence() {
-  entry="$1"
-  id="$2"
-  now=$(/bin/date +%s)
-  tree_mtime=$(mtime_seconds "$entry") || {
-    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tstat_failed\ttrue\tfalse\t0\t0\n' "$id" "$entry"
-    return 1
-  }
-  tree_age=$((now - tree_mtime))
-  process_absent "$entry"
-  process_status=$?
-  if [ "$process_status" -eq 1 ]; then
-    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tprocess_present\tfalse\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
-    return 1
-  fi
-  if [ "$process_status" -ne 0 ]; then
-    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tprocess_probe_unavailable\tfalse\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
-    return 1
-  fi
-  evidence="$local_evidence/$id"
-  observed_mtime=""
-  absent_since=""
-  if [ -r "$evidence" ]; then
-    read -r observed_mtime absent_since < "$evidence" || true
-  fi
-  case "$observed_mtime:$absent_since" in
-    "$tree_mtime":[0-9]*) ;;
-    *)
-      if [ "$apply" = 1 ]; then
-        /bin/mkdir -p "$local_evidence" 2>/dev/null || {
-          printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tevidence_write_failed\ttrue\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
-          return 1
-        }
-        printf '%s %s\n' "$tree_mtime" "$now" > "$evidence.new" 2>/dev/null &&
-          /bin/mv -f "$evidence.new" "$evidence" 2>/dev/null || {
-            /bin/rm -f "$evidence.new" 2>/dev/null || true
-            printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tevidence_write_failed\ttrue\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
-            return 1
-          }
-      fi
-      printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tobservation_started\ttrue\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
-      return 1
-      ;;
-  esac
-  absence_age=$((now - absent_since))
-  if reclaim "$entry" queue_workdirs; then
-    if [ "$apply" = 1 ]; then
-      /bin/rm -f "$evidence" 2>/dev/null || true
-      decision=reclaimed
-    else
-      decision=eligible
-    fi
-    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\t%s\ttrue\ttrue\t%s\t%s\n' "$id" "$entry" "$decision" "$tree_age" "$absence_age"
-    return 0
-  fi
-  printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\treclaim_refused\ttrue\ttrue\t%s\t%s\n' "$id" "$entry" "$tree_age" "$absence_age"
-  return 1
 }
 
 # A path a unit definition on this host names is an installed service program,

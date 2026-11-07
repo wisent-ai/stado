@@ -4,8 +4,8 @@
 //! The closing `df` reading is here because it is the reading the last stage
 //! leaves behind.
 
-/// `rebuildable_caches` through `runner_work_trees`, the third segment of the
-/// remote program.
+/// `rebuildable_caches` through `runner_work_trees`, the fourth and last
+/// segment of the remote program.
 pub(super) const REBUILDABLE_STAGES: &str = r#"if stage_enabled rebuildable_caches; then
 before=$(free_kb)
 # The account's macOS temporary container, as the OS reports it: its name
@@ -83,7 +83,7 @@ fi
 
 if stage_enabled local_apfs_snapshots; then
 before=$(free_kb)
-if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" != "Darwin" ]; then
+if [ "$platform" != "Darwin" ]; then
   printf 'STADO_RECLAIM_UNAVAILABLE\tlocal_apfs_snapshots\t%s\n' 'host is not macOS'
 elif [ ! -x /usr/bin/tmutil ]; then
   printf 'STADO_RECLAIM_UNAVAILABLE\tlocal_apfs_snapshots\t%s\n' 'tmutil is unavailable'

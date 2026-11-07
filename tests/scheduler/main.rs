@@ -28,3 +28,5 @@ mod restart;
 #[path = "../schedule_overdue/journey.rs"]
 mod schedule_overdue;
 mod sizing;
+#[path = "../space_reclaim/workdirs/second_look.rs"]
+mod space_reclaim_second_look;

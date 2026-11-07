@@ -59,6 +59,13 @@
           ]
         },
         {
+          "name": "second-look-reclaim",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "scheduler", "--", "space_reclaim_second_look::"
+          ]
+        },
+        {
           "name": "silent-authority",
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
@@ -130,6 +137,13 @@
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
             "--test", "service-directory-beside"
+          ]
+        },
+        {
+          "name": "second-look-reclaim",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "scheduler", "--", "space_reclaim_second_look::"
           ]
         },
         {

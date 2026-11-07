@@ -1,10 +1,11 @@
 //! The remote program and the substitution that turns it into one target's
 //! script.
 //!
-//! The program is assembled from three ordered segments — the guards every
-//! stage asks, the stages that sweep what this product wrote, and the stages
-//! that sweep what the host can make again — so the concatenation below is
-//! the whole program and its order is the execution order.
+//! The program is assembled from four ordered segments — the guards every
+//! stage asks, the second look they take before removing anything, the
+//! stages that sweep what this product wrote, and the stages that sweep what
+//! the host can make again — so the concatenation below is the whole program
+//! and its order is the execution order.
 
 use std::sync::LazyLock;
 
@@ -20,6 +21,7 @@ use super::{BUILD_WORK_ROOT, CONTAINER_PREFIX, LOCAL_EVIDENCE_ROOT};
 pub(crate) mod guards;
 mod product_stages;
 mod rebuildable_stages;
+mod settled;
 
 /// Substitution points in [`REMOTE_SCRIPT_TEMPLATE`]. Every value spliced in is
 /// a crate constant, except the host's work root and the paths its registry
@@ -54,6 +56,7 @@ static REMOTE_SCRIPT_TEMPLATE: LazyLock<String> = LazyLock::new(|| {
     [
         guards::GUARDS,
         guards::LSOF_HOLDS,
+        settled::SETTLED,
         product_stages::PRODUCT_STAGES,
         rebuildable_stages::REBUILDABLE_STAGES,
     ]
