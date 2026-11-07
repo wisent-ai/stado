@@ -162,7 +162,7 @@ pub(in crate::cli::database) async fn reachable(
     // A recorded port wider than TCP's names nothing this host can serve.
     let port = match fields["port"].as_u64().map(u16::try_from) {
         Some(Ok(port)) => port,
-        Some(Err(_wider_than_a_port)) | None => {
+        Some(Err(_)) | None => {
             return Err(
                 CmdError::click(format!("{item} names no TCP port")).stating(FailureCode::Config)
             )

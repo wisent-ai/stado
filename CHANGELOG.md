@@ -68,3 +68,9 @@ The version-bump commit moves them with `stado product changelog --version V`;
   library, binaries, tests or examples do not compile for Linux is refused with the compiler's
   report instead of landing. Where the operator's rulings leave test gates out, `stado change
   status` names this gate as left out and the candidate waits for its review round.
+- **The stado library compiles again after the fleet database re-address:** `stado database tls
+  reissue` and `stado database migrate`'s reuse of a pending fleet server read the item's port
+  through a match whose refusing arm named the conversion error in one alternative of an
+  or-pattern and not in the other (`E0408`), so no revision since then built on any platform. The
+  arm binds nothing, and an item whose port is missing or wider than a TCP port is still refused
+  as naming no TCP port.
