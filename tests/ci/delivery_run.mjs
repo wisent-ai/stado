@@ -15,6 +15,9 @@
 // 4. A pass checks the step's main and installs its last green commit: the
 //    state names the step delivered at that revision with no push, or
 //    refused with its refusals and the defects recorded for them in Oko.
+//    While it installs, `stado ci delivery` names it the holder of the
+//    routine's pass lock and its step with that step's age, and a second
+//    pass started then ends at once naming the step the first installs.
 // 5. A second pass installs nothing again: a delivered step is said as
 //    already installed, a refused one as waiting for a commit, and no defect
 //    is recorded twice.
@@ -38,7 +41,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { createServer } from 'node:net';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { exitedCleanly } from '../native/process.mjs';
+import { exitedCleanly, holdsBefore, started } from '../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -127,7 +130,23 @@ try {
 
   const main = git(['rev-parse', '--verify', 'refs/heads/main']);
   const originBefore = git(['rev-parse', 'refs/remotes/origin/main']);
-  const first = run(['ci', 'run', '--json']);
+  // The first pass runs while the journey asks about it: once its state says
+  // it installs a step, the routine's lock is the first pass's.
+  const firstPass = started(stadoBinary, ['ci', 'run', '--json'], { cwd: output, env: environment });
+  const installing = () => existsSync(environment.STADO_DELIVERY_STATE) && Boolean(state().running);
+  const endedFirst = await holdsBefore(output, installing, firstPass.ended);
+  assert.equal(endedFirst, null, `the first pass ended before it installed a step: ${endedFirst?.stderr}`);
+  const during = JSON.parse(ok(['ci', 'delivery', '--json']));
+  assert.match(String(during.pass_lock_holder), new RegExp(`^pid ${firstPass.child.pid} since `), JSON.stringify(during));
+  const { running } = during.routine;
+  assert.equal(running.step, key, JSON.stringify(running));
+  assert.ok(Number.isInteger(running.age_seconds), JSON.stringify(running));
+  const secondDuring = ok(['ci', 'run']);
+  assert.ok(secondDuring.includes(`another pass is installing ${key} at ${running.revision} since `), secondDuring);
+  assert.ok(firstPass.child.exitCode === null && firstPass.child.signalCode === null,
+    'the first pass ended while it was asked about, so its lock was not seen held');
+  const first = await firstPass.ended;
+  report.commands.push({ args: ['ci', 'run', '--json'], ...first });
   const afterFirst = state();
   assert.equal(afterFirst.running, null, 'a finished pass left a step running');
   const checked = JSON.parse(readFileSync(environment.STADO_CI_MAIN_RECORD, 'utf8')).steps[key];
@@ -151,9 +170,6 @@ try {
       const [shown] = oko(['defects', 'show', id, '--json']);
       assert.ok(shown.evidence.includes(firstLine), shown.evidence);
     }
-  } else {
-    assert.ok(!green, 'a step with a green commit was neither installed nor refused');
-    assert.ok(afterFirst.last_pass.said.includes('no commit of main the main check found green'), afterFirst.last_pass.said);
   }
   const recorded = recordedIds();
 
