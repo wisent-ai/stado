@@ -158,29 +158,29 @@ pub fn sanitize_report(value: Option<&Value>, lock_busy: bool) -> Value {
     // ([`CleanupReport::scanned`]), and the public form has to keep saying so:
     // filling the sections with zeros here would rebuild, one layer out,
     // exactly the "did not run" that reads as "nothing needed doing".
+    let names = [
+        "huggingface_cache",
+        weles::CLEANER,
+        "build_caches",
+        build_caches::CARGO_BUILD_DIRS,
+        chromium_clones::CLEANER,
+        queue_workdirs::CLEANER,
+        job_outputs::CLEANER,
+        backup_twins::CLEANER,
+        release_store::CLEANER,
+        local_snapshots::CLEANER,
+        object_evidence::CLEANER,
+        agent_logs::CLEANER,
+        delivered_releases::CLEANER,
+        compiler_cache::CLEANER,
+        registered_scratch::CLEANER,
+        xcode_derived_data::CLEANER,
+        package_caches::CLEANER,
+        docker::CLEANER,
+        source_snapshots::CLEANER,
+        bin_backups::CLEANER,
+    ];
     let public_cleaners = cleaners.map(|cleaners| {
-        let names = [
-            "huggingface_cache",
-            weles::CLEANER,
-            "build_caches",
-            build_caches::CARGO_BUILD_DIRS,
-            chromium_clones::CLEANER,
-            queue_workdirs::CLEANER,
-            job_outputs::CLEANER,
-            backup_twins::CLEANER,
-            release_store::CLEANER,
-            local_snapshots::CLEANER,
-            object_evidence::CLEANER,
-            agent_logs::CLEANER,
-            delivered_releases::CLEANER,
-            compiler_cache::CLEANER,
-            registered_scratch::CLEANER,
-            xcode_derived_data::CLEANER,
-            package_caches::CLEANER,
-            docker::CLEANER,
-            source_snapshots::CLEANER,
-            bin_backups::CLEANER,
-        ];
         Value::Object(
             names
                 .iter()
@@ -188,6 +188,20 @@ pub fn sanitize_report(value: Option<&Value>, lock_busy: bool) -> Value {
                 .collect(),
         )
     });
+    // The cleaners after the lock a pass that found the lock held did not
+    // run: their zero rows are waits, not cleaners that found nothing. Only
+    // known names pass. A report written before passes said so is null, never
+    // an empty list.
+    let waited: Option<Vec<Value>> =
+        get("waited_cleaners")
+            .and_then(Value::as_array)
+            .map(|items| {
+                let known = items.iter().filter_map(Value::as_str);
+                known
+                    .filter(|name| names.contains(name))
+                    .map(Value::from)
+                    .collect()
+            });
     let reading = match (
         public_nonnegative(get("total_bytes")),
         public_nonnegative(get("free_bytes_before")),
@@ -210,6 +224,7 @@ pub fn sanitize_report(value: Option<&Value>, lock_busy: bool) -> Value {
         "free_bytes_after": public_nonnegative(get("free_bytes_after")),
         "pressure_active": get("pressure_active").and_then(Value::as_bool),
         "cleaners": public_cleaners,
+        "waited_cleaners": waited,
         "lock_busy": lock_busy || get("lock_busy") == Some(&Value::Bool(true)),
         "active_job_count": public_nonnegative(get("active_job_count")),
         "last_success_at": public_timestamp(get("last_success_at")),

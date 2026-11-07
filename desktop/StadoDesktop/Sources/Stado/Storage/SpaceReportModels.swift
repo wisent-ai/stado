@@ -124,10 +124,13 @@ struct HostSpaceReport: Decodable, Sendable {
             let cleaners: [String: CleanerResult]?
             let errors: [String]?
             let workloadHolds: [WorkloadHold]?
+            /// The cleaners after the lock that a pass which found the lock held did not run.
+            let waitedCleaners: [String]?
 
             enum CodingKeys: String, CodingKey {
                 case cleaners, errors
                 case workloadHolds = "workload_holds"
+                case waitedCleaners = "waited_cleaners"
             }
         }
 

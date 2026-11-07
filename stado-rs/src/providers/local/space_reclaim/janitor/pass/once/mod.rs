@@ -211,8 +211,13 @@ pub(crate) async fn cleanup_once(
         Ok(LockState::Held(lock)) => lock,
         Ok(LockState::Busy { holder }) => {
             report.lock_busy = true;
+            busy::all_waiting(&mut report);
             match holder {
-                _ if busy::describe_workloads(&state_dir, !preview, &mut report, log_fn) => {}
+                _ if busy::describe_workloads(&state_dir, !preview, &mut report, log_fn) => {
+                    let deletable = deletable.as_deref();
+                    busy::run_unheld(&home, &state_dir, persist, deletable, &mut report);
+                }
+                _ if busy::describe_unheld_pass(&state_dir, &mut report, log_fn) => {}
                 Ok(Some(holder)) => {
                     let age = epoch_now() - holder.acquired_at;
                     let detail = format!(

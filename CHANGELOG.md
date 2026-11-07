@@ -50,6 +50,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A janitor pass that meets running workloads' recorded holds still runs the cleaners no
+  running workload needs kept whole:** it returned before any cleaner after the lock ran, so
+  while release jobs compiled the volume filled with almost nothing freed. Beside the holds it now
+  runs `bin_backups` and `delivered_releases`, whose keep rules protect what a running workload
+  uses, and at the rule `local_snapshots`, Time Machine's snapshots, which no job reads, under its
+  own shared hold and the new `disk-cleanup-unheld.lock`, records their removals, and every pass
+  that finds the lock held names each cleaner after the lock it did not run in
+  `waited_cleaners`, shown by `stado space report`, `stado space reclaim TARGET`, the public
+  beacon, and Stado Desktop's Disk screen and Space section. Journey
+  `tests/space_reclaim/guards/workload_hold.rs`.
+
 - **The release gates run the memory verdict's journey:** `stado host processes` naming the
   process that runs a host out of memory before the next reading was proven only by a journey
   compiled into the `scheduler` test binary, which no release gate ran, so no release recorded

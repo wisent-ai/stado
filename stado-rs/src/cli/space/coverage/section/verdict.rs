@@ -72,5 +72,21 @@ pub(super) fn janitor_detail(state: &Value) -> String {
         Some(bytes) => format!("; measured free-space change {}", gib(bytes)),
         None => String::new(),
     };
-    format!("pass at {at} ended {outcome}{change}; retained files are reported per cleaner, not inferred from directory sizes")
+    // A pass that found the lock held ran what it could and left the rest
+    // for a pass with the lock to itself; which, is said rather than left as
+    // zeros.
+    let waited = match state
+        .pointer("/report/waited_cleaners")
+        .and_then(Value::as_array)
+    {
+        Some(names) if !names.is_empty() => {
+            let names: Vec<&str> = names.iter().filter_map(Value::as_str).collect();
+            format!(
+                "; with the lock held it left {} for its turn",
+                names.join(", ")
+            )
+        }
+        _ => String::new(),
+    };
+    format!("pass at {at} ended {outcome}{change}{waited}; retained files are reported per cleaner, not inferred from directory sizes")
 }

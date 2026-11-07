@@ -118,6 +118,12 @@ pub struct CleanupReport {
     /// Private operator evidence captured when shared holders prevent a pass.
     /// The public beacon deliberately omits process and operation identities.
     pub workload_holds: Vec<super::super::pass::lock::holds::WorkloadHold>,
+    /// The cleaners after the lock that a pass which found the run lock held
+    /// did not run: every one of them on `lock_busy` and
+    /// `lock_busy_unattributed`, all but `bin_backups`, `delivered_releases`
+    /// and `local_snapshots` when those ran beside workload holds. Empty when
+    /// the pass had the lock to itself.
+    pub waited_cleaners: Vec<&'static str>,
     pub active_job_count: i64,
     pub last_success_at: Option<String>,
     /// Whether this pass reached its cleaners at all.

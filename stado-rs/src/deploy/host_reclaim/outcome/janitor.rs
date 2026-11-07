@@ -33,9 +33,20 @@ pub(super) fn janitor_sentence(
         sentence.push_str(", and it declares no cleaners");
         return sentence;
     }
+    // A pass that found the lock held left the cleaners after the lock it did
+    // not run for a pass with the lock to itself; their zero rows are said to
+    // be waits, not counts.
+    let waited: Vec<&str> = plan
+        .get("waited_cleaners")
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
     let mut cleaners: Vec<String> = plans
         .iter()
         .map(|cleaner| {
+            if waited.contains(&cleaner.name.as_str()) {
+                return format!("{} waited for the janitor's turn", cleaner.name);
+            }
             let acted = if apply {
                 cleaner.deleted_items
             } else {

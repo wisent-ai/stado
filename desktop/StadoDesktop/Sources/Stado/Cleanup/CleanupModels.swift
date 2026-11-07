@@ -44,6 +44,9 @@ struct CleanupReport: Codable, Sendable {
     let activeJobCount: Int
     let lastSuccessAt: String?
     let errors: [String]
+    /// The cleaners after the lock that a pass which found the lock held did
+    /// not run; absent from a report written before passes said so.
+    let waitedCleaners: [String]?
 
     enum CodingKeys: String, CodingKey {
         case version, rule, outcome, cleaners, errors
@@ -56,11 +59,16 @@ struct CleanupReport: Codable, Sendable {
         case lockBusy = "lock_busy"
         case activeJobCount = "active_job_count"
         case lastSuccessAt = "last_success_at"
+        case waitedCleaners = "waited_cleaners"
     }
 
     var reclaimedBytes: Int {
         guard let before = freeBytesBefore, let after = freeBytesAfter else { return 0 }
         return max(0, after - before)
+    }
+
+    func waited(_ cleaner: String) -> Bool {
+        waitedCleaners?.contains(cleaner) ?? false
     }
 
     var outcomePresentation: OutcomePresentation {
@@ -84,7 +92,7 @@ struct CleanupReport: Codable, Sendable {
         case "lock_busy", "lock_busy_unattributed":
             OutcomePresentation(title: "Cleanup already running", detail: "Another pass holds the cleanup lock.", symbol: "hourglass", severity: .neutral)
         case "lock_busy_workloads":
-            OutcomePresentation(title: "Waiting for running jobs", detail: "Running jobs hold the cleanup lock. On a full volume, new jobs wait until a pass has run.", symbol: "hourglass", severity: .warning)
+            OutcomePresentation(title: "Waiting for running jobs", detail: "Running jobs hold the cleanup lock; \(waitedCleaners == nil || waited("bin_backups") ? "bin_backups, delivered_releases and local_snapshots did not run beside them" : "bin_backups, delivered_releases and local_snapshots (at 80%) ran beside them"), and the cleaners marked waited run when a pass has the lock to itself. On a full volume, new jobs wait until a pass has had it.", symbol: "hourglass", severity: .warning)
         case "partial_error":
             OutcomePresentation(title: "Cleanup incomplete", detail: "The pass completed with sanitized errors.", symbol: "exclamationmark.triangle.fill", severity: .critical)
         case "volume_unreadable":

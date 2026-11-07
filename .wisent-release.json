@@ -38,6 +38,13 @@
           ]
         },
         {
+          "name": "workload-hold-reclaim",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "space-reclaim", "workload_hold::"
+          ]
+        },
+        {
           "name": "probierz-evidence-reclaim",
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",

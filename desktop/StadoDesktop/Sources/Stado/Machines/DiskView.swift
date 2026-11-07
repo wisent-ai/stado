@@ -139,11 +139,12 @@ struct DiskView: View {
                     ForEach(cleaners, id: \.0) { item in
                         let (name, cleaner) = item
                         ConsoleTableRow {
-                            ConsoleCell(text: name, width: 200, strong: true)
-                            ConsoleCell(text: cleaner.scannedItems.formatted(.number), width: 84, trailing: true, digits: true)
-                            ConsoleCell(text: cleaner.eligibleItems.formatted(.number), width: 84, trailing: true, digits: true)
-                            ConsoleCell(text: cleaner.deletedItems.formatted(.number), width: 84, trailing: true, digits: true)
-                            ConsoleCell(text: DisplayFormat.bytes(cleaner.actualFreeDeltaBytes), width: 96, trailing: true, digits: true)
+                            let waited = report.waited(name)
+                            ConsoleCell(text: waited ? "\(name) — waited for its turn" : name, width: 200, strong: true)
+                            ConsoleCell(text: waited ? "—" : cleaner.scannedItems.formatted(.number), width: 84, trailing: true, digits: true)
+                            ConsoleCell(text: waited ? "—" : cleaner.eligibleItems.formatted(.number), width: 84, trailing: true, digits: true)
+                            ConsoleCell(text: waited ? "—" : cleaner.deletedItems.formatted(.number), width: 84, trailing: true, digits: true)
+                            ConsoleCell(text: waited ? "—" : DisplayFormat.bytes(cleaner.actualFreeDeltaBytes), width: 96, trailing: true, digits: true)
                         }
                     }
                 }
@@ -258,7 +259,7 @@ struct DiskView: View {
             lines: lines(for: report),
             reasonCode: report.outcome,
             listing: (report.cleaners?.namedReports ?? []).map { name, cleaner in
-                "\(name) — \(cleaner.eligibleItems.formatted(.number)) eligible of \(cleaner.scannedItems.formatted(.number)) scanned"
+                report.waited(name) ? "\(name) — waited for the janitor's turn" : "\(name) — \(cleaner.eligibleItems.formatted(.number)) eligible of \(cleaner.scannedItems.formatted(.number)) scanned"
             },
             footnote: report.rule.summary,
             actions: [

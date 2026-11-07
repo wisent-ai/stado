@@ -52,6 +52,10 @@ pub(crate) const RETIRED_LOCK_PREFIX: &str = "disk-cleanup.lock.retired.";
 /// Inode-specific holder records survive a legacy predecessor removing the
 /// canonical holder pathname after its lock inode has been retired.
 pub(crate) const LOCK_HOLDER_INODE_PREFIX: &str = "disk-cleanup.lock.holder.inode.";
+/// Taken exclusively by a pass that runs the unheld cleaners beside workload
+/// holds, so two such passes never remove the same tree at once; the
+/// exclusive pass is kept out by that pass's shared hold on [`LOCK_NAME`].
+pub(crate) const UNHELD_LOCK_NAME: &str = "disk-cleanup-unheld.lock";
 
 /// The janitor's state file relative to `$HOME`: the state directory joined
 /// with [`STATE_NAME`].

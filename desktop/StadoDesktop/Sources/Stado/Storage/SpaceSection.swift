@@ -155,6 +155,9 @@ struct SpaceSection: View {
                             )
                         }
                     }
+                    if let waited = pass.waitedCleaners, !waited.isEmpty {
+                        WisentField(label: "Left for the janitor's turn", value: waited.joined(separator: ", "), tone: .warning)
+                    }
                     if let cleaners = pass.cleaners {
                         ForEach(cleaners.keys.sorted(), id: \.self) { name in
                             if let result = cleaners[name] {
