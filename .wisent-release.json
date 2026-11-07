@@ -52,6 +52,13 @@
           ]
         },
         {
+          "name": "silent-authority",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "host-silence-silent-authority"
+          ]
+        },
+        {
           "name": "wait-journeys",
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
@@ -115,6 +122,13 @@
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
             "--test", "host-silence-refused-dependency"
+          ]
+        },
+        {
+          "name": "silent-authority",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "host-silence-silent-authority"
           ]
         }
       ],
