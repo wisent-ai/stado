@@ -76,6 +76,13 @@ pub struct Reading {
     pub processes: BTreeMap<i32, Counters>,
     /// Listed processes whose counters the kernel refused, with its error.
     pub unreadable: BTreeMap<i32, String>,
+    /// How the reader turned each process's CPU counters into nanoseconds
+    /// (`mach_timebase_info`, `schedstat`). Two readings converted different
+    /// ways do not measure one interval; a reading kept by a build that did
+    /// not say (`None`) converted on macOS by a ratio measured afresh each
+    /// time, which made every long-lived process look new.
+    #[serde(default)]
+    pub conversion: Option<String>,
 }
 
 impl Counters {
@@ -118,12 +125,15 @@ pub fn read() -> Result<Reading, String> {
 ///
 /// The first reading a host takes has nothing to be compared with; its
 /// report says so and lists no load, and the next one is measured from it.
+/// A kept reading whose CPU counters were converted another way, or by a
+/// build that did not say how, is no earlier reading of the same counters:
+/// this one is reported as a first reading and the next is measured from it.
 pub fn read_and_compare() -> Result<ProcessesReport, String> {
     let now = read()?;
     let previous = store::previous()?;
     store::keep(&now)?;
     match previous {
-        Some(previous) => report::compare(&previous, &now),
-        None => Ok(report::first(&now)),
+        Some(previous) if previous.conversion == now.conversion => report::compare(&previous, &now),
+        _ => Ok(report::first(&now)),
     }
 }

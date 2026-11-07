@@ -36,6 +36,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado host processes` on a Mac measures each process from the reading before instead of its
+  whole life:** the CPU counters `proc_pid_rusage` returns in Mach units were converted by a ratio
+  measured afresh against `getrusage` for every reading; it moved by parts per million between
+  readings, so a long-lived process's converted total went down, the process was taken for a new
+  one that took the pid, and two runs seconds apart reported every process as spending its
+  lifetime's CPU in the interval and most as ended. The counters are now converted by the
+  kernel's declared `mach_timebase_info`, the same in every reading. Journey
+  `tests/host_processes/journey.rs` reads a busy child through two readings and checks it stays
+  one process with no more CPU than the interval allows. A reading kept by a build that converted
+  another way is not compared with: the first run after the update reports a first reading.
+
 - **`stado database client` grants a client the addresses its item holds after the database moved onto the fleet:** a consumer on the hosted provider's client library reads `provider`, then a fleet item's `rest_url`, `auth_url` and `realtime_url`, or a hosted item's `url`, with its keys. `client` granted only `rest_url`, `anon_key` and `service_role_key`, so after `stado database migrate` a consumer such as Oko was refused its item's `provider` with Skarbiec's 403 (`consumer not authorized to read item field`) and could not learn that its database had moved. It now grants, by the provider the item records, every one of those fields the item holds, names each missing one with the command that writes it (`rest place`, `auth place`, `adopt`), and refuses an item recording a provider Stado does not know. Journey: `tests/database/client_grant/journey.rs`.
 
 - **A fleet database is placed at an address a resolver answers:** `place` took the host's

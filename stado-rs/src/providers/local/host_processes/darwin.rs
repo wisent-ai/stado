@@ -3,7 +3,6 @@
 
 use std::mem::{size_of_val, MaybeUninit};
 use std::num::{NonZeroU128, NonZeroUsize};
-use std::time::Duration;
 
 use nix::errno::Errno;
 use nix::libc::{self, c_int};
@@ -27,56 +26,49 @@ fn rusage(pid: c_int) -> Result<libc::rusage_info_v4, Errno> {
     Ok(unsafe { info.assume_init() })
 }
 
-/// The unit `proc_pid_rusage` counts CPU time in, measured on this process.
-///
-/// The record counts CPU in Mach absolute-time units, which are nanoseconds
-/// on Intel Macs and not on Apple silicon. Rather than assume either, this
-/// process's own record is read beside `getrusage`, which reports the same
-/// CPU time of the same process in seconds and microseconds; their ratio
-/// converts every other process's record.
+/// The kernel's conversion of the Mach absolute-time units `proc_pid_rusage`
+/// counts CPU in to nanoseconds (`mach_timebase_info`): one to one on Intel
+/// Macs, a slower tick on Apple silicon. The kernel declares the pair, so
+/// every reading converts by the same one and a process's converted counters
+/// never decrease between two readings, which is what tells one process from
+/// another that took its pid. A ratio measured afresh for each reading would
+/// differ by a few parts per million between them, enough for a long-lived
+/// process's converted total to go down and the process to be taken for a
+/// new one whose whole lifetime was spent in the interval.
 struct Clock {
-    nanoseconds: u128,
-    units: NonZeroU128,
+    numer: u128,
+    denom: NonZeroU128,
 }
 
 impl Clock {
-    fn measure() -> Result<Self, String> {
-        let pid = c_int::try_from(std::process::id())
-            .map_err(|error| format!("this process's id does not fit a pid: {error}"))?;
-        let own = rusage(pid)
-            .map_err(|error| format!("proc_pid_rusage of this process failed: {error}"))?;
-        let mut usage = MaybeUninit::<libc::rusage>::uninit();
-        // SAFETY: the buffer is one rusage, which RUSAGE_SELF fills.
-        Errno::result(unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) })
-            .map_err(|error| format!("getrusage of this process failed: {error}"))?;
+    fn read() -> Result<Self, String> {
+        let mut info = MaybeUninit::<libc::mach_timebase_info>::uninit();
+        // SAFETY: the buffer is one mach_timebase_info, which the call fills.
+        // libc marks the binding deprecated in favour of the mach2 crate; the
+        // kernel interface it calls is the same.
+        #[allow(deprecated)]
+        let status = unsafe { libc::mach_timebase_info(info.as_mut_ptr()) };
+        if status != libc::KERN_SUCCESS {
+            return Err(format!(
+                "mach_timebase_info failed with kern_return_t {status}, so no CPU counter can be \
+                 converted to time"
+            ));
+        }
         // SAFETY: the call succeeded, so the record is filled.
-        let usage = unsafe { usage.assume_init() };
-        let spent = timeval(usage.ru_utime)? + timeval(usage.ru_stime)?;
-        let units = u128::from(own.ri_user_time) + u128::from(own.ri_system_time);
-        let units = NonZeroU128::new(units).ok_or_else(|| {
-            "this process's own resource record counts no CPU time yet, so the unit of every \
-             process's CPU counter cannot be measured"
-                .to_string()
-        })?;
+        let info = unsafe { info.assume_init() };
+        let denom = NonZeroU128::new(u128::from(info.denom))
+            .ok_or_else(|| "mach_timebase_info declared a denominator of zero".to_string())?;
         Ok(Self {
-            nanoseconds: spent.as_nanos(),
-            units,
+            numer: u128::from(info.numer),
+            denom,
         })
     }
 
     fn nanoseconds(&self, units: u64) -> Result<u64, String> {
-        u64::try_from(u128::from(units) * self.nanoseconds / self.units.get()).map_err(|error| {
+        u64::try_from(u128::from(units) * self.numer / self.denom.get()).map_err(|error| {
             format!("a CPU counter of {units} units overflows nanoseconds: {error}")
         })
     }
-}
-
-fn timeval(value: libc::timeval) -> Result<Duration, String> {
-    let seconds = u64::try_from(value.tv_sec)
-        .map_err(|error| format!("getrusage reported negative seconds: {error}"))?;
-    let micros = u64::try_from(value.tv_usec)
-        .map_err(|error| format!("getrusage reported negative microseconds: {error}"))?;
-    Ok(Duration::from_secs(seconds) + Duration::from_micros(micros))
 }
 
 /// Every pid the kernel lists. A call with no buffer answers how many pids
@@ -131,8 +123,11 @@ fn program(pid: c_int) -> Result<String, Errno> {
 /// its read (ESRCH) has no counters left and is not in the reading; any
 /// other refusal is kept by pid with the kernel's error.
 pub(super) fn read() -> Result<Reading, String> {
-    let clock = Clock::measure()?;
-    let mut reading = Reading::default();
+    let clock = Clock::read()?;
+    let mut reading = Reading {
+        conversion: Some("mach_timebase_info".to_string()),
+        ..Reading::default()
+    };
     for pid in pids()? {
         let read = rusage(pid).and_then(|info| Ok((info, program(pid)?)));
         let (info, program) = match read {

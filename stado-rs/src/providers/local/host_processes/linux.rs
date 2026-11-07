@@ -96,7 +96,10 @@ fn counters(process: &Path, page: u64) -> Result<Counters, Unread> {
 /// refused read is kept by pid with its error.
 pub(super) fn read() -> Result<Reading, String> {
     let page = page_size()?;
-    let mut reading = Reading::default();
+    let mut reading = Reading {
+        conversion: Some("schedstat".to_string()),
+        ..Reading::default()
+    };
     let listing =
         std::fs::read_dir("/proc").map_err(|error| format!("cannot list /proc: {error}"))?;
     for entry in listing {
