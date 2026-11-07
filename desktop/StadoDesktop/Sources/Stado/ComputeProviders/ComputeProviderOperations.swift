@@ -73,7 +73,8 @@ enum NativeComputeProviderOperations {
         .init(id: "quota-request-list", title: "List in-flight quota requests and support conversations",
             path: ["quota", "request", "list"], hostPlacement: .none, fields: [
                 .init(id: "provider", label: "Providers, comma-separated (blank: providers)", option: "--provider"),
-                .init(id: "state", label: "GCP state filter (blank: all)", option: "--state"),
+                .init(id: "state", label: "GCP state filter (blank: all)", option: "--state",
+                      choices: ["", "reconciling", "approved", "partially_approved", "unknown"]),
                 .init(id: "awaiting", label: "Azure: only tickets awaiting our reply", option: "--awaiting-customer", flag: true),
             ], mutates: false),
         .init(id: "quota-request-create", title: "Request a GPU quota increase",

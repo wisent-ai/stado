@@ -14,7 +14,7 @@ use crate::scheduler::dispatch::{quota_replies, quota_skus};
 /// communications.
 pub(super) async fn requests(
     providers_arg: &str,
-    state_filter: &str,
+    state_filter: Option<quota_skus::RequestState>,
     awaiting_customer: bool,
     as_json: bool,
 ) -> Result<(), CmdError> {
@@ -31,8 +31,8 @@ pub(super) async fn requests(
                 let mut rows = quota_skus::gcp_request_status(&client)
                     .await
                     .map_err(CmdError::from)?;
-                if !state_filter.is_empty() {
-                    rows.retain(|r| r.get("state").and_then(Value::as_str) == Some(state_filter));
+                if let Some(state) = state_filter {
+                    rows.retain(|r| r.get("state").and_then(Value::as_str) == Some(state.word()));
                 }
                 payload.push((provider.clone(), rows));
             }

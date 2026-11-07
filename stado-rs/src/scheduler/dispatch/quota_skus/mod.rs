@@ -53,10 +53,12 @@ pub use catalog::{all_catalogs, provider_catalog};
 /// their signatures carry (`quota_request` lifts it through its own error
 /// enum), and `CLOUD_QUOTAS_BASE` is the endpoint that constructor binds.
 pub use client::{CatalogError, CloudQuotasClient, CLOUD_QUOTAS_BASE};
-/// `gcp_request_status` is named by `crate::cli::quota::report` and
-/// `gcp_request_all_families` by `crate::cli::quota::submit::increase`;
-/// `gcp_catalog` is the read arm `provider_catalog` dispatches to.
-pub use gcp::{gcp_catalog, gcp_request_all_families, gcp_request_status};
+/// `gcp_request_status` and its `RequestState` vocabulary are named by
+/// `crate::cli::quota::report` and the `--state` of `crate::cli::entry`'s
+/// quota spec, `gcp_request_all_families` by
+/// `crate::cli::quota::submit::increase`; `gcp_catalog` is the read arm
+/// `provider_catalog` dispatches to.
+pub use gcp::{gcp_catalog, gcp_request_all_families, gcp_request_status, RequestState};
 
 /// Named by the sibling `crate::scheduler::dispatch::quota_request`, which
 /// resolves the same env-only project before constructing its own client.

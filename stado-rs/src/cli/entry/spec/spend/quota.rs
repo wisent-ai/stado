@@ -73,10 +73,9 @@ pub(crate) enum QuotaRequestCommands {
         /// Comma-separated provider list (gcp,azure); default = WC_PROVIDERS.
         #[arg(long, default_value = "")]
         provider: String,
-        /// Filter GCP rows by state (reconciling, approved, denied,
-        /// partially_approved, unknown); empty = all.
-        #[arg(long, default_value = "")]
-        state: String,
+        /// Show only GCP rows in this state; every row when omitted.
+        #[arg(long, value_enum)]
+        state: Option<crate::scheduler::dispatch::quota_skus::RequestState>,
         /// For Azure, only show tickets where Microsoft has the
         /// latest message and is awaiting a customer reply.
         #[arg(long)]

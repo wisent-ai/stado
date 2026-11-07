@@ -110,36 +110,57 @@ fn json_i64(value: Option<&Value>) -> Option<i64> {
     }
 }
 
-/// One row per QuotaPreference (Python `gcp_request_status`). Buckets
-/// stateDetail into a state field (approved/partially_approved/denied/
-/// reconciling/unknown).
+/// The state a QuotaPreference row carries: the one vocabulary
+/// `gcp_request_status` writes and `stado spend quota list --state` accepts.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
+#[clap(rename_all = "snake_case")]
+pub enum RequestState {
+    /// Google still works on the preference.
+    Reconciling,
+    /// The granted value reaches the preferred one.
+    Approved,
+    /// A positive grant stays below the preferred value.
+    PartiallyApproved,
+    /// Google returned no grant or no preferred value to compare.
+    Unknown,
+}
+
+impl RequestState {
+    /// The word a row and the `--state` filter spell the state with.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Reconciling => "reconciling",
+            Self::Approved => "approved",
+            Self::PartiallyApproved => "partially_approved",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// One row per QuotaPreference, its state read from the values Google
+/// returns: `reconciling` while Google still works on it, `approved` when
+/// the granted value reaches the preferred one, `partially_approved` when a
+/// positive grant stays below it, and `unknown` otherwise, with Google's
+/// stateDetail quoted beside it as it was written. The prose is never
+/// searched for words: a detail Google rephrases would change the verdict.
 pub async fn gcp_request_status(client: &CloudQuotasClient) -> Result<Vec<Value>, CatalogError> {
     let mut out = Vec::new();
     for pref in client.list_quota_preferences().await? {
         // A preference without a quota config has no state detail and no
         // values; each member below reads as absent through the index.
         let config = pref["quotaConfig"].clone();
-        let sd = match config.get("stateDetail").and_then(Value::as_str) {
-            Some(detail) => detail.to_lowercase(),
-            None => String::new(),
-        };
         // Google writes `reconciling` as a boolean; absent, it is not.
         let reconciling = matches!(pref.get("reconciling"), Some(Value::Bool(true)));
-        let state = if reconciling {
-            "reconciling"
-        } else if sd.contains("partially approved") {
-            "partially_approved"
-        } else if sd.contains("approved") {
-            "approved"
-        } else if sd.contains("denied") {
-            "denied"
-        } else {
-            "unknown"
+        let preferred = json_i64(config.get("preferredValue"));
+        // A missing or nothing-granted value is null in the row.
+        let granted = json_i64(config.get("grantedValue")).filter(|v| v.is_positive());
+        let state = match (reconciling, granted, preferred) {
+            (true, _, _) => RequestState::Reconciling,
+            (false, Some(granted), Some(preferred)) if granted >= preferred => RequestState::Approved,
+            (false, Some(_), Some(_)) => RequestState::PartiallyApproved,
+            _ => RequestState::Unknown,
         };
         let dims = pref["dimensions"].clone();
-        // Python `qc.granted_value if qc and qc.granted_value else None`:
-        // a missing or nothing-granted value is null in the row.
-        let granted = json_i64(config.get("grantedValue")).filter(|v| v.is_positive());
         out.push(json!({
             // Each field Google did not send stays null: read as "", a
             // preference without a region or family looked like one Google
@@ -148,9 +169,9 @@ pub async fn gcp_request_status(client: &CloudQuotasClient) -> Result<Vec<Value>
             "quota_id": pref.get("quotaId").and_then(Value::as_str),
             "gpu_family": dims.get("gpu_family").and_then(Value::as_str),
             "region": dims.get("region").and_then(Value::as_str),
-            "preferred_value": json_i64(config.get("preferredValue")),
+            "preferred_value": preferred,
             "granted_value": granted,
-            "state": state,
+            "state": state.word(),
             "state_detail": config.get("stateDetail").and_then(Value::as_str),
             "create_time": pref.get("createTime").and_then(Value::as_str),
         }));

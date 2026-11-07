@@ -84,7 +84,7 @@ pub(super) async fn dispatch(json: bool, sub: &Option<QuotaCommands>) -> Result<
                 state,
                 awaiting_customer,
                 json: sub_json,
-            } => requests(provider, state, *awaiting_customer, *sub_json).await,
+            } => requests(provider, *state, *awaiting_customer, *sub_json).await,
         },
         Some(QuotaCommands::Ticket { command }) => match command {
             QuotaTicketCommands::Reply {
