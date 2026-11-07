@@ -14,6 +14,10 @@ use super::Native;
 mod recordings;
 #[path = "shared.rs"]
 mod shared;
+// A data volume beside the home, for the journeys whose work root is its
+// own disk.
+#[path = "volume.rs"]
+mod volume;
 
 /// One percent is one hundredth, as the SI brochure defines the symbol `%`:
 /// https://www.bipm.org/en/publications/si-brochure

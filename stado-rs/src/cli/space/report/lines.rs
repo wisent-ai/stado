@@ -28,9 +28,10 @@ pub(super) fn work_root_mount(report: &Value) -> Option<String> {
 }
 
 /// Every other device-backed volume, and every disk the host has that
-/// nothing mounted. The `disk:` line above is the volume holding the home;
-/// the volume holding a declared work root is named as the fleet's too, and
-/// a disk that is attached but unmounted is named as such rather than left out.
+/// nothing mounted. The `disk:` line above is the volume the fleet writes to
+/// and the rule judges (the declared work root's, else the home's); every
+/// other volume, the home's on a host with a work root among them, is one
+/// the rule does not judge, and a disk attached but unmounted is named so.
 pub(super) fn print_volumes(report: &Value) {
     let fleet_volume = report
         .get("usage")
@@ -59,7 +60,7 @@ pub(super) fn print_volumes(report: &Value) {
             {
                 format!("the fleet's work root {root} is here")
             }
-            _ => "the fleet does not write here".to_string(),
+            _ => "the disk-full rule does not judge it".to_string(),
         };
         println!(
             "volume: {} free KiB on {} mounted at {} ({}); {whose}",

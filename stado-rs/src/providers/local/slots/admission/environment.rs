@@ -104,4 +104,13 @@ pub(crate) fn apply_job_runtime_environment(
         helpers::requested_cpu_cores(job).to_string(),
     );
     command.env("STADO_BIN", stado);
+    // On a host that declares a work root, the job's package managers keep
+    // their downloads there, where the `package_caches` cleaner takes them,
+    // rather than under the home. A job that sets one itself overrides it.
+    if let Some(root) = crate::providers::local::work_base::declared() {
+        let caches = root.join(crate::providers::local::work_base::PACKAGE_CACHES_LEAF);
+        for (variable, directory) in crate::providers::local::work_base::JOB_PACKAGE_CACHES {
+            command.env(variable, caches.join(directory));
+        }
+    }
 }

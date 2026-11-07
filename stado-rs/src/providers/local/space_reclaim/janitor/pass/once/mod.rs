@@ -35,7 +35,7 @@ use crate::providers::local::space_reclaim::janitor::state::report::build::epoch
 use crate::providers::local::space_reclaim::janitor::state::report::CleanupReport;
 use crate::providers::local::space_reclaim::margin::Margin;
 use crate::providers::local::space_reclaim::queue_workdirs::session_checkouts;
-use crate::providers::local::space_reclaim::rule::read_fleet_volume;
+use crate::providers::local::space_reclaim::rule::{home_volume_full, read_fleet_volume};
 
 /// The shared body of [`run_cleanup_once`] and [`preview_cleanup_once`].
 pub(crate) async fn cleanup_once(
@@ -80,9 +80,8 @@ pub(crate) async fn cleanup_once(
         }
     }
     // The room the next build needs under the rule, from the builds the
-    // removal record says this host's passes took ([`margin`]). This pass's
-    // own Cargo build directories are measured by its cleaners and added
-    // before the second tier decides.
+    // removal record says this host's passes took ([`margin`]); this pass's
+    // own Cargo build directories are added before the second tier decides.
     let (margin, unread) = Margin::read(&state_dir, None);
     if let Some(cause) = unread {
         report.add_error("margin", &JanitorError::os(&cause));
@@ -114,9 +113,8 @@ pub(crate) async fn cleanup_once(
     report.charge_store_wait(store_wait);
     let asked = asked::ask(&home, &mut report).await;
     // What this pass may delete follows the ownership this host's entry
-    // declares: on a shared host, only Stado's own tree.
-    // Without this host's entry the pass may delete only in Stado's own
-    // tree ([`deletable_root`]); why the entry is missing is said.
+    // declares: on a shared host, or without the entry (why is said), only
+    // Stado's own tree ([`deletable_root`]).
     let target = match &registry {
         Ok(data) => match resolve_target(data, &report.hostname) {
             Ok(target) => Some(target),
@@ -138,21 +136,20 @@ pub(crate) async fn cleanup_once(
     let deletable = deletable_root(target.as_ref(), &home, &mut report);
     let walked_folders = walked_folders(target.as_ref(), &home, &mut report);
     // The build-cache walk reads the whole home, for minutes on a full
-    // developer host. Run under the exclusive lock it refused every running
-    // workload's hold for as long as it read, so a host whose pressure the
-    // cleaners cannot relieve refused every build. It runs here under its
-    // own lock instead, and takes the exclusive lock for each cache it
-    // removes; a cache a workload holds stays for a later pass.
+    // developer host; under the exclusive lock it refused every running
+    // workload's hold for as long as it read. It runs here under its own lock
+    // instead, and takes the exclusive lock for each cache it removes; a
+    // cache a workload holds stays for a later pass.
     report.scanned = true;
     // Below the rule a pass takes no build cache: an idle agent's build
     // directory keeps its incremental state, which the next build reuses.
-    // Cargo's build directories are still measured, since the largest of
-    // them is the room the next build takes.
-    let tier_one = preview || report.pressure_active == Some(true);
-    // What jobs, agents and Stado verbs registered as theirs to lose, once
-    // the session that owns each tree has ended: nothing uses it, so every
-    // pass takes it. It is the fleet's by its creator's registration, so a
-    // shared host takes it too.
+    // Cargo's build directories are still measured. A home volume at the
+    // threshold on a host whose work root is elsewhere takes them too.
+    let at_rule = preview || report.pressure_active == Some(true);
+    let tier_one = at_rule || home_volume_full(&home);
+    // What jobs, agents and Stado verbs registered as theirs to lose, once the
+    // owning session has ended: nothing uses it, so every pass takes it, and
+    // it is the fleet's by its creator's registration, on a shared host too.
     crate::providers::local::space_reclaim::registered_scratch::scan_registered_scratch(
         &home,
         &state_dir,
@@ -162,9 +159,8 @@ pub(crate) async fn cleanup_once(
     );
     // Cargo's per-workspace build directories under its home: the build-dir
     // the walk below declares for checkouts it cannot read. Each is taken
-    // whole under the exclusive lock for that one directory, like a tagged
-    // cache, before the walk would descend into an untagged one and find
-    // nothing it may take.
+    // whole under the exclusive lock for that one directory, before the walk
+    // would descend into an untagged one and find nothing it may take.
     build_caches::scan_cargo_build_dirs(
         &home,
         !preview && tier_one,
@@ -173,11 +169,24 @@ pub(crate) async fn cleanup_once(
         writer.as_str(),
         &mut report,
     );
+    // Proven session checkouts: the home's every pass, the work root's at the
+    // rule; the cleaner asks this host's queue, when it must, before any lock.
+    session_checkouts::scan_session_checkouts(
+        &session_checkouts::Pass {
+            home: &home,
+            enforcing: !preview,
+            deletable: deletable.as_deref(),
+            target: target.as_ref(),
+            walked_folders: &walked_folders,
+            lock_dir: &state_dir,
+            writer: writer.as_str(),
+            at_rule,
+        },
+        &mut report,
+    )
+    .await;
     if tier_one {
-        // Xcode's per-project build directories, then the checkouts fleet
-        // sessions are proven to have cloned, each taken whole unless a
-        // running process holds it. The session cleaner asks this host's
-        // queue, when it must, before it takes any lock.
+        // Xcode's per-project build directories, each whole unless a process holds it.
         crate::providers::local::space_reclaim::xcode_derived_data::scan_xcode_derived_data(
             &home,
             !preview,
@@ -186,19 +195,7 @@ pub(crate) async fn cleanup_once(
             writer.as_str(),
             &mut report,
         );
-        session_checkouts::scan_session_checkouts(
-            &session_checkouts::Pass {
-                home: &home,
-                enforcing: !preview,
-                deletable: deletable.as_deref(),
-                target: target.as_ref(),
-                walked_folders: &walked_folders,
-                lock_dir: &state_dir,
-                writer: writer.as_str(),
-            },
-            &mut report,
-        )
-        .await;
+
         build_caches::scan_build_caches(
             &home,
             !preview,

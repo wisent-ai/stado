@@ -1,6 +1,8 @@
 //! The git checkouts fleet sessions cloned on a host, taken by the janitor's
-//! own pass at the disk-full rule once the session that cloned one is proven,
-//! nothing in it exists only there and no process works in it.
+//! own pass once the session that cloned one is proven, nothing in it exists
+//! only there and no process works in it: below the home on every pass,
+//! since nothing reuses a checkout there any more, below the work root at the
+//! disk-full rule, since the next session reuses it.
 //!
 //! A detached coding session clones the repository it works on into a
 //! checkout on the host it runs on, and nothing ever removed one. Earlier
@@ -76,6 +78,9 @@ pub(in crate::providers::local::space_reclaim) struct Pass<'a> {
     /// The janitor's state directory: its lock and its removal record.
     pub lock_dir: &'a Path,
     pub writer: &'a str,
+    /// Whether the pass is at the disk-full rule: only then are the work
+    /// root's checkouts, which the next session reuses, taken.
+    pub at_rule: bool,
 }
 
 /// Where a checkout lies.
@@ -95,14 +100,15 @@ struct Root {
     place: Place,
 }
 
-/// The home's root, and the work root's when the host declares one.
-fn roots(home: &Path) -> Vec<Root> {
+/// The home's root, and the work root's when the host declares one and the
+/// pass is at the rule.
+fn roots(home: &Path, at_rule: bool) -> Vec<Root> {
     let mut roots = vec![Root {
         path: home.join(HOME_ROOT),
         nested: true,
         place: Place::Home,
     }];
-    if let Some(work_root) = work_base::declared() {
+    if let Some(work_root) = work_base::declared().filter(|_| at_rule) {
         roots.push(Root {
             path: work_root.join(work_base::SESSION_CHECKOUTS_LEAF),
             nested: false,
@@ -147,9 +153,15 @@ impl Found {
 /// List every root this host has.
 fn list(pass: &Pass<'_>, met: &mut Met, report: &mut CleanupReport) -> Found {
     let mut found = Found::default();
-    for root in roots(pass.home) {
+    for root in roots(pass.home, pass.at_rule) {
         if root.place == Place::Home && home_root_protected(pass.walked_folders) {
             met.skipped("privacy_protected");
+            continue;
+        }
+        // On a shared host the home's checkouts are its person's: none is
+        // listed or sized, now that every pass looks at the home's root.
+        if root.place == Place::Home && !ownership::may_delete(pass.deletable, &root.path) {
+            met.skipped(ownership::NOT_STADO_OWNED);
             continue;
         }
         let children = match work::directories(&root.path) {

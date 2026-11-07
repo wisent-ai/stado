@@ -24,7 +24,13 @@
 //! (`$CARGO_HOME/.package-cache`). When a table cannot be read every cache
 //! stays (`process_table_unread`). Cargo's registry stays: build scripts
 //! keep absolute paths into it for a whole build. Each removal is a line of
-//! the janitor's removal record.
+//! the janitor's removal record. The jobs' own caches on the work root
+//! ([`table::CacheRoot::JobCaches`]) are the fleet's on every host.
+
+mod table;
+
+pub use table::{cache_path, CacheRoot, PackageCache, CACHES};
+use table::cargo_home;
 
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -40,74 +46,6 @@ use super::JanitorError;
 
 /// The name this cleaner's report is filed under.
 pub const CLEANER: &str = "package_caches";
-
-/// One cache: where it is and which tool keeps it.
-pub struct PackageCache {
-    /// Home-relative path, or `None` for Cargo's git checkouts, which live
-    /// under Cargo's home.
-    pub root: Option<&'static str>,
-    pub tool: &'static str,
-}
-
-/// Every cache this cleaner takes. A product's own application cache
-/// (`~/Library/Caches/<bundle id>` of an app the owner uses) is not one: it
-/// is the owner's, and `stado space candidates` only proposes it.
-pub const CACHES: &[PackageCache] = &[
-    PackageCache {
-        root: None,
-        tool: "Cargo git dependency checkouts",
-    },
-    PackageCache {
-        root: Some(".npm/_cacache"),
-        tool: "npm package cache",
-    },
-    PackageCache {
-        root: Some(".bun/install/cache"),
-        tool: "Bun package cache",
-    },
-    PackageCache {
-        root: Some("Library/Caches/org.swift.swiftpm"),
-        tool: "SwiftPM package cache",
-    },
-    PackageCache {
-        root: Some("Library/Caches/pip"),
-        tool: "pip package cache",
-    },
-    PackageCache {
-        root: Some(".cache/pip"),
-        tool: "pip package cache",
-    },
-    PackageCache {
-        root: Some(".cache/uv"),
-        tool: "uv package cache",
-    },
-    PackageCache {
-        root: Some("Library/Caches/Homebrew"),
-        tool: "Homebrew download cache",
-    },
-    PackageCache {
-        root: Some("Library/Caches/com.microsoft.VSCode.ShipIt"),
-        tool: "VS Code update staging",
-    },
-];
-
-/// Cargo's home: `CARGO_HOME`, else `~/.cargo`.
-fn cargo_home(home: &Path) -> PathBuf {
-    match std::env::var_os("CARGO_HOME") {
-        Some(value) if !value.is_empty() => PathBuf::from(value),
-        _ => home.join(".cargo"),
-    }
-}
-
-/// Where `cache` is on this host. Of Cargo's git cache only `checkouts/`
-/// goes: each is a working tree Cargo checks out again from `db/`, the
-/// fetched repositories, which stay.
-pub fn cache_path(home: &Path, cache: &PackageCache) -> PathBuf {
-    match cache.root {
-        Some(root) => home.join(root),
-        None => cargo_home(home).join("git").join("checkouts"),
-    }
-}
 
 /// Cargo's package-cache lock: free (this pass holds it, or no Cargo made
 /// one yet, so none is held) or held by a running `cargo`.
@@ -218,8 +156,7 @@ pub(in crate::providers::local::space_reclaim) fn scan_package_caches(
     if enforcing {
         // A cache an earlier pass moved aside and could not finish removing
         // is no tool's any more: it goes first, whatever the volume reads.
-        for cache in CACHES {
-            let path = cache_path(home, cache);
+        for path in CACHES.iter().filter_map(|cache| cache_path(home, cache)) {
             let aside = aside_path(&path);
             if std::fs::symlink_metadata(&aside)
                 .is_ok_and(|info| info.is_dir() && !info.file_type().is_symlink())
@@ -232,7 +169,7 @@ pub(in crate::providers::local::space_reclaim) fn scan_package_caches(
     // `dir_size` sums lengths, so it is never negative.
     let mut present: Vec<(PathBuf, &PackageCache, i64)> = CACHES
         .iter()
-        .map(|cache| (cache_path(home, cache), cache))
+        .filter_map(|cache| cache_path(home, cache).map(|path| (path, cache)))
         .filter(|(path, _)| {
             std::fs::symlink_metadata(path)
                 .is_ok_and(|info| info.is_dir() && !info.file_type().is_symlink())
@@ -267,7 +204,8 @@ pub(in crate::providers::local::space_reclaim) fn scan_package_caches(
             met.kept("room_for_the_next_build", size);
             continue;
         }
-        if !ownership::may_delete(deletable, &path) {
+        let jobs = matches!(cache.root, CacheRoot::JobCaches);
+        if !jobs && !ownership::may_delete(deletable, &path) {
             met.kept(ownership::NOT_STADO_OWNED, size);
             continue;
         }
@@ -288,7 +226,7 @@ pub(in crate::providers::local::space_reclaim) fn scan_package_caches(
             met.kept("held_by_process", size);
             continue;
         }
-        let _cargo_lock = if cache.root.is_none() {
+        let _cargo_lock = if matches!(cache.root, CacheRoot::CargoGit) {
             if holders.cargo_runs() {
                 met.kept("build_running", size);
                 continue;

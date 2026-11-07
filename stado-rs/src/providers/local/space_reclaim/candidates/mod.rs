@@ -388,7 +388,7 @@ impl Walker<'_> {
         if row.cleaner.is_none()
             && super::package_caches::CACHES
                 .iter()
-                .any(|cache| super::package_caches::cache_path(home, cache) == row.path)
+                .any(|cache| super::package_caches::cache_path(home, cache).as_ref() == Some(&row.path))
         {
             let (cleaner, note) = self.automatic(
                 &row.path,

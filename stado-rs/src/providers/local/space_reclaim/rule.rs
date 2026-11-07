@@ -1,6 +1,6 @@
 //! The disk-full rule: the janitor's only instruction.
 //!
-//! When the volume holding the agent's home is at least [`DISK_FULL_PERCENT`]
+//! When the volume the fleet writes to is at least [`DISK_FULL_PERCENT`]
 //! used, a pass deletes everything the fleet put on the host — every
 //! candidate of every cleaner in [`CLEANERS`], with no age, count, byte or
 //! scan limit. Below it a pass deletes nothing. Nothing about cleanup is
@@ -13,13 +13,15 @@
 //! release versions the registry declares or this host has installed, and
 //! the work tree of a job that is still running.
 //!
-//! The volumes are every one the fleet writes to: the one holding `$HOME`,
-//! and the one holding the host's declared work root
-//! ([`crate::providers::local::work_base`]) when it declares one. Each is
-//! measured with `statvfs`, and the one with less room before the threshold
-//! is the reading the rule judges ([`read_fleet_volume`]). On macOS the
-//! home's volume is the APFS Data volume, whose usage is the container's,
-//! not the sealed system snapshot mounted at `/`.
+//! The volume is the one the fleet writes to: the one holding the host's
+//! declared work root ([`crate::providers::local::work_base`]) when it
+//! declares one, else the one holding `$HOME`. It is measured with
+//! `statvfs` ([`read_fleet_volume`]). A host whose work root sits on a data
+//! disk is never called full because its system disk is: every fleet writer
+//! puts its trees on the work root, and what earlier releases left under the
+//! home is taken on every pass as nothing reuses it. On macOS the home's
+//! volume is the APFS Data volume, whose usage is the container's, not the
+//! sealed system snapshot mounted at `/`.
 
 use std::io;
 use std::path::Path;
@@ -143,7 +145,7 @@ pub const CLEANERS: &[Cleaner] = &[
     Cleaner {
         name: super::queue_workdirs::session_checkouts::CLEANER,
         root: "",
-        sweeps: "git checkouts a fleet session is proven to have cloned (its clone marker, or this host's queue record of the session that cloned it), under <work root>/session-checkouts and, on a dedicated host, under ~/Documents/CodingProjects; each whole once no process works in it and git reports nothing in it that no remote has; every other checkout there stays",
+        sweeps: "git checkouts a fleet session is proven to have cloned (its clone marker, or this host's queue record of the session that cloned it), under ~/Documents/CodingProjects on a dedicated host on every pass and under <work root>/session-checkouts at the rule; each whole once no process works in it and git reports nothing in it that no remote has; every other checkout there stays",
     },
     Cleaner {
         name: super::xcode_derived_data::CLEANER,
@@ -219,24 +221,27 @@ pub fn read_volume(path: &Path) -> Result<VolumeReading, JanitorError> {
     })
 }
 
-/// The reading the rule judges: the volume holding the home and, when the
-/// host declares a work root on another volume, that volume too — job trees
-/// and build caches fill it. Of the two, the one with less room before the
-/// threshold decides, so a full work-root volume starts a pass even while the
-/// home's volume is nearly empty.
+/// The reading the rule judges: the volume holding the host's declared work
+/// root, where every fleet writer puts its trees, else the volume holding
+/// the home. The home's own volume is not judged on a host that declares a
+/// work root elsewhere: a system disk filled by what is not the fleet's must
+/// not stop the fleet from claiming work on a data disk with room.
 pub fn read_fleet_volume(home: &Path) -> Result<VolumeReading, JanitorError> {
-    let home_reading = read_volume(home)?;
-    let Some(root) = crate::providers::local::work_base::declared() else {
-        return Ok(home_reading);
-    };
-    let root_reading = read_volume(&root)?;
-    Ok(
-        if root_reading.headroom_bytes() < home_reading.headroom_bytes() {
-            root_reading
-        } else {
-            home_reading
-        },
-    )
+    match crate::providers::local::work_base::declared() {
+        Some(root) => read_volume(&root),
+        None => read_volume(home),
+    }
+}
+
+/// Whether the home's own volume is at the threshold on a host whose work
+/// root is declared elsewhere. It is not the rule's verdict and stops no
+/// claim, but what the fleet rebuilds or refetches under the home (Cargo's
+/// build directories, tagged build caches) is taken while it holds, so a
+/// system disk the rule no longer judges is still kept clean of the fleet's
+/// caches. A home volume that cannot be read takes nothing this way.
+pub fn home_volume_full(home: &Path) -> bool {
+    crate::providers::local::work_base::declared().is_some()
+        && read_volume(home).is_ok_and(|reading| reading.full())
 }
 
 /// The `rule` object every report carries: the threshold, the reading it

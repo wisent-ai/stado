@@ -1,5 +1,6 @@
-//! At the disk-full rule the janitor takes the git checkouts a fleet session
-//! is proven to have cloned, and nothing else. A checkout below
+//! The janitor takes the git checkouts a fleet session is proven to have
+//! cloned, and nothing else: below the home on every pass, below the work
+//! root at the disk-full rule. A checkout below
 //! `~/Documents/CodingProjects` (both the older `<repository>` and the later
 //! `Wisent/<repository>` layout) or below the declared work root's
 //! `session-checkouts` goes once its clone marker names the session that
@@ -265,4 +266,35 @@ fn on_a_shared_host_checkouts_under_the_home_stay_and_the_work_roots_proven_ones
     assert!(unproven.join(".git").is_dir(), "an unproven checkout was taken: {report}");
     assert_eq!(cleaner["skipped"]["not_session_checkout"], 1, "{report}");
     assert_eq!(cleaner["deleted_items"], 1, "{report}");
+}
+
+/// A host whose home volume is full and whose declared work root is a
+/// roomy data disk is not at the rule: the rule judges the volume the fleet
+/// writes to. A proven session checkout earlier releases left under the home
+/// goes anyway, since nothing reuses it, and the work root's stays for the
+/// next session.
+#[test]
+fn a_full_home_volume_is_not_the_rule_and_its_legacy_checkouts_still_go() {
+    let native = Native::new("session-checkouts-fleet-volume");
+    admit_documents(&native);
+    let origin = origin(&native);
+    let data = native.data_volume("fleet-work");
+    let legacy = native
+        .home
+        .join("Documents/CodingProjects/Wisent/legacy-repository");
+    let reused = data.path().join("session-checkouts/reused-repository");
+    session_clone(&origin, &legacy);
+    session_clone(&origin, &reused);
+
+    let user_data = native.fill_with_user_data();
+    let report = cleanup_with_work_root(&native, data.path());
+    let cleaner = &report["cleaners"][CLEANER];
+    assert_eq!(report["rule"]["triggered"], false, "{report}");
+    assert!(!legacy.exists(), "the legacy checkout was kept: {report}");
+    assert!(
+        reused.join(".git").is_dir(),
+        "the work root's checkout went below the rule: {report}"
+    );
+    assert_eq!(cleaner["deleted_items"], 1, "{report}");
+    assert!(user_data.is_file(), "the user's data was deleted");
 }
