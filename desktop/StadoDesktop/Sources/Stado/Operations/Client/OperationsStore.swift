@@ -43,7 +43,7 @@ enum DashboardEndpointPreference {
             root = [:]
         }
         let dashboard = root["dashboard"] as? [String: Any] ?? [:]
-        let unit = DeviceUnit.read()
+        let unit = try DeviceUnit.read()
         let bind = environment["WC_DASHBOARD_BIND"] ?? (dashboard["bind"] as? String) ?? unit?.option("--bind")
         let port = environment["WC_DASHBOARD_PORT"] ?? (dashboard["port"] as? NSNumber)?.stringValue ?? unit?.option("--port")
         if port == "0", let announced = unit?.announcedEndpoint() {
@@ -64,13 +64,41 @@ enum DashboardEndpointPreference {
         let arguments: [String]
         let errorLog: URL?
 
-        static func read() -> DeviceUnit? {
-            let plist = FileManager.default.homeDirectoryForCurrentUser
+        /// The unit, or nil when this Mac has no such LaunchAgent. A file that
+        /// exists and cannot be read, is not a property list, is not a
+        /// dictionary or names no ProgramArguments is an error naming the
+        /// file and the cause: read as nil it was reported as "no Stado API
+        /// listener" on a Mac whose listener was declared in that very file.
+        static func read(
+            plist: URL = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/LaunchAgents/com.wisent.stado.plist")
-            guard let data = try? Data(contentsOf: plist),
-                  let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-                  let arguments = root["ProgramArguments"] as? [String]
-            else { return nil }
+        ) throws -> DeviceUnit? {
+            let refused = { (cause: String) in
+                StadoCLIError.failed(
+                    exitCode: nil,
+                    message: "The LaunchAgent \(plist.path) cannot be read as com.wisent.stado: \(cause)"
+                )
+            }
+            let data: Data
+            do {
+                data = try Data(contentsOf: plist)
+            } catch CocoaError.fileReadNoSuchFile {
+                return nil
+            } catch {
+                throw refused(error.localizedDescription)
+            }
+            let decoded: Any
+            do {
+                decoded = try PropertyListSerialization.propertyList(from: data, format: nil)
+            } catch {
+                throw refused("it is not a property list: \(error.localizedDescription)")
+            }
+            guard let root = decoded as? [String: Any] else {
+                throw refused("its root is not a dictionary")
+            }
+            guard let arguments = root["ProgramArguments"] as? [String] else {
+                throw refused("it declares no ProgramArguments list")
+            }
             let errorLog = (root["StandardErrorPath"] as? String).map { URL(fileURLWithPath: $0) }
             return DeviceUnit(arguments: arguments, errorLog: errorLog)
         }
