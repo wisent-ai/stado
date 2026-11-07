@@ -128,6 +128,9 @@ pub async fn live_snapshot(store: &JobStorage) -> Value {
                     crate::capabilities::RuntimeAdapter::Billing(
                         crate::capabilities::BillingAdapter::Azure,
                     ) => azure_section(store).await,
+                    crate::capabilities::RuntimeAdapter::Billing(
+                        crate::capabilities::BillingAdapter::Supabase,
+                    ) => crate::cli::database::supabase_status_section().await,
                     _ => error_section(format!(
                         "billing catalog variant {:?} has no billing adapter",
                         variant.id

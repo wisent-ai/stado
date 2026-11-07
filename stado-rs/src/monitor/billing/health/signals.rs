@@ -23,21 +23,36 @@ pub(super) fn signals(document: &Value, providers: &[ProviderHealth]) -> Vec<Sig
         } else {
             health.detail.as_str()
         };
+        // What a section that is not ok costs depends on what it reports: a
+        // balance section's silence disarms the credit alert, while a section
+        // that reports no money (Supabase's) finds that a declared database's
+        // project does not run.
+        let reports_money = crate::capabilities::BillingAdapter::of(&health.provider)
+            .is_none_or(|adapter| adapter.reports_money());
+        let consequence = if !reports_money {
+            "While this persists a declared database hosted there may not answer its consumers \
+             — restore the project at the provider or move the database off it."
+                .to_string()
+        } else {
+            format!(
+                "While this persists {} publishes no balance at all, so the credit-threshold \
+                 alert CANNOT fire — treat this as the outage warning.",
+                health.provider
+            )
+        };
         firing.push(Signal {
             key: format!("account_health:{}", health.provider),
             subject: format!("stado billing: {} account unhealthy", health.provider),
             message: format!(
                 "BILLING ACCOUNT HEALTH: the {} billing section has reported '{}' since {} \
-                 ({} and counting). Last good report: {}. \
-                 Cause: {}. While this persists {} publishes no balance at all, so the \
-                 credit-threshold alert CANNOT fire — treat this as the outage warning.",
+                 ({} and counting). Last good report: {}. Cause: {}. {}",
                 health.provider,
                 health.status,
                 health.failing_since.as_deref().unwrap_or("an unknown time"),
                 humanize(health.failing_seconds),
                 health.last_ok.as_deref().unwrap_or("never"),
                 cause,
-                health.provider,
+                consequence,
             ),
         });
     }

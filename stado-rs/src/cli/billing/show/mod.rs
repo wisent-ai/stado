@@ -3,16 +3,18 @@
 //!
 //! There is no per-provider branch here beyond the adapter the billing
 //! capability declares for each variant, so a new provider in the catalog
-//! prints through this same loop. `gcp` and `azure` hold the two section
-//! renderers it dispatches to.
+//! prints through this same loop. `gcp`, `azure` and `supabase` hold the
+//! section renderers it dispatches to.
 
 mod azure;
 mod gcp;
+mod supabase;
 
 use serde_json::Value;
 
 use azure::print_azure;
 use gcp::print_gcp;
+use supabase::print_supabase;
 
 pub(super) fn print_human(document: &Value) {
     // A field the billing document does not carry is said as missing: an
@@ -38,6 +40,9 @@ pub(super) fn print_human(document: &Value) {
                 crate::capabilities::RuntimeAdapter::Billing(
                     crate::capabilities::BillingAdapter::Azure,
                 ) => print_azure(section),
+                crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Supabase,
+                ) => print_supabase(section),
                 _ => println!("{}: unsupported billing adapter", variant.id),
             }
         }

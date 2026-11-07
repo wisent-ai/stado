@@ -77,6 +77,8 @@ impl QuotaAdapter {
 pub enum BillingAdapter {
     Gcp,
     Azure,
+    /// The status of the hosted projects declared databases live in.
+    Supabase,
 }
 
 impl BillingAdapter {
@@ -84,6 +86,29 @@ impl BillingAdapter {
         match self {
             Self::Gcp => ProviderId::Gcp,
             Self::Azure => ProviderId::Azure,
+            Self::Supabase => ProviderId::Supabase,
+        }
+    }
+
+    /// Whether this source's section reports money (spend, credit, balance).
+    /// Supabase's reports whether the projects behind declared databases run,
+    /// so no spend or balance reader counts it and its health alert speaks
+    /// of the databases, not of a disarmed credit threshold.
+    pub const fn reports_money(self) -> bool {
+        match self {
+            Self::Gcp | Self::Azure => true,
+            Self::Supabase => false,
+        }
+    }
+
+    /// The billing adapter the catalog declares for `provider`, read once
+    /// here so no consumer re-spells the catalog lookup.
+    pub fn of(provider: &str) -> Option<Self> {
+        match crate::capabilities::variant(crate::capabilities::RuntimeFacet::Billing, provider)
+            .map(|variant| variant.adapter)
+        {
+            Some(RuntimeAdapter::Billing(adapter)) => Some(adapter),
+            _ => None,
         }
     }
 }

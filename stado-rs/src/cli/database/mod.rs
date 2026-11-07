@@ -31,6 +31,9 @@ pub(crate) use self::commands::DatabaseCommands;
 pub(crate) use self::dump::files::BackupsArgs;
 pub(crate) use self::dump::migrate::MigrateArgs;
 pub(crate) use self::dump::BackupArgs;
+/// The Supabase section of the billing snapshot: whether the project behind
+/// each declared database runs.
+pub(crate) use self::supabase::reads::status::section as supabase_status_section;
 
 /// `stado database tls <verb>`.
 #[derive(Debug, clap::Subcommand)]
@@ -179,7 +182,7 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
             TlsCommands::Reissue(args) => fleet::reissue::reissue(args).await,
         },
         DatabaseCommands::Cost { provider, json } => match provider {
-            DatabaseProvider::Supabase => supabase::cost::cost(json).await,
+            DatabaseProvider::Supabase => supabase::reads::cost::cost(json).await,
             DatabaseProvider::Fleet => Err(CmdError::usage(
                 "--provider fleet has no bill to read: a fleet database runs on a fleet host with no vendor",
             )),
@@ -238,7 +241,9 @@ pub(in crate::cli) fn declared_databases(
 
 /// When the newest complete backup of declared database `name` this machine
 /// keeps was taken, or `None` when it keeps none (`stado database backups`).
-pub(in crate::cli) fn newest_backup(name: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>, CmdError> {
+pub(in crate::cli) fn newest_backup(
+    name: &str,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, CmdError> {
     dump::files::newest_complete(name)
 }
 

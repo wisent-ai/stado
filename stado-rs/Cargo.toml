@@ -162,6 +162,10 @@ name = "billing-mail-organization"
 path = "../tests/billing/mail_organization.rs"
 
 [[test]]
+name = "billing-supabase-status"
+path = "../tests/billing/supabase_status.rs"
+
+[[test]]
 name = "public-status"
 path = "../tests/public_status/main.rs"
 

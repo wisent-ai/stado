@@ -138,6 +138,18 @@ pub(in crate::capabilities::registry) const BILLING: &[CapabilityVariant] = &[
         adapter: RuntimeAdapter::Billing(BillingAdapter::Azure),
         config: AZURE_COMPUTE_CONFIG,
     },
+    CapabilityVariant {
+        id: ProviderId::Supabase.as_str(),
+        aliases: ProviderId::Supabase.aliases(),
+        provider: Some(ProviderId::Supabase),
+        implementation: "cli::database::supabase::reads::status",
+        summary: "Whether the Supabase project behind each declared database runs, with its \
+                  organization's plan and the way off the provider.",
+        configurable: false,
+        constructible: false,
+        adapter: RuntimeAdapter::Billing(BillingAdapter::Supabase),
+        config: &[],
+    },
 ];
 
 pub(in crate::capabilities::registry) const ARTIFACTS: &[CapabilityVariant] = &[

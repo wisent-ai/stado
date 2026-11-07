@@ -132,19 +132,25 @@ pub(super) fn print_human(report: &ResourcesReport) {
         .filter_map(|variant| {
             let provider = variant.provider?.as_str();
             let section = report.billing.data.get(provider)?;
-            let metric = match variant.adapter {
+            // A provider that reports no money (Supabase reports whether the
+            // projects behind declared databases run) says so in the money
+            // column, and its state and detail still show.
+            let amount = match variant.adapter {
                 crate::capabilities::RuntimeAdapter::Billing(
                     crate::capabilities::BillingAdapter::Gcp,
-                ) => "latest_month_net_usd",
+                ) => text(section, "latest_month_net_usd"),
                 crate::capabilities::RuntimeAdapter::Billing(
                     crate::capabilities::BillingAdapter::Azure,
-                ) => "available_balance",
+                ) => text(section, "available_balance"),
+                crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Supabase,
+                ) => "project status, no amount".to_string(),
                 _ => return None,
             };
             Some(vec![
                 provider.to_uppercase(),
                 text(section, "status"),
-                text(section, metric),
+                amount,
                 text(section, "currency"),
                 text(section, "detail"),
             ])

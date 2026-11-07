@@ -3,10 +3,10 @@
 //! item `<name>-database` carries for one project.
 
 pub(super) mod adopt;
-pub(super) mod cost;
 pub(super) mod create;
 pub(super) mod destroy;
 pub(super) mod owner_vault;
+pub(crate) mod reads;
 
 use serde_json::{json, Value};
 

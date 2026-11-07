@@ -150,6 +150,20 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Added
 
+- **The billing snapshot says when a declared database's Supabase project stops running:** a
+  database whose only copy lives in a Supabase project stopped answering when the project was
+  paused, and nothing Stado ran said why. `billing.providers` (`WC_BILLING_PROVIDERS`) now takes
+  `supabase`: each billing pass (`stado billing refresh`, `billing watch`, the coordinator
+  collector) reads, through the Supabase management API with the `supabase-management` role's
+  token, the project every declared database's item names (`project_ref`), and publishes it in a
+  `supabase` section with the project's status as Supabase gives it, its organization and plan,
+  and the way off the provider (`stado database migrate <name> --to fleet`). The section is `ok`
+  only while every such project reports `ACTIVE_HEALTHY`; `project_not_running`,
+  `project_not_listed`, `no_credentials`, `config_error` or `error` otherwise, with the cause, and
+  `billing watch` alerts on the transition into any of them like any other billing source. `stado
+  billing show` prints one line per database; the spend and balance readers pass this section
+  over, since it reports no money. The per-item `project_ref` read is one function the bill
+  (`stado database cost --provider supabase`) and this section share.
 - **`stado product cancel PRODUCT --surface S [--json]` ends an installation that nothing
   supersedes:** an installation waiting on another product's lock named the holder, but the holder
   could be stopped only by a newer installation of its own surface or by a hand kill, so an

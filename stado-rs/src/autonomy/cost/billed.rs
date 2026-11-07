@@ -13,7 +13,10 @@ use serde_json::Value;
 /// A provider's section carries the billing export's per-month net rows
 /// (`monthly`); a month with no row has billed nothing yet. A section that is
 /// not `ok`, or one that reports no monthly rows at all (Azure's carries a
-/// credit balance, not spend), leaves the month's spend unknown. The reader
+/// credit balance, not spend), leaves the month's spend unknown. A provider
+/// whose billing variant reports the status of hosted projects instead of
+/// money (Supabase) is not a spend source and is passed over by its
+/// declared adapter, not by its name. The reader
 /// this replaces looked for fields no section writes and read the month as
 /// unspent, so a monthly budget passed with the month already spent.
 pub(super) fn month_spent(snapshot: Option<&Value>, now: DateTime<Utc>) -> Result<f64, String> {
@@ -33,6 +36,11 @@ pub(super) fn month_spent(snapshot: Option<&Value>, now: DateTime<Utc>) -> Resul
     let month = now.format("%Y-%m").to_string();
     let mut billed = Vec::new();
     for provider in providers {
+        if crate::capabilities::BillingAdapter::of(provider)
+            .is_some_and(|adapter| !adapter.reports_money())
+        {
+            continue;
+        }
         let section = snapshot
             .get(provider.as_str())
             .ok_or_else(|| format!("the billing snapshot carries no {provider} section"))?;
