@@ -28,11 +28,10 @@ pub(crate) use results::collect as collect_results;
 use serde_json::json;
 
 use super::capacity::{admission_refusal, live_capacity};
-use super::detached::{batch_id, run_id, RECORD_SCHEMA_VERSION};
-use super::{candidates, validate_component, CHECKOUT_ROOT, HOME_WORKSPACE};
+use super::sessions::{batch_id, run_id, RECORD_SCHEMA_VERSION};
+use super::{candidates, fleet_place, origin, validate_component, HOME_WORKSPACE};
 use crate::cli::workload::catalog::WorkloadKind;
 use crate::cli::CmdError;
-use crate::providers::local::work_base;
 use crate::queue::submit::{
     submit_batch, ResolvedHardwareProjection, SubmitOptions, CPU_MACHINE_TYPE,
 };
@@ -59,28 +58,6 @@ pub(crate) struct OmpRequest<'a> {
     pub allow_write: bool,
     pub allow_command: bool,
     pub json: bool,
-}
-
-/// The origin this machine's checkout of `workspace` fetches from: the
-/// host's own checkout is cloned from the same place.
-async fn origin(workspace: &str) -> Result<String, CmdError> {
-    let checkout = super::expand_home(&format!("{CHECKOUT_ROOT}/{workspace}"))?;
-    let output = crate::wait::output_async(
-        tokio::process::Command::new("git")
-            .arg("-C")
-            .arg(&checkout)
-            .args(["remote", "get-url", "origin"]),
-    )
-    .await?;
-    if !output.status.success() {
-        return Err(CmdError::usage(format!(
-            "{} has no origin this machine can read ({}); a session works in a canonical \
-             checkout, so name a workspace that is one",
-            checkout.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// The job secrets the declaration hands a session, as the role and field
@@ -141,23 +118,23 @@ pub(crate) async fn start_omp(request: OmpRequest<'_>) -> Result<(), CmdError> {
     for target in candidates(request.target).await? {
         // The clone, the clones the session adds and its builds go where
         // the host keeps the fleet's work. Without a declared work root they
-        // would fill the home volume, whose rule decides whether the host
-        // claims work at all.
-        let Some(work_root) = target.work_root.as_deref() else {
-            refusals.push(format!(
-                "{} declares no work root, so the session's clone and builds would land on its \
-                 home volume; declare one on a data volume with `stado space root {} --path \
-                 <directory>`",
-                target.name, target.name
-            ));
-            continue;
+        // would fill the home volume.
+        let place = match fleet_place(&target, request.workspace) {
+            Ok(place) => place,
+            Err(refusal) => {
+                refusals.push(refusal);
+                continue;
+            }
         };
         if let Some(refusal) = admission_refusal(&target, &capacity) {
             refusals.push(refusal);
             continue;
         }
-        let checkouts = format!("{work_root}/{}", work_base::SESSION_CHECKOUTS_LEAF);
-        let checkout = format!("{checkouts}/{}", request.workspace);
+        let checkouts = place.checkouts;
+        let Some(checkout) = place.checkout else {
+            refusals.push(format!("{}: {kind} has no repository to check out", target.name));
+            continue;
+        };
         let command = command::session_command(&command::Session {
             checkouts: &checkouts,
             checkout: &checkout,

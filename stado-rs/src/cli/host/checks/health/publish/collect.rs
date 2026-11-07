@@ -313,20 +313,21 @@ async fn collect_document(
         },
     });
 
-    // The same volume the janitor measures and the same call it measures it
-    // with, so a beacon and a reclaim pass can never disagree about free
-    // space. `stado host health` prints these two numbers. A volume whose
-    // free space cannot be read publishes no number, and its `disk` line
-    // says why instead of leaving the field out unexplained.
+    // The volume the janitor's rule judges and admission measures (the
+    // declared work root's, else the home's), with the call the janitor
+    // measures it with, so a beacon and a reclaim pass never disagree about
+    // free space. A volume whose free space cannot be read publishes no
+    // number, and its `disk` line says why instead of leaving it unexplained.
     let home = crate::config_file::expand_tilde("~");
+    let volume = crate::providers::local::work_base::measured_volume();
     if let Some(object) = document.as_object_mut() {
-        match crate::providers::local::space_reclaim::free_bytes(&home) {
+        match crate::providers::local::space_reclaim::free_bytes(&volume) {
             Ok(free) => {
                 let free_gb = free / crate::providers::local::space_reclaim::GIB;
                 object.insert("disk_avail_gb".to_string(), json!(free_gb));
                 object.insert(
                     "disk".to_string(),
-                    Value::String(format!("{free_gb} GiB available on {}", home.display())),
+                    Value::String(format!("{free_gb} GiB available on {}", volume.display())),
                 );
             }
             Err(error) => {
@@ -334,15 +335,14 @@ async fn collect_document(
                     "disk".to_string(),
                     Value::String(format!(
                         "free space on {} cannot be read: {error}",
-                        home.display()
+                        volume.display()
                     )),
                 );
             }
         }
-        // What may still be written before the disk-full rule starts
-        // deleting, on the volume the rule judges: what a node's disk
-        // reservation must fit inside, so a sale never eats the rule's
-        // headroom. A volume that cannot be read publishes the cause.
+        // What may still be written before the rule starts deleting: what a
+        // node's disk reservation must fit inside, so a sale never eats the
+        // rule's headroom. A volume that cannot be read publishes the cause.
         match crate::providers::local::space_reclaim::rule::read_fleet_volume(&home) {
             Ok(volume) => {
                 object.insert(

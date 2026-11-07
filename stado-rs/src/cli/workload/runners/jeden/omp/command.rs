@@ -1,8 +1,7 @@
 //! The one shell command the worker runs for an `omp-session`.
 
-use super::super::shell_quote;
+use super::super::{checkout_preamble, github_token_environment, job_tree_environment, shell_quote};
 use crate::cli::workload::catalog::WorkloadHarness;
-use crate::providers::local::work_base;
 
 /// What one session command is built from.
 pub(super) struct Session<'a> {
@@ -37,13 +36,6 @@ pub(crate) const RESULTS_DIRECTORY: &str = "output/results";
 /// job, so nothing the session does is written into the host account's own
 /// harness configuration.
 pub(super) const AGENT_DIRECTORY: &str = "harness-agent";
-
-/// The Cargo target directory and the temporary directory of one session,
-/// inside the job's work tree, so what the session builds and stages ends
-/// with the job's tree (`queue_workdirs` takes it once the job is terminal)
-/// and never lands in the host account's home.
-pub(super) const CARGO_TARGET_DIRECTORY: &str = "cargo-target";
-pub(super) const TEMPORARY_DIRECTORY: &str = "tmp";
 
 /// The model gateway and the harness's agent directory, as shell: the host's
 /// own Stado resolves the gateway's address for the declared consumer, and
@@ -94,19 +86,7 @@ fn gateway_setup(harness: &WorkloadHarness) -> String {
 /// environment-declared credential helper, so the token never enters a
 /// command line or a file.
 pub(super) fn session_command(session: &Session<'_>) -> String {
-    let checkouts = shell_quote(session.checkouts);
-    let workspace = shell_quote(session.checkout);
-    let target = shell_quote(session.target);
-    let origin = shell_quote(session.origin);
     let managed = &session.harness.managed;
-    let marker = work_base::SESSION_CLONE_MARKER;
-    let helper =
-        shell_quote("!f() { echo username=x-access-token; echo \"password=$GITHUB_TOKEN\"; }; f");
-    let git_environment = format!(
-        "GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.https://github.com.helper \
-         GIT_CONFIG_VALUE_0= GIT_CONFIG_KEY_1=credential.https://github.com.helper \
-         GIT_CONFIG_VALUE_1={helper}"
-    );
     let approval = if session.allow_write && session.allow_command {
         " --approval-mode yolo"
     } else if session.allow_write {
@@ -115,23 +95,24 @@ pub(super) fn session_command(session: &Session<'_>) -> String {
         ""
     };
     let mut command = format!(
-        "job_tree=\"$PWD\"; \
+        "{job_tree}\
          {RESULTS_VARIABLE}=\"$job_tree/{RESULTS_DIRECTORY}\"; export {RESULTS_VARIABLE}; \
          mkdir -p \"${RESULTS_VARIABLE}\" || exit; \
-         CARGO_TARGET_DIR=\"$job_tree/{CARGO_TARGET_DIRECTORY}\"; TMPDIR=\"$job_tree/{TEMPORARY_DIRECTORY}\"; \
-         export CARGO_TARGET_DIR TMPDIR; mkdir -p \"$CARGO_TARGET_DIR\" \"$TMPDIR\" || exit; \
-         export {git_environment}; \
-         if ! mkdir -p {checkouts} || [ ! -w {checkouts} ]; then printf 'the session checkouts directory %s below the work root cannot be written on this host; give it to the account the Stado agent runs as, or declare another work root with `stado space root %s --path <directory on a data volume>`\\n' {checkouts} {target} >&2; exit 1; fi; \
-         if [ -d {workspace}/.git ]; then git -C {workspace} fetch --quiet origin || exit; \
-         else mkdir -p {workspace} && git clone --quiet {origin} {workspace} || {{ printf 'the worker cannot clone %s into %s on this host\\n' {origin} {workspace} >&2; exit 1; }}; \
-         printf '%s\\n' \"$WC_JOB_ID\" > {workspace}/.git/{marker} || {{ printf 'the worker cannot write the clone marker %s/.git/%s on this host, so the janitor would never take that checkout back; give the directory to the account the Stado agent runs as\\n' {workspace} {marker} >&2; exit 1; }}; fi; \
-         if ! cd {workspace}; then printf 'the worker cannot enter %s on this host; grant the Stado agent access to that directory\\n' {workspace} >&2; exit 1; fi; \
+         {git}{checkout}\
          printf 'omp-session works in %s; job tree %s, Cargo target %s, temporary directory %s\\n' \"$PWD\" \"$job_tree\" \"$CARGO_TARGET_DIR\" \"$TMPDIR\"; \
          {gateway}\
          if [ ! -x \"$HOME\"/{managed} ]; then printf 'the managed harness is missing or not executable at %s on this host; deliver it with `stado workload harness install`\\n' \"$HOME\"/{managed} >&2; exit 1; fi; \
          PATH=\"$HOME/.stado/bin:$PATH\" exec \"$HOME\"/{managed} -p --no-title --max-time {}{approval}",
         shell_quote(session.max_time),
+        job_tree = job_tree_environment(),
         gateway = gateway_setup(session.harness),
+        git = github_token_environment(),
+        checkout = checkout_preamble(
+            session.checkouts,
+            session.checkout,
+            session.origin,
+            session.target
+        ),
     );
     if let Some(model) = session.model {
         command.push_str(&format!(" --model {}", shell_quote(model)));

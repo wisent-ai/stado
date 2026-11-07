@@ -1,7 +1,10 @@
 //! Whether a candidate host can carry a Jeden session now, asked of the host
-//! itself over its channel.
+//! itself over its channel, and where on it a fleet session works
+//! ([`place`]).
 
-use super::{ledger_root, workspace_expression, MANAGED_JEDEN, MANAGED_STADO, OPERATOR_GRANT_FILE};
+pub(super) mod place;
+
+use super::{MANAGED_JEDEN, MANAGED_STADO, OPERATOR_GRANT_FILE};
 use crate::deploy::host_channel;
 use crate::targets::ComputeTarget;
 
@@ -13,17 +16,24 @@ pub(in crate::cli::workload::runners) struct HostReadiness {
     pub reads_own_credentials: bool,
 }
 
-/// Whether `target` can carry a session in `checkout` right now: the
-/// workspace exists, the managed binaries are installed, and the named
-/// session ledger is there when one was named. `Err(sentence)` is the
-/// host's own reason, kept for the refusal that names every candidate.
+/// Whether `target` can carry a session right now: the managed binaries are
+/// installed, the workspace exists when `workspace` names one that must
+/// already be there (a session attached on this machine works in the
+/// caller's own checkout; a fleet session clones its own), and the named
+/// session ledger is below `ledger` when one was named. `Err(sentence)` is
+/// the host's own reason, kept for the refusal that names every candidate.
 pub(in crate::cli::workload::runners) async fn probe_ready(
     target: &ComputeTarget,
-    checkout: &str,
+    workspace: Option<&str>,
+    ledger: &str,
     resume: Option<&str>,
 ) -> Result<HostReadiness, String> {
-    let (ledger, _) = ledger_root(target);
-    let workspace = workspace_expression(checkout);
+    let workspace_probe = match workspace {
+        Some(workspace) => format!(
+            "if [ ! -d {workspace} ]; then printf 'workspace directory is missing: %s\\n' {workspace} >&2; ready=no; fi\n"
+        ),
+        None => String::new(),
+    };
     let resume_probe = match resume {
         Some(session) => format!(
             "if [ ! -d {ledger}/{session} ]; then printf 'session ledger is missing: %s\\n' {ledger}/{session} >&2; ready=no; fi\n"
@@ -32,11 +42,7 @@ pub(in crate::cli::workload::runners) async fn probe_ready(
     };
     let probe = format!(
         r#"ready=yes
-if [ ! -d {workspace} ]; then
-  printf 'workspace directory is missing: %s\n' {workspace} >&2
-  ready=no
-fi
-{resume_probe}
+{workspace_probe}{resume_probe}
 for binary in {MANAGED_JEDEN} {MANAGED_STADO}; do
   if [ ! -x "$HOME/$binary" ]; then
     printf 'managed runtime is missing or not executable: %s\n' "$HOME/$binary" >&2

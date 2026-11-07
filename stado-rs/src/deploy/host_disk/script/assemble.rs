@@ -33,9 +33,10 @@ fn prune_word(darwin: bool, declared: &std::collections::BTreeSet<String>) -> St
 }
 
 /// The remote program carrying exactly the sections SCOPE consumes, with the
-/// janitor's state and lock paths in place, the target's declared work
-/// root (`targets[].work_root`) measured beside its home, and its home walks
-/// refusing the privacy list less the folders `targets[].privacy_grants`
+/// janitor's state and lock paths in place, the volume the fleet writes to
+/// measured (the target's declared work root, `targets[].work_root`, else its
+/// home), and its home walks refusing the privacy list less the folders
+/// `targets[].privacy_grants`
 /// declares for the program macOS holds responsible for the script (this
 /// executable here, the SSH session program elsewhere). A grants entry that
 /// cannot be read is the error, naming it.
@@ -54,10 +55,11 @@ pub fn remote_script_for(scope: DiskScope, target: &ComputeTarget) -> Result<Str
         })
         .map_err(|error| DeployError(error.to_string()))?;
     // A host that declares no work root writes only under its home, so the
-    // home's volume is the one measured.
+    // home's volume is the one measured; one that declares a work root is
+    // judged on it alone.
     let work_root = match target.work_root.as_deref() {
         Some(root) => shlex_quote(root),
-        None => String::new(),
+        None => "\"$HOME\"".to_string(),
     };
     let mut script = String::from("set -u\n");
     if scope == DiskScope::UsageOnly {

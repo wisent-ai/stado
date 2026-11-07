@@ -11,14 +11,14 @@ use super::*;
 mod assemble;
 pub use assemble::{background_section, remote_script_for};
 
-/// `df` of every volume the fleet writes to — the `usage` field. Read by
-/// both scopes. These are the volumes the janitor's disk-full rule measures
-/// (`space_reclaim::rule::read_fleet_volume`): the one holding `$HOME` and,
-/// when the target declares a work root, the one holding it; the fold keeps
-/// the one with less room before the threshold, as the rule does. `/` is
-/// none of them: on macOS it is the sealed system snapshot, and on a host
-/// whose home or work root is on its own volume it is another disk.
-const DISK_USAGE_SECTION: &str = r#"for usage_path in "$HOME" __WORK_ROOT__; do
+/// `df` of the volume the fleet writes to — the `usage` field. Read by both
+/// scopes. It is the volume the janitor's disk-full rule judges
+/// (`space_reclaim::rule::read_fleet_volume`): the one holding the target's
+/// declared work root, else the one holding `$HOME`. The home's own volume
+/// is not judged on a host whose work root is another disk, so a full system
+/// disk never calls a host with a roomy data disk full; it is listed among
+/// the volumes below. `/` is the fleet's volume only when nothing else is.
+const DISK_USAGE_SECTION: &str = r#"for usage_path in __WORK_ROOT__; do
   /bin/df -Pk "$usage_path" 2>/dev/null | while IFS= read -r row; do
     set -- $row
     case "${1:-}" in
@@ -30,7 +30,7 @@ const DISK_USAGE_SECTION: &str = r#"for usage_path in "$HOME" __WORK_ROOT__; do
 done
 "#;
 
-/// Where the declared work root goes in [`DISK_USAGE_SECTION`].
+/// Where the fleet's volume (the declared work root, else `"$HOME"`) goes in [`DISK_USAGE_SECTION`].
 const WORK_ROOT_MARK: &str = "__WORK_ROOT__";
 
 /// Every device-backed filesystem and, on Linux, every block device the

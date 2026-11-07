@@ -23,9 +23,9 @@ pub fn parse_output(stdout: &str) -> DiskReading {
                     capacity: (*capacity).to_string(),
                     mounted_on: (*mounted).to_string(),
                 };
-                // One row per volume the fleet writes to (the home's and the
-                // declared work root's); the one with less room before the
-                // threshold is the reading, as the janitor's rule judges it.
+                // The volume the rule judges; a path `df` answers with more
+                // than one row keeps the one with less room before the
+                // threshold, as the janitor's rule would.
                 let tighter = match (&reading.usage, headroom_kb(&row)) {
                     (None, Ok(_)) => true,
                     // Kept, as the only row so far, and named as unmeasured.

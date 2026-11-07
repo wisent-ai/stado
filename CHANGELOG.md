@@ -71,7 +71,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
   work tree, its log names where it works, a host that declares no work root is refused naming
   `stado space root <host> --path <directory>`, and an unwritable session checkouts directory
   fails the job naming the same verb. The janitor's `session_checkouts` cleaner takes a checkout
-  at the rule only on that proof, or, for a checkout an older release cloned under
+  (under the home on every pass, under the work root at the rule) only on that proof, or, for a
+  checkout an older release cloned under
   `~/Documents/CodingProjects` on a host that is not shared, on this host's queue record of the
   `omp-session` whose command names exactly that checkout and during which its `.git` was made;
   every other checkout, however clean and pushed, is kept as `not_session_checkout`. A proven
@@ -82,3 +83,22 @@ The version-bump commit moves them with `stado product changelog --version V`;
   cleaner that reads them. Journeys `tests/space_reclaim/workdirs/session_checkouts.rs`,
   `tests/space_reclaim/workdirs/session_keeps.rs` and `tests/workload/omp_session_run.rs` (the
   refusal without a work root and the real worker, on darwin-arm64 and linux-amd64).
+- **A host whose work root is a roomy data disk is never full because its system disk is:** the
+  disk-full rule judged the fuller of the home's and the work root's volumes, and every process the
+  agent did not start (`stado space reclaim --local`, `stado space candidates`, the health beacon)
+  judged the home alone, so a host with a small system disk and terabytes free on its work root
+  ran cleanup passes that refused claims and was reported full. The rule, admission, `stado host
+  gates`, `stado space report` and the beacon's `disk_avail_gb` now judge the volume the fleet
+  writes to: the declared work root's, read from the agent's declaration, `STADO_WORK_ROOT`, or
+  this host's entry in its last-known-good registry copy, else the home's. The home's own volume
+  is listed among the others; while it is at the threshold the fleet's rebuildable caches under it
+  are taken without refusing claims, and the proven session checkouts under the home are taken on
+  every pass since nothing reuses them; the work root's wait for the rule.
+- **Every fleet session works on the work root, and every job's package downloads land there:**
+  `jeden-session` (detached, and attached to another host) works in the host's checkout under
+  `<work root>/session-checkouts/<repository>`, cloned from this machine's origin when absent with
+  the clone marker written, with its Jeden ledger under `<work root>/jeden-sessions` and its Cargo
+  target and temporary directories in the job's own tree; the home workspace works in its job
+  tree. A host that declares no work root is refused naming `stado space root <host> --path
+  <directory>`. On a host with a work root every job's pip, uv and npm caches are
+  `<work root>/package-caches/<manager>`, taken by the `package_caches` cleaner.

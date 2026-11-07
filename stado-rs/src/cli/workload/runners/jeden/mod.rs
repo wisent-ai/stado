@@ -15,6 +15,10 @@ mod sessions;
 
 use capacity::{admission_refusal, live_capacity, placement_order};
 pub(super) use probe::probe_ready;
+use probe::place::{
+    checkout_preamble, fleet_place, github_token_environment, job_tree_environment,
+    ledger_environment,
+};
 
 pub(crate) use attach::connect_jeden;
 pub(crate) use detached::{start_detached, DetachedRequest};
@@ -26,6 +30,7 @@ pub(crate) use sessions::list_sessions;
 
 use crate::cli::CmdError;
 use crate::deploy::host_channel;
+use crate::providers::local::work_base;
 use crate::targets::ComputeTarget;
 
 /// The address `service` answers on *from* `target`, as the fleet's own
@@ -139,9 +144,16 @@ pub(super) fn shell_quote(value: &str) -> String {
 /// the local `jeden rpc` inherits this process's environment, so a session
 /// this host runs is opened from that root and the probe has to look there
 /// too; before this the probe tested `~/.jeden/sessions` while the session
-/// opened elsewhere, and refused a ledger that was present. Another host
-/// never sees this process's environment, so it keeps the default.
+/// opened elsewhere, and refused a ledger that was present. On another host
+/// the session is the fleet's and its ledger is below that host's declared
+/// work root ([`fleet_place`]), where every session started there writes it.
 pub(super) fn ledger_root(target: &ComputeTarget) -> (String, String) {
+    if !host_channel::target_is_this_host(target) {
+        if let Some(root) = target.work_root.as_deref() {
+            let ledger = format!("{root}/{}", work_base::JEDEN_SESSIONS_LEAF);
+            return (shell_quote(&ledger), ledger);
+        }
+    }
     let moved = if host_channel::target_is_this_host(target) {
         match std::env::var(SESSION_ROOT_VARIABLE) {
             Ok(root) if !root.is_empty() => Some(root),
@@ -158,12 +170,34 @@ pub(super) fn ledger_root(target: &ComputeTarget) -> (String, String) {
         None
     };
     match moved {
-        Some(root) => (format!("'{}'", root.replace('\'', "'\\''")), root),
+        Some(root) => (shell_quote(&root), root),
         None => (
             format!("\"$HOME\"/{DEFAULT_LEDGER}"),
             format!("~/{DEFAULT_LEDGER}"),
         ),
     }
+}
+
+/// The origin this machine's checkout of `workspace` fetches from: a host's
+/// own checkout of the repository is cloned from the same place.
+pub(super) async fn origin(workspace: &str) -> Result<String, CmdError> {
+    let checkout = expand_home(&format!("{CHECKOUT_ROOT}/{workspace}"))?;
+    let output = crate::wait::output_async(
+        tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(&checkout)
+            .args(["remote", "get-url", "origin"]),
+    )
+    .await?;
+    if !output.status.success() {
+        return Err(CmdError::usage(format!(
+            "{} has no origin this machine can read ({}); a session works in a canonical \
+             checkout, so name a workspace that is one",
+            checkout.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// `path` under the home every Stado file is kept under

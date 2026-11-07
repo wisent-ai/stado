@@ -6,9 +6,37 @@
 
 use serde_json::{json, Value};
 
-use super::detached::{batch_id, workspace_of, RECORD_SCHEMA_VERSION};
 use crate::cli::CmdError;
 use crate::models::Job;
+
+/// Version of the record `stado workload start` returns, as
+/// <https://stado.wisent.com/docs/capabilities/workload> states it. A reader
+/// that understands this number knows every field below is present.
+pub(super) const RECORD_SCHEMA_VERSION: u64 = 1;
+
+/// The batch every detached session of one kind carries, so `stado status`
+/// and `stado workload sessions` can find them without a second store.
+pub(super) fn batch_id(kind: &str) -> String {
+    format!("workload-{kind}")
+}
+
+/// A caller-retained identity that also records which workspace the session
+/// works in; `stado workload sessions` reads the workspace back out of it.
+pub(super) fn run_id(kind: &str, workspace: &str) -> String {
+    let now = chrono::Utc::now().format("%Y%m%dT%H%M%S%3f");
+    format!("workload-{kind}-{workspace}-{now}-{}", std::process::id())
+}
+
+/// The workspace a run id was started in, or nothing when the id was not
+/// written by this command.
+pub(super) fn workspace_of(kind: &str, run_id: &str) -> Option<String> {
+    let rest = run_id.strip_prefix(&format!("workload-{kind}-"))?;
+    // `<workspace>-<stamp>-<pid>`: the workspace is what precedes the last
+    // two separators, whatever separators it holds itself.
+    let (rest, _pid) = rest.rsplit_once('-')?;
+    let (workspace, _stamp) = rest.rsplit_once('-')?;
+    Some(workspace.to_string())
+}
 
 pub(crate) async fn list_sessions(json_output: bool) -> Result<(), CmdError> {
     let kinds = crate::cli::workload::catalog::catalog()?

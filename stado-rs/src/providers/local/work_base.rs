@@ -16,7 +16,7 @@
 //! A host that declares nothing keeps its home, exactly as before.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 /// The environment variable a job process reads the declaration from. The
 /// agent sets it on every job it starts; an operator may set it by hand
@@ -44,6 +44,29 @@ pub const SESSION_CHECKOUTS_LEAF: &str = "session-checkouts";
 /// older release, whose queue record is then the proof).
 pub const SESSION_CLONE_MARKER: &str = "stado-session-clone";
 
+/// The Jeden session ledgers of the sessions the fleet runs on this host,
+/// below a declared work root (`JEDEN_SESSION_ROOT` for every fleet session),
+/// so a resumed session finds its ledger where the next one is written.
+pub const JEDEN_SESSIONS_LEAF: &str = "jeden-sessions";
+
+/// The download caches of the package managers a job runs, below a declared
+/// work root, one directory per manager.
+pub const PACKAGE_CACHES_LEAF: &str = "package-caches";
+
+/// Each job's package managers, as the variable the manager reads its cache
+/// directory from and that directory below [`PACKAGE_CACHES_LEAF`]: the
+/// agent sets them on every job on a host that declares a work root, so a
+/// job's installs are kept, shared and reclaimed on the fleet's volume.
+pub const JOB_PACKAGE_CACHES: &[(&str, &str)] = &[
+    ("PIP_CACHE_DIR", "pip"),
+    ("UV_CACHE_DIR", "uv"),
+    ("npm_config_cache", "npm"),
+];
+
+/// The work base below an undeclared host's home: what a work root holds
+/// when one is declared, `~/.stado/work` holds when none is.
+pub const HOME_WORK_COMPONENTS: &[&str] = &[".stado", "work"];
+
 /// Components of the queue root below an undeclared host's home. Each is
 /// opened separately with `O_DIRECTORY|O_NOFOLLOW`; no component symlink is
 /// supported.
@@ -51,7 +74,16 @@ pub const HOME_JOBS_COMPONENTS: &[&str] = &[".stado", "work", JOBS_LEAF];
 
 static DECLARED: OnceLock<PathBuf> = OnceLock::new();
 
-/// What one process was told about its work root, or nothing.
+/// What this host's last-known-good registry copy declares as its work
+/// root, read once per process.
+static RECORDED: LazyLock<Option<PathBuf>> = LazyLock::new(recorded);
+
+/// What one process was told about its work root, or nothing: the agent's
+/// own declaration, else [`ENV`], else this host's entry in the registry copy
+/// every reader here falls back to. Without the last, a process the agent did
+/// not start (`stado space reclaim --local`, `stado space candidates`, the
+/// health publisher) judged and walked the home while the agent judged the
+/// work root, so one host was called full by one and roomy by the other.
 pub fn declared() -> Option<PathBuf> {
     if let Some(path) = DECLARED.get() {
         return Some(path.clone());
@@ -59,6 +91,41 @@ pub fn declared() -> Option<PathBuf> {
     std::env::var_os(ENV)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+        .or_else(|| RECORDED.clone())
+}
+
+/// This host's `targets[].work_root` in its last-known-good registry copy,
+/// the document the agent refreshes on every registry read. A copy that is
+/// absent declares nothing; one that cannot be read or does not resolve this
+/// host is said once, and the home stays the work base.
+fn recorded() -> Option<PathBuf> {
+    let path = crate::targets::registry_last_good_path()?;
+    if !path.exists() {
+        return None;
+    }
+    let hostname = crate::providers::vast::system_hostname();
+    let registry = match crate::targets::load_registry_file(&path) {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!(
+                "stado: the registry copy {} cannot be read, so this process keeps the fleet's \
+                 work under the home: {error}",
+                path.display()
+            );
+            return None;
+        }
+    };
+    match registry.lookup_self(&hostname) {
+        Ok(found) => found.and_then(|target| target.work_root.as_deref().map(PathBuf::from)),
+        Err(error) => {
+            eprintln!(
+                "stado: {hostname} cannot be resolved in the registry copy {}, so this process \
+                 keeps the fleet's work under the home: {error}",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// Declare the work root for this process. The first declaration wins: the
