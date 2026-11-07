@@ -3,9 +3,13 @@
 //! ships (`files`). The release is the package's source bundle, as echo's is:
 //! an npm package is not compiled, so the build packs the shipped paths
 //! reproducibly. A checkout without a readable `package.json`, a version or a
-//! `files` list is refused rather than guessed. No quality gate is declared:
-//! a release runs only the tests a product declares, and a test is added only
-//! once the operator approves it.
+//! `files` list is refused rather than guessed. The one quality gate written
+//! is the format gate every release submission requires: the package script
+//! the caller names with `--format`, which `package.json` must declare, run
+//! as `npm run --silent SCRIPT`. Adopt does not pick a script by its name, and
+//! without `--format` it refuses, listing the scripts the package declares,
+//! instead of writing a manifest no submission can pass. No test gate is
+//! written: a test is added only once the operator approves it.
 
 use std::path::Path;
 
@@ -25,8 +29,9 @@ const PACKAGE: &str = "package.json";
 /// bundled so an install reproduces the tested tree.
 const LOCKS: &[&str] = &["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
 
-/// The manifest an npm package is released with.
-pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdError> {
+/// The manifest an npm package is released with, its format gate the
+/// package script `format` names.
+pub(super) fn files(checkout: &Path, product: &str, format: Option<&str>) -> Result<Vec<Planned>, CmdError> {
     let path = checkout.join(PACKAGE);
     let text = std::fs::read_to_string(&path).map_err(|error| {
         CmdError::refused(format!(
@@ -87,6 +92,7 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
             )));
         }
     }
+    let format = format_script(&package, &path, format)?;
     let bundle = format!("{product}-source.tar");
     let mut build = vec![
         "stado",
@@ -114,7 +120,11 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         "platforms": {
             PLATFORM: {
                 "runner_platform": RUNNER,
-                "quality": [],
+                "quality": [{
+                    "name": format,
+                    "argv": ["npm", "run", "--silent", format],
+                    "kind": "format",
+                }],
                 "build": {"argv": build},
                 "stage": {
                     format!("release/{bundle}"): bundle,
@@ -135,4 +145,41 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         text,
         executable: false,
     }])
+}
+
+/// The script `named` (`--format`) when `package` declares it. Refused, with
+/// the scripts the package declares, when `--format` is absent, names a
+/// script the package does not declare, or `scripts` is not an object.
+fn format_script<'a>(package: &Value, path: &Path, named: Option<&'a str>) -> Result<&'a str, CmdError> {
+    let scripts = match &package["scripts"] {
+        Value::Object(scripts) => scripts,
+        Value::Null => {
+            return Err(CmdError::refused(format!(
+                "{} declares no scripts, so it has no formatter a release can run as its format \
+                 gate; add one (for example a prettier or biome check) and pass --format SCRIPT",
+                path.display()
+            )))
+        }
+        other => {
+            return Err(CmdError::refused(format!(
+                "{} declares scripts as {other}, not an object of script names",
+                path.display()
+            )))
+        }
+    };
+    let declared = scripts.keys().cloned().collect::<Vec<_>>().join(", ");
+    let Some(named) = named else {
+        return Err(CmdError::usage(format!(
+            "--kind npm needs --format SCRIPT: the package script that checks formatting, run as \
+             the format gate every release submission requires; {} declares: {declared}",
+            path.display()
+        )));
+    };
+    if !scripts.contains_key(named) {
+        return Err(CmdError::refused(format!(
+            "{} declares no script {named:?}; it declares: {declared}",
+            path.display()
+        )));
+    }
+    Ok(named)
 }

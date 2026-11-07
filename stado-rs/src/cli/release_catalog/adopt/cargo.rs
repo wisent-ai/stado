@@ -17,9 +17,11 @@ use crate::release_pipeline::{PRODUCT_MANIFEST, SCHEMA_VERSION};
 const PLATFORMS: &[&str] = &["darwin-arm64", "linux-amd64"];
 
 /// The manifest and script a Rust checkout is released with: every binary
-/// target is built and staged and the version is read from Cargo.toml. No
-/// quality gate is declared: a release runs only the tests a product
-/// declares, and no test is declared until the operator approves one.
+/// target is built and staged and the version is read from Cargo.toml. The
+/// one quality gate declared is the format gate, `cargo fmt --check`, which
+/// reads the committed bytes alone, so every push of the product is checked
+/// against its formatter from the first one; no test is declared until the
+/// operator approves one.
 pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdError> {
     let package = read(checkout)?;
     if package.name != product {
@@ -36,7 +38,11 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         stage.insert(evidence.to_string(), json!(evidence));
     }
     let platform = json!({
-        "quality": [],
+        "quality": [{
+            "name": "rustfmt",
+            "argv": ["cargo", "fmt", "--all", "--", "--check"],
+            "kind": "format",
+        }],
         "build": {"argv": ["bash", "release/build.sh"]},
         "stage": stage,
     });

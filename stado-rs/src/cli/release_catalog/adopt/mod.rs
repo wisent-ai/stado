@@ -48,6 +48,10 @@ pub(super) struct AdoptArgs {
     /// The Xcode scheme to archive; defaults to the project's name.
     #[arg(long)]
     scheme: Option<String>,
+    /// With --kind npm: the package.json script that checks formatting, run
+    /// as the format gate every release submission requires.
+    #[arg(long)]
+    format: Option<String>,
     /// Registry host whose vault is authoritative; with --client, the
     /// publisher is declared as `catalog publisher declare` declares it.
     #[arg(long, requires = "client")]
@@ -83,6 +87,22 @@ fn fill(template: &str, values: &[(&str, &str)]) -> String {
 }
 
 fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
+    // A flag only one kind reads is refused for every other kind before any
+    // file is read: accepted and ignored, the caller would believe the
+    // manifest carries it.
+    let foreign: Vec<&str> = [
+        (args.scheme.is_some() && !matches!(args.kind, Kind::IosXcode)).then_some("--scheme (--kind ios-xcode)"),
+        (args.format.is_some() && !matches!(args.kind, Kind::Npm)).then_some("--format (--kind npm)"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !foreign.is_empty() {
+        return Err(CmdError::usage(format!(
+            "this --kind does not read {}; each is read only by the kind named beside it",
+            foreign.join(" or ")
+        )));
+    }
     let checkout = args.checkout.canonicalize()?;
     if !present(&checkout.join(".git"))? {
         return Err(CmdError::refused(format!(
@@ -153,7 +173,7 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
     let files = match args.kind {
         Kind::IosXcode => xcode::files(&checkout, &product, args.scheme.as_deref())?,
         Kind::Cargo => cargo::files(&checkout, &product)?,
-        Kind::Npm => npm::files(&checkout, &product)?,
+        Kind::Npm => npm::files(&checkout, &product, args.format.as_deref())?,
     };
     // A file adopt cannot examine is refused with its cause: taken for
     // absent, adopt would write over whatever it holds.
