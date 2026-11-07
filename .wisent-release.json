@@ -87,6 +87,14 @@
             "--test", "committed-lock-attribution"
           ],
           "kind": "test"
+        },
+        {
+          "name": "workspace-compiles",
+          "argv": [
+            "cargo", "test", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--workspace", "--no-run"
+          ],
+          "kind": "test"
         }
       ],
       "build": {

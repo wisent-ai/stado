@@ -7,7 +7,6 @@ pub use route::{compiled_product, compiles, run};
 mod swift;
 use clap::{Arg, ArgAction, Command};
 pub(crate) use native::cargo_operations;
-pub use route::run;
 
 fn value(name: &'static str, help: &'static str) -> Arg {
     Arg::new(name).long(name).help(help).action(ArgAction::Set)

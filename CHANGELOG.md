@@ -47,3 +47,18 @@ The version-bump commit moves them with `stado product changelog --version V`;
   `gates: not-run`, the risk is classified again from the gates that ran, and the review is
   held for a recorded round whose wait names the gates that never ran. Journey
   `tests/change/left_out/`.
+
+### Fixed
+
+- **Stado compiles again, and the submit queue compiles the whole workspace for linux-amd64
+  before a candidate lands:** the product CLI re-exported `route::run` twice (`E0252`), and the
+  workspace origin scan applied `?` to the git runner's error inside a function that returns an
+  `io::Error` (`E0277`), so no build of `main` passed on any platform and no Linux host could be
+  upgraded. The second re-export is gone, and the scan carries the runner's refusal whole inside
+  the `io::Error` its wait records. `.wisent-release.json` gives linux-amd64 the quality gate
+  `workspace-compiles` (`cargo test --locked --manifest-path stado-rs/Cargo.toml --workspace
+  --no-run`): `stado change run` runs it on a linux-amd64 fleet host for every candidate whose
+  test gates Oko admits, and the release build runs it before building, so a revision whose
+  library, binaries, tests or examples do not compile for Linux is refused with the compiler's
+  report instead of landing. Where the operator's rulings leave test gates out, `stado change
+  status` names this gate as left out and the candidate waits for its review round.

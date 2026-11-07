@@ -35,7 +35,10 @@ fn origins(workspace: &Path) -> std::io::Result<Origins> {
         // The declared origin, not `git remote get-url`: that answer has the
         // host's `url.<base>.insteadOf` rewrites applied, and a host that
         // rewrites GitHub to an SSH alias would see none of its checkouts.
-        let output = git_command()?
+        // The wait records the scan's error, which must be a standard error,
+        // so git's refusal to start is carried whole inside an io::Error.
+        let output = git_command()
+            .map_err(std::io::Error::other)?
             .args(["config", "--get", "remote.origin.url"])
             .current_dir(&path)
             .output()?;
