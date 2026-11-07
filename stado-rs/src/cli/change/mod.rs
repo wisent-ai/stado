@@ -57,7 +57,7 @@ pub(crate) enum ChangeCommands {
     /// over what its reviewer left: what the review left is queued at the
     /// tail). Exits 0 when every candidate reached a verdict; a candidate
     /// the pass could not judge (the remote or the fleet did not answer,
-    /// Oko's admission did not answer or did not admit its gates, the harsh
+    /// Oko's admission gave no decision for its gates, the harsh
     /// review could not be run) stays queued with what it waits on, and the
     /// pass exits non-zero with the cause. A pass under no agent session
     /// asks Oko's admission first as the fleet's daily build, then as each

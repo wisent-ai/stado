@@ -277,6 +277,10 @@ name = "change-session-without-tama"
 path = "../tests/change/session_without_tama.rs"
 
 [[test]]
+name = "change-left-out"
+path = "../tests/change/left_out/main.rs"
+
+[[test]]
 name = "host-configuration-journey"
 path = "../tests/host_health/configuration.rs"
 

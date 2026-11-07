@@ -16,6 +16,7 @@
 //! before each step: a running candidate's record has one writer, its pass.
 
 mod model;
+pub mod shown;
 
 pub use model::*;
 

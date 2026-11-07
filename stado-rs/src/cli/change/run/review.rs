@@ -13,7 +13,8 @@
 //! repairs (of the tree, the message, or both) are kept as a commit, so
 //! they are submitted like any other change. A reviewer that ended with no
 //! round covering what it left gives no admission either. A machine
-//! without Tama runs no review itself: the candidate waits for a recorded
+//! without Tama runs no review itself, nor is Tama run for a candidate whose
+//! gates the rulings left out: such a candidate waits for a recorded
 //! round. A high-risk candidate is reviewed before it lands; a low-risk one
 //! after, and the repairs of that retroactive review are queued as its
 //! follow-up.
@@ -87,25 +88,18 @@ pub async fn review(
     if let Some(decided) = recorded(candidate, when, tree)? {
         return Ok((decided, None));
     }
+    // A machine without Tama, or a candidate whose gates the rulings left
+    // out, waits for a recorded round (`shown::held`), which needs no
+    // defect; only Tama's run is scoped to one.
+    let missing = installed_program(TAMA_CLI).err();
+    if let Some(held) = crate::cli::change::record::shown::held(candidate, commit, tree, missing) {
+        return Err(CmdError::refused(held));
+    }
     let Some(defect) = candidate.defects.first() else {
         let why = "the candidate names no defect, and a harsh review is scoped to one; submit it \
                    with --defect";
         return Ok((not_run(when, tree, why.to_string()), None));
     };
-    // Tama's harsh review is one adapter of the review: a machine without
-    // Tama waits for a round recorded with `stado change review`.
-    if let Err(missing) = installed_program(TAMA_CLI) {
-        return Err(CmdError::refused(format!(
-            "no review round over commit {commit} (tree {tree}) of candidate {id} is recorded by \
-             a session that is not its author ({author}), and Tama, whose harsh review would run \
-             one, is not installed here ({missing}); a reviewer reads `git -C {checkout} show \
-             {commit}` and, from its own session's shell, records `stado change review {id} \
-             --findings FILE --improvements FILE`, and the next pass reads it",
-            id = candidate.id,
-            author = candidate.session.as_deref().unwrap_or("operator"),
-            checkout = candidate.checkout.display(),
-        )));
-    }
     let checkout = &candidate.checkout;
     let area = PathBuf::from(git(checkout, &["rev-parse", "--absolute-git-dir"]).await?)
         .join("stado-change");

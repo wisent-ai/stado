@@ -71,13 +71,15 @@ pub enum WaitsOn {
     /// `origin` did not answer a fetch or a push, or Git could not read the
     /// candidate's commits.
     Remote,
-    /// Oko's admission did not admit, or did not answer for, its gates.
+    /// Oko's admission gave no decision for its gates (a gate the rulings
+    /// rule out is left out, never waited on).
     Admission,
     /// Its gates found no host to run them, or the local check could not
     /// run.
     Gate,
     /// Its harsh review before landing recorded no round: the reviewer
-    /// could not be run, or it was stopped before it recorded one.
+    /// could not be run, it was stopped before it recorded one, or a gate the
+    /// rulings left out keeps the candidate from Tama.
     ReviewRound,
     /// A declaration the pass reads on every candidate's behalf before it
     /// judges the change, its product's catalog record and submit policy,
@@ -188,6 +190,10 @@ pub struct Shard {
     /// Everything the gate printed, its standard output then its error
     /// output, so the line that says why it refused is kept wherever it is.
     pub report: String,
+    /// Set when the gate was never run: the operator's ruling Oko answered
+    /// for its action, which left it out of the pass. It passed nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_out: Option<String>,
 }
 
 /// A harsh review round run over the candidate.
@@ -253,8 +259,9 @@ pub struct Candidate {
     pub shards: Vec<Shard>,
     #[serde(default)]
     pub reviews: Vec<Review>,
-    /// The commit this pass is pushing to `main` now, every gate having
-    /// passed on it and its review having admitted it when its risk asks
+    /// The commit this pass is pushing to `main` now, every gate that ran
+    /// having passed on it (those the rulings left out kept as `left_out`
+    /// shards) and its review having admitted it when its risk asks
     /// for one: the queue's recorded landing that a repository's pre-push
     /// gate (`stado quality check --pre-push`) reads, so the queue's own
     /// push is not checked a second time. Cleared when the candidate is

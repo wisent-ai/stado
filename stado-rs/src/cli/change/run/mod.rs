@@ -14,15 +14,14 @@
 //! is always exactly what the gates checked. A pass that cannot reach a
 //! verdict because the remote, the fleet or the harsh review cannot be
 //! run puts the candidate back in the queue with the step it waits on and
-//! ends with that cause. One whose gates Oko's admission does not admit,
-//! or does not answer for, is put back in the queue and held for the rest
-//! of the pass, which carries the candidates behind it and then ends
-//! naming it. One whose review before landing repaired it, or ended with no
-//! round covering what its reviewer left, leaves the head as `repaired`,
-//! and what the review left is queued at the tail ([`verdict`]), so no pass
-//! runs the same review at the head again. A refused candidate is a
-//! verdict, and the pass goes on. A landed candidate stays landed whatever
-//! its review after landing meets.
+//! ends with that cause. One whose gates Oko's admission gives no decision
+//! for is put back in the queue and held for the rest of the pass, which
+//! carries the candidates behind it and then ends naming it. One whose review
+//! before landing repaired it, or ended with no round covering what its
+//! reviewer left, leaves the head as `repaired`, and what the review left is
+//! queued at the tail ([`verdict`]), so no pass runs the same review at the
+//! head again. A refused candidate is a verdict, and the pass goes on. A
+//! landed candidate stays landed whatever its review after landing meets.
 //!
 //! A pass that runs under no agent session is the queue's resident pass
 //! (the host routine Stado's installation declares): its gates are asked of
@@ -105,10 +104,10 @@ async fn pass(
     _lock: std::fs::File,
 ) -> Result<Vec<Candidate>, CmdError> {
     let mut carried = Vec::new();
-    // A candidate whose gates Oko's admission does not admit for its
-    // submitter (a ruling, a closed defect), or does not answer for, is held
-    // for this pass, by id with why: its admission is asked as its own
-    // submitter's, so the candidates behind it are asked on their own.
+    // A candidate whose gates Oko's admission gives no decision for (its
+    // register unreadable, a purpose that names no open defect) is held for
+    // this pass, by id with why; a gate the rulings rule out is left out
+    // instead. Each candidate's admission is asked as its own submitter's.
     let mut held: Vec<(String, String)> = Vec::new();
     // Under the lock no other pass runs, so a running candidate is one a
     // pass that was stopped (killed, its machine restarted) left behind:
@@ -168,8 +167,8 @@ async fn pass(
                 )));
             }
             let refused = error.failure == Some(crate::primitives::failure::FailureCode::Refused);
-            // The gates step refuses only when Oko's admission did not
-            // admit them, or did not answer.
+            // The gates step refuses only when Oko's admission gave no
+            // decision; a gate the rulings rule out is left out instead.
             if refused && candidate.waits_on == Some(WaitsOn::Gate) {
                 candidate.waits_on = Some(WaitsOn::Admission);
             }
@@ -316,12 +315,13 @@ async fn land(
         )
         .await?;
         candidate.shards = outcome.shards;
+        let level = risk::after_gates(candidate, &plan.product, &policy, &paths, lines);
         record::save(candidate)?;
         if let Some(why) = outcome.refusal {
             refuse(candidate, why);
             return Ok(());
         }
-        if classified.level == risk::HIGH {
+        if level == risk::HIGH {
             if cancelled(candidate)? {
                 return Ok(());
             }

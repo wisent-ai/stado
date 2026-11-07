@@ -25,16 +25,15 @@ pub async fn refusal_as(
     decided_as(action, product, purposes, session).await?
 }
 
-/// Oko's decision on `action` as work `session` asked for: `Ok(Ok(reason))`
-/// when it may run, `Ok(Err(refusal))` when the operator's rulings rule it
-/// out, naming the ruling, and `Err` when no decision was read at all.
-pub async fn decided_as(
-    action: &str,
-    product: Option<&str>,
-    purposes: &[&str],
-    session: Option<&str>,
-) -> Result<Result<String, String>, String> {
-    let scope = scope(action, product);
+/// The words `oko` is asked with for `action` (after the program name), so
+/// a caller that names the ask to the operator names the one this module
+/// runs.
+pub fn words<'a>(
+    action: &'a str,
+    product: Option<&'a str>,
+    purposes: &[&'a str],
+    session: Option<&'a str>,
+) -> Vec<&'a str> {
     let mut words = vec!["admit", action];
     if let Some(product) = product {
         words.extend(["--product", product]);
@@ -46,6 +45,20 @@ pub async fn decided_as(
         words.extend(["--session", session]);
     }
     words.push("--json");
+    words
+}
+
+/// Oko's decision on `action` as work `session` asked for: `Ok(Ok(reason))`
+/// when it may run, `Ok(Err(refusal))` when the operator's rulings rule it
+/// out, naming the ruling, and `Err` when no decision was read at all.
+pub async fn decided_as(
+    action: &str,
+    product: Option<&str>,
+    purposes: &[&str],
+    session: Option<&str>,
+) -> Result<Result<String, String>, String> {
+    let scope = scope(action, product);
+    let words = words(action, product, purposes, session);
     match decision(&words).await {
         Decision::Allowed(reason) => Ok(Ok(reason)),
         Decision::Unanswered(Unanswered::Absent(cause)) => Ok(Ok(format!(
@@ -66,7 +79,11 @@ pub async fn decided_as(
 /// admission passed on to the processes it starts), `Some(refusal)` naming
 /// the ruling when they rule it out, so the caller leaves that step out and
 /// says so, and `Err` when no decision could be read, which runs nothing.
-pub async fn ruling(action: &str, product: Option<&str>, purposes: &[&str]) -> Result<Option<String>, String> {
+pub async fn ruling(
+    action: &str,
+    product: Option<&str>,
+    purposes: &[&str],
+) -> Result<Option<String>, String> {
     let variable = inherited(action);
     if admitted_above(&variable).await {
         return Ok(None);

@@ -29,7 +29,7 @@ use crate::cli::CmdError;
 use crate::deploy::host_exec::{installed_program, OKO_CLI, TAMA_CLI};
 
 mod asked;
-pub use asked::{decided_as, refusal_as, ruling};
+pub use asked::{decided_as, refusal_as, ruling, words};
 use asked::scope;
 
 /// The action class a ruling constrains that compiling a product is.

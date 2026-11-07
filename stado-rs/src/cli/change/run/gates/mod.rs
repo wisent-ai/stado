@@ -18,7 +18,7 @@ mod remote;
 mod shard;
 mod targets;
 
-pub use shard::Planned;
+pub use shard::{asks, ran, Planned};
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -228,6 +228,7 @@ pub async fn run(
                 exit_code,
                 seconds: started.elapsed().as_secs(),
                 report,
+                left_out: None,
             };
             cache::keep(&key, &shard)?;
             shard
@@ -321,8 +322,8 @@ fn fleet_refusal(action: &str, product: &str, said: &str) -> String {
 /// `checkout`, run or answered by the action cache on the pool of `hosts`
 /// once Oko admitted each action they take for `admission`, and the
 /// refusal naming every shard that refused with the end of its report. The
-/// gates of an action the operator's rulings rule out are left out, each
-/// action said with the ruling; which kinds of work run is the
+/// gates of an action the operator's rulings rule out are not run, each kept
+/// with the ruling as a left-out shard; which kinds of work run is the
 /// installation's decision, made once in its rulings.
 pub async fn compiling(
     checkout: &Path,
@@ -337,7 +338,7 @@ pub async fn compiling(
     // session that pushed), never as the work of a session running the
     // pass; the resident pass is asked first as itself ([`Admission`]).
     let mut asked = BTreeSet::new();
-    let mut ruled_out = BTreeSet::new();
+    let mut ruled_out = std::collections::BTreeMap::new();
     for planned in &plan.compiling {
         let action = action(planned.kind);
         if !asked.insert(action) {
@@ -351,7 +352,7 @@ pub async fn compiling(
         })?;
         if let Some(ruling) = decided {
             eprintln!("stado change run: {ruling}; every {action} gate of {} is left out", plan.product);
-            ruled_out.insert(action);
+            ruled_out.insert(action, ruling);
         }
     }
     let kept = Plan {
@@ -360,26 +361,12 @@ pub async fn compiling(
         compiling: plan
             .compiling
             .iter()
-            .filter(|planned| !ruled_out.contains(&action(planned.kind)))
+            .filter(|planned| !ruled_out.contains_key(&action(planned.kind)))
             .cloned()
             .collect(),
     };
     let remote = remote::run(checkout, commit, tree, &kept, hosts).await?;
-    let refusal = remote
-        .iter()
-        .filter(|shard| shard.exit_code != 0)
-        .map(|shard| {
-            format!(
-                "gate {} ({}) for {} on {} refused, `{}` exited {}:\n{}",
-                shard.gate,
-                shard.kind,
-                shard.platform,
-                shard.host,
-                shard.argv.join(" "),
-                shard.exit_code,
-                shard.report
-            )
-        })
-        .collect::<Vec<_>>();
-    Ok((remote, (!refusal.is_empty()).then(|| refusal.join("\n\n"))))
+    let refused = shard::refusal(&remote);
+    let left_out = shard::left_out(&plan.compiling, |planned| ruled_out.get(&action(planned.kind)));
+    Ok((remote.into_iter().chain(left_out).collect(), refused))
 }

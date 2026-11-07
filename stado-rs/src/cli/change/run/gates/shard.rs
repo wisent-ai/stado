@@ -9,6 +9,7 @@
 use std::path::Path;
 
 use crate::cli::change::git::git;
+use crate::cli::change::record::Shard;
 use crate::cli::CmdError;
 use crate::deploy::host_run::{validate_cargo, validate_gate, CargoOperation, HostCargoRequest};
 use crate::release_pipeline::{GateKind, QualityGate, PRODUCT_MANIFEST};
@@ -171,4 +172,91 @@ pub async fn runnable(
         }),
     };
     Ok(checked.map_err(|error| refused(error.to_string())))
+}
+
+impl Planned {
+    /// This gate as the pass records it when the operator's rulings left its
+    /// action out: never run, on no host, with the ruling Oko answered.
+    pub fn left_out(&self, ruling: &str) -> Shard {
+        Shard {
+            gate: self.gate.clone(),
+            kind: self.kind.to_string(),
+            platform: self.platform.clone(),
+            argv: self.argv(),
+            host: "none".to_string(),
+            cached: false,
+            exit_code: -1,
+            seconds: 0,
+            report: String::new(),
+            left_out: Some(ruling.to_string()),
+        }
+    }
+}
+
+/// The shard of every gate of `compiling` whose action `ruling` names the
+/// operator's ruling for: each left out, never run.
+pub fn left_out<'a>(
+    compiling: &[Planned],
+    ruling: impl Fn(&Planned) -> Option<&'a String>,
+) -> Vec<Shard> {
+    compiling
+        .iter()
+        .filter_map(|planned| ruling(planned).map(|said| planned.left_out(said)))
+        .collect()
+}
+
+/// The admission asks a pass makes for a candidate of `product` repairing
+/// `defects`, in the words it runs them with (`allowed::words`): for each
+/// action its queued gates take, as the fleet's daily build and, when a
+/// session submitted it, as that session's work.
+pub fn asks(product: &str, defects: &[String], session: Option<&str>) -> String {
+    let purposes: Vec<&str> = defects.iter().map(String::as_str).collect();
+    let mut asked = Vec::new();
+    for action in super::QUEUED.iter().map(|kind| super::action(*kind)) {
+        // The fleet's ask, then the submitter's when a session submitted it.
+        for whose in std::iter::once(None).chain(session.map(Some)) {
+            let words =
+                crate::cli::release_loop::allowed::words(action, Some(product), &purposes, whose);
+            asked.push(format!("`oko {}`", words.join(" ")));
+        }
+    }
+    asked.join(" and ")
+}
+
+/// Why a pass refuses the candidate: every remote shard that refused, with
+/// its argv, host, exit and whole report; `None` when none did.
+pub fn refusal(remote: &[Shard]) -> Option<String> {
+    let refused: Vec<String> = remote
+        .iter()
+        .filter(|shard| shard.exit_code != 0)
+        .map(|shard| {
+            format!(
+                "gate {} ({}) for {} on {} refused, `{}` exited {}:\n{}",
+                shard.gate,
+                shard.kind,
+                shard.platform,
+                shard.host,
+                shard.argv.join(" "),
+                shard.exit_code,
+                shard.report
+            )
+        })
+        .collect();
+    (!refused.is_empty()).then(|| refused.join("\n\n"))
+}
+
+/// The compiling gates of `shards` that ran or the action cache answered,
+/// named as [`super::Plan::names`] names them, when the rulings left any
+/// out; `None` when none was, so the risk classified from the plan stands.
+pub fn ran(shards: &[Shard]) -> Option<Vec<String>> {
+    if shards.iter().all(|shard| shard.left_out.is_none()) {
+        return None;
+    }
+    let mut names: Vec<String> = shards
+        .iter()
+        .filter(|shard| shard.left_out.is_none() && shard.kind != super::SOURCE_KIND)
+        .map(|shard| format!("{} ({}) for {}", shard.gate, shard.kind, shard.platform))
+        .collect();
+    names.dedup();
+    Some(names)
 }

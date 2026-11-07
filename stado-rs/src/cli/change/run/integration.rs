@@ -15,18 +15,14 @@ pub async fn record(candidate: &mut Candidate, integrated: Option<&Path>) {
     let gates: Vec<String> = candidate
         .shards
         .iter()
-        .map(|shard| {
-            format!(
-                "{} ({}) for {} on {}{}: exit {}",
-                shard.gate,
-                shard.kind,
-                shard.platform,
-                shard.host,
-                if shard.cached { " (action cache)" } else { "" },
-                shard.exit_code
-            )
-        })
+        .map(crate::cli::change::record::shown::line)
         .collect();
+    // A gate the rulings left out passed nothing: the line says the gates
+    // were not all run rather than that they passed.
+    let left_out = candidate
+        .shards
+        .iter()
+        .any(|shard| shard.left_out.is_some());
     let evidence = format!(
         "stado change {} rebased onto {} and landed {} after {} tip(s); gates: {}",
         candidate.id,
@@ -44,12 +40,18 @@ pub async fn record(candidate: &mut Candidate, integrated: Option<&Path>) {
         .map(|defect| Integrated {
             id: defect.clone(),
             commit: landed.commit.clone(),
-            gates: "pass".to_string(),
+            gates: if left_out { "not-run" } else { "pass" }.to_string(),
             criterion: "not-run".to_string(),
             evidence: evidence.clone(),
-            why_not_run: "the submit queue runs the product's declared gates; no journey of \
-                          this defect's own criterion is declared to it"
-                .to_string(),
+            why_not_run: if left_out {
+                "the operator's rulings left gates of this product out of the submit queue's \
+                 pass (each named in the evidence), and no journey of this defect's own \
+                 criterion is declared to it"
+            } else {
+                "the submit queue runs the product's declared gates; no journey of this \
+                 defect's own criterion is declared to it"
+            }
+            .to_string(),
         })
         .collect();
     let mut unrecorded = Vec::new();

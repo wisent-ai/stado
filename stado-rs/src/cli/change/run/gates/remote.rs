@@ -224,6 +224,7 @@ async fn worker(
                         exit_code: -1,
                         seconds: started.elapsed().as_secs(),
                         report: format!("not run: {error}"),
+                        left_out: None,
                     });
                 }
                 return;
@@ -258,6 +259,7 @@ async fn worker(
             exit_code,
             seconds: started.elapsed().as_secs(),
             report: report(&stdout, &stderr),
+            left_out: None,
         };
         eprintln!(
             "stado change run: {} for {platform} on {} exited {} after {}s",

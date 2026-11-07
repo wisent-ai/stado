@@ -353,8 +353,9 @@ pub fn line(candidate: &Candidate) -> String {
         .map_or(String::new(), |first| format!(": {first}"));
     let ahead = priority(candidate).map_or(String::new(), |ahead| format!("\n  {ahead}"));
     let waits = waits(candidate).map_or(String::new(), |waits| format!("\n  {waits}"));
+    let left = super::record::shown::left_out_note(&candidate.shards, &candidate.id);
     format!(
-        "{} {} {} {}{risk}{landed}{refusal}{ahead}{waits}",
+        "{} {} {} {}{risk}{landed}{refusal}{left}{ahead}{waits}",
         candidate.id,
         candidate.state.word(),
         candidate.repository,
@@ -421,11 +422,12 @@ pub fn waits(candidate: &Candidate) -> Option<String> {
                  answer, then `{run}`"
             ),
             Some(WaitsOn::Admission) => format!(
-                "waits on: Oko's admission of its gates; no ruling of the operator admits \
-                 compile or test of {product} now, neither for the fleet's daily build nor for \
-                 its submitter (the refusal quotes the ruling that decided); unblock: a ruling \
-                 of the operator that admits them (`oko rulings constraints` lists what stands), \
-                 then `{run}` from no agent session"
+                "waits on: Oko's admission of its gates; Oko gave no admission decision for \
+                 the gates of {product}, so whether the operator's rulings allow them was \
+                 never read (the refusal names why); a gate the rulings rule out is left out \
+                 and never holds a candidate; unblock: make {} answer, then `{run}` from no \
+                 agent session",
+                super::run::gates::asks(product, &candidate.defects, candidate.session.as_deref())
             ),
             Some(WaitsOn::Gate) => format!(
                 "waits on: a host for its gates; no host of its platforms could run them (the \
@@ -449,7 +451,6 @@ pub fn waits(candidate: &Candidate) -> Option<String> {
 /// the rounds recorded over the tree the next pass lands, not echoed from
 /// that pass: a round recorded since then is said with its verdict.
 fn review_wait(candidate: &Candidate, run: &str) -> String {
-    let checkout = candidate.checkout.display();
     let (commit, tree) = match &candidate.rebased {
         Some(rebased) => (rebased.commit.as_str(), Some(rebased.tree.as_str())),
         None => (candidate.commit.as_str(), None),
@@ -457,10 +458,9 @@ fn review_wait(candidate: &Candidate, run: &str) -> String {
     let author = candidate.session.as_deref().unwrap_or("operator");
     let unrecorded = format!(
         "waits on: a review round over commit {commit} by a session that is not its author \
-         ({author}); unblock: a reviewer reads `git -C {checkout} show {commit}` and, from its \
-         own session's shell, records `stado change review {id} --findings FILE --improvements \
-         FILE`, then `{run}`",
-        id = candidate.id,
+         ({author}); unblock: {}, then `{run}`{}",
+        super::record::shown::reviewer_asked(candidate, commit),
+        super::record::shown::unchecked(&candidate.shards),
     );
     let Some(tree) = tree else {
         return unrecorded;
@@ -505,11 +505,7 @@ pub fn print(candidate: &Candidate) {
         );
     }
     for shard in &candidate.shards {
-        let cached = if shard.cached { ", action cache" } else { "" };
-        println!(
-            "  gate {} ({}) for {} on {}: exit {} after {}s{cached}",
-            shard.gate, shard.kind, shard.platform, shard.host, shard.exit_code, shard.seconds
-        );
+        println!("  gate {}", super::record::shown::line(shard));
     }
     for review in &candidate.reviews {
         println!(

@@ -7,7 +7,7 @@
 
 use stado_product::catalog::{Criticality, SubmitPolicy};
 
-use crate::cli::change::record::Risk;
+use crate::cli::change::record::{Candidate, Risk};
 use crate::cli::CmdError;
 
 pub const HIGH: &str = "high";
@@ -77,9 +77,7 @@ pub fn classify(
         ));
     }
     if compiling.is_empty() {
-        high.push(format!(
-            "no lint or test gate of {product} compiles or runs it; only its format gates read it"
-        ));
+        high.push(unchecked(product));
     }
     let (level, reasons) = if high.is_empty() {
         (
@@ -100,4 +98,49 @@ pub fn classify(
         changed_files: paths.len(),
         changed_lines: lines,
     }
+}
+
+/// Why a change no compiling gate checks is high risk.
+fn unchecked(product: &str) -> String {
+    format!("no lint or test gate of {product} compiles or runs it; only its format gates read it")
+}
+
+/// The risk level of `candidate`'s change once its gates ended: the one read
+/// from the plan (already on the candidate) when every gate ran; when the
+/// operator's rulings left any out, classified again from the gates that ran
+/// or the action cache answered, so a change none checked is high risk and
+/// reviewed before it lands, its reason naming what was left out and that
+/// only the source check read it, kept on the candidate and printed.
+pub fn after_gates(
+    candidate: &mut Candidate,
+    product: &str,
+    policy: &SubmitPolicy,
+    paths: &[String],
+    lines: usize,
+) -> String {
+    let Some(ran) = super::gates::ran(&candidate.shards) else {
+        return candidate
+            .risk
+            .as_ref()
+            .map_or_else(String::new, |risk| risk.level.clone());
+    };
+    let left: Vec<String> = candidate
+        .shards
+        .iter()
+        .filter(|shard| shard.left_out.is_some())
+        .map(|shard| format!("{} ({}) for {}", shard.gate, shard.kind, shard.platform))
+        .collect();
+    let mut again = classify(product, policy, paths, lines, &ran);
+    let unread = unchecked(product);
+    for reason in again.reasons.iter_mut().filter(|reason| **reason == unread) {
+        *reason = format!(
+            "{} left out by the operator's rulings; no lint or test gate ran on it, only the \
+             source check read it",
+            left.join(", ")
+        );
+    }
+    let (id, level, why) = (&candidate.id, &again.level, again.reasons.join("; "));
+    eprintln!("stado change run: {id} is {level} risk from the gates that ran: {why}");
+    candidate.risk = Some(again.clone());
+    again.level
 }
