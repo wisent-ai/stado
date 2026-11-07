@@ -15,6 +15,8 @@ mod host_activity;
 mod host_gates_publication_attempt;
 #[path = "../host_processes/journey.rs"]
 mod host_processes;
+#[path = "../host_processes/memory.rs"]
+mod host_processes_memory;
 mod host_routine;
 mod lease;
 #[path = "../market/peer_declaration.rs"]

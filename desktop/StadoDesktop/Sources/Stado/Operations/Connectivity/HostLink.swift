@@ -1,4 +1,5 @@
 import Foundation
+import WisentDesignSystem
 
 // MARK: - Connectivity, sleep and silence
 
@@ -50,6 +51,11 @@ struct HostLink: Decodable, Identifiable, Sendable {
     /// the host's ceiling. `nil` when the beacon carried no `scans` block,
     /// which a publisher from before the block leaves out.
     let scans: HostScans?
+    /// Which processes the host's last beacon named as running it out of
+    /// memory before its next beacon. `nil` when the beacon carried no
+    /// verdict, which a publisher from before it, or a reading the kernel
+    /// refused, leaves out.
+    let memory: HostMemory?
     let verdict: HostLinkVerdict
     /// Verbatim. A blocker paraphrased here is a second opinion about why a
     /// host went quiet.
@@ -99,7 +105,7 @@ struct HostLink: Decodable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case host, endpoint, silences, verdict, blockers, session, scans
+        case host, endpoint, silences, verdict, blockers, session, scans, memory
         case beaconPublisher = "beacon_publisher"
         case beaconAgeSeconds = "beacon_age_seconds"
         case sshReachable = "ssh_reachable"
@@ -140,6 +146,7 @@ struct HostLink: Decodable, Identifiable, Sendable {
         readerRefusals = try values.decodeIfPresent(HostReaderRefusals.self, forKey: .readerRefusals)
         session = try values.decodeIfPresent(HostLinkSession.self, forKey: .session)
         scans = try values.decodeIfPresent(HostScans.self, forKey: .scans)
+        memory = try values.decodeIfPresent(HostMemory.self, forKey: .memory)
         verdict = HostLinkVerdict(try values.decode(String.self, forKey: .verdict))
         blockers = try values.decode([String].self, forKey: .blockers)
     }
@@ -192,5 +199,84 @@ struct HostForwardMarker: Decodable, Identifiable, Sendable {
         case declaredUrl = "declared_url"
         case declaredSource = "declared_source"
         case declarationVerdict = "declaration_verdict"
+    }
+}
+
+// MARK: - Which processes run a host out of memory
+
+/// The memory verdict of a host's beacon, as `stado host link <host> --json`
+/// carries it under `memory`: at the rate each process grew over the beacon's
+/// last interval, against the memory the kernel says a new allocation can
+/// still obtain, the fewest processes, largest growth first, whose growth
+/// together leaves the host no memory before its next beacon. The line is
+/// the one `stado host link` prints as `memory:`.
+struct HostMemory: Decodable, Sendable {
+    let horizonSeconds: Double
+    /// `measured_interval` or `within`.
+    let horizonSource: String
+    /// `nil` with `availableUnread` naming why, and then nothing was judged.
+    let availableBytes: Int64?
+    let availableUnread: String?
+    let grownBytes: UInt64
+    /// `nil` when nothing grew or nothing was judged.
+    let exhaustsAvailableInSeconds: Double?
+    let processes: [HostMemoryGrowth]
+
+    enum CodingKeys: String, CodingKey {
+        case processes
+        case horizonSeconds = "horizon_seconds"
+        case horizonSource = "horizon_source"
+        case availableBytes = "available_bytes"
+        case availableUnread = "available_unread"
+        case grownBytes = "grown_bytes"
+        case exhaustsAvailableInSeconds = "exhausts_available_in_seconds"
+    }
+
+    var line: String {
+        let horizon = "the next reading in \(horizonSeconds.formatted()) s (\(horizonSource))"
+        if let availableUnread {
+            return "not judged, since the available memory was not read: \(availableUnread)"
+        }
+        let available = availableBytes.map { "\($0)" } ?? "not reported"
+        if !processes.isEmpty {
+            let named = processes.map { "pid \($0.pid) (\($0.program))" }.joined(separator: ", ")
+            let seconds = exhaustsAvailableInSeconds.map { $0.formatted() } ?? "not reported"
+            return "RUNAWAY: \(named) use up the \(available) available byte(s) in \(seconds) s at this interval's growth, before \(horizon)"
+        }
+        if let exhaustsAvailableInSeconds {
+            return "\(available) byte(s) available; all growth of the interval together (\(grownBytes) byte(s)) would use it up in \(exhaustsAvailableInSeconds.formatted()) s, past \(horizon)"
+        }
+        return "\(available) byte(s) available; no process grew in the interval"
+    }
+
+    /// The Link section's field: the verdict's line, or that the beacon has
+    /// not reported one.
+    static func description(of memory: HostMemory?) -> String {
+        memory?.line ?? "Not reported"
+    }
+
+    /// A named process is the host running out of memory before anybody
+    /// looks again; a verdict left unjudged is worth the eye too.
+    static func tone(of memory: HostMemory?) -> WisentTone {
+        guard let memory else { return .neutral }
+        if !memory.processes.isEmpty { return .danger }
+        return memory.availableUnread == nil ? .neutral : .warning
+    }
+}
+
+/// One process the verdict names: what it grew, its resident size, and how
+/// soon it alone uses up the available memory.
+struct HostMemoryGrowth: Decodable, Sendable {
+    let pid: Int32
+    let program: String
+    let residentBytes: UInt64
+    let grownBytes: UInt64
+    let exhaustsAvailableInSeconds: Double
+
+    enum CodingKeys: String, CodingKey {
+        case pid, program
+        case residentBytes = "resident_bytes"
+        case grownBytes = "grown_bytes"
+        case exhaustsAvailableInSeconds = "exhausts_available_in_seconds"
     }
 }

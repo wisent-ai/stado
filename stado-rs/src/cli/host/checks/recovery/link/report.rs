@@ -63,7 +63,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         session,
     } = super::probe::probe_channel(resolved, &runner).await;
 
-    let (signal, published, scans) = super::probe::probe_beacon(&store, resolved).await?;
+    let (signal, published, scans, memory) = super::probe::probe_beacon(&store, resolved).await?;
 
     // A field of the published link block, null when the block or the field
     // is absent: the report says what the beacon did not publish.
@@ -221,6 +221,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
             "reasons": refusals.reasons,
         },
         "scans": &scans,
+        "memory": &memory,
         "verdict": verdict,
         "blockers": blockers,
     });
@@ -242,6 +243,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         session,
         published,
         scans,
+        memory,
         path_kind,
         changes,
         refused,

@@ -182,6 +182,25 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Added
 
+- **`stado host processes`, every health beacon, `stado host link` and Stado Desktop's Hosts
+  screen name the processes that will run a host out of memory before the next reading:** a
+  desktop app whose pipe reader kept running at end of file grew past 30 GiB in a minute, and
+  agent sessions starting dozens of others did the same, until macOS ran out of application
+  memory and paused every application; the processes report listed each process's resident size
+  but judged nothing. Each process now carries `resident_change_bytes` (`RSS_CHANGE_BYTES`), and
+  the report a `memory` block: at the rate of the interval just measured, against the memory the
+  kernel says a new allocation can obtain, the fewest processes, largest growth first, whose
+  growth uses up that memory before the next reading, each with its own
+  `exhausts_available_in_seconds`. The next reading is `--within SECONDS`, or else the interval
+  just measured (for the beacon, its own period), stated in `horizon_source`; an available figure
+  the kernel did not answer leaves the verdict unjudged with `available_unread`. The text report
+  prints the verdict as one `memory:` line after the process table, then one line per named
+  process; `stado host link` prints the beacon's verdict as `memory:` and carries it as `memory`
+  (`null` for a beacon from before the verdict). Stado Desktop's Hosts Link section shows it as
+  **Memory** (danger when a process is named, warning when unjudged), and a new **Processes**
+  section runs `stado host processes` live with a `--within` field. Journey
+  `tests/host_processes/memory.rs`.
+
 - **The billing snapshot says when a declared database's Supabase project stops running:** a
   database whose only copy lives in a Supabase project stopped answering when the project was
   paused, and nothing Stado ran said why. `billing.providers` (`WC_BILLING_PROVIDERS`) now takes

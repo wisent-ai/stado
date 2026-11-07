@@ -1,10 +1,14 @@
-//! Two readings compared: what each process spent between them.
+//! Two readings compared: what each process spent between them, and which
+//! processes grow fast enough to use up the memory left ([`runaway`]).
+
+pub mod runaway;
 
 use std::time::Duration;
 
 use serde::Serialize;
 
 use super::{Counters, DiskBytes, Reading};
+use runaway::{Horizon, Runaway};
 
 /// One process's load between two readings.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -19,6 +23,9 @@ pub struct ProcessLoad {
     /// keeps no such counter this host's reader takes.
     pub children_cpu_seconds: Option<f64>,
     pub resident_bytes: u64,
+    /// How much the resident size changed since the earlier reading, negative
+    /// when it shrank; all of it for a process that started in the interval.
+    pub resident_change_bytes: i64,
     pub disk_read_bytes: Option<u64>,
     pub disk_written_bytes: Option<u64>,
     /// Why the disk counters are absent: the kernel's refusal.
@@ -66,6 +73,9 @@ pub struct ProcessesReport {
     pub read: usize,
     pub ended: Vec<Ended>,
     pub unreadable: Vec<Unreadable>,
+    /// Which processes grow fast enough to leave the host no memory before
+    /// the next reading; absent on a first reading, which has no growth.
+    pub memory: Option<Runaway>,
 }
 
 fn unreadable(reading: &Reading) -> Vec<Unreadable> {
@@ -90,6 +100,7 @@ pub fn first(now: &Reading, not_compared: Option<String>) -> ProcessesReport {
         read: now.processes.len(),
         ended: Vec::new(),
         unreadable: unreadable(now),
+        memory: None,
     }
 }
 
@@ -135,11 +146,21 @@ fn load(pid: i32, now: &Counters, earlier: Option<&Counters>) -> ProcessLoad {
         cpu_seconds: cpu.as_secs_f64(),
         children_cpu_seconds: children.map(|children| children.as_secs_f64()),
         resident_bytes: now.resident_bytes,
+        resident_change_bytes: resident_change(now.resident_bytes, earlier),
         disk_read_bytes,
         disk_written_bytes,
         disk_unreadable,
         spent,
     }
+}
+
+/// The resident size's change since `earlier`, all of it for a process that
+/// started in the interval, saturated at the bounds of `i64`.
+fn resident_change(now: u64, earlier: Option<&Counters>) -> i64 {
+    let before = earlier.map_or(0, |before| before.resident_bytes);
+    let now = i128::from(now);
+    let before = i128::from(before);
+    i64::try_from(now - before).unwrap_or(if now > before { i64::MAX } else { i64::MIN })
 }
 
 /// Did the process spend nothing and move nothing between the readings?
@@ -149,8 +170,14 @@ fn unchanged(before: &Counters, after: &Counters) -> bool {
         && before.disk == after.disk
 }
 
-/// What every process spent between `earlier` and `now`.
-pub fn compare(earlier: &Reading, now: &Reading) -> Result<ProcessesReport, String> {
+/// What every process spent between `earlier` and `now`, and which of them
+/// grow fast enough to use up `available` memory within `horizon`.
+pub fn compare(
+    earlier: &Reading,
+    now: &Reading,
+    horizon: Horizon,
+    available: Result<i64, String>,
+) -> Result<ProcessesReport, String> {
     let interval = now.taken_ns.checked_sub(earlier.taken_ns).ok_or_else(|| {
         format!(
             "the kept process reading was taken after this one ({} ns against {} ns since the \
@@ -180,13 +207,16 @@ pub fn compare(earlier: &Reading, now: &Reading) -> Result<ProcessesReport, Stri
         processes.push(load(*pid, after, before));
     }
     processes.sort_by_key(|process| std::cmp::Reverse(process.spent));
+    let interval = Duration::from_nanos(interval);
+    let memory = runaway::judge(&processes, interval, horizon, available);
     Ok(ProcessesReport {
         state: "compared",
         not_compared: None,
-        interval_seconds: Some(Duration::from_nanos(interval).as_secs_f64()),
+        interval_seconds: Some(interval.as_secs_f64()),
         processes,
         read: now.processes.len(),
         ended,
         unreadable: unreadable(now),
+        memory: Some(memory),
     })
 }

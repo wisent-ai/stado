@@ -85,9 +85,12 @@ pub(super) async fn probe_channel(
 }
 
 /// The beacon half of [`super::report::link`]: the aged signal, the `link`
-/// block the host published inside its beacon, and its `scans` block (what
-/// the host's own disk scans last decided; `None` for a beacon that carries
-/// none, which a publisher from before the block leaves out).
+/// block the host published inside its beacon, its `scans` block (what the
+/// host's own disk scans last decided; `None` for a beacon that carries none,
+/// which a publisher from before the block leaves out), and the memory
+/// verdict of its `processes` block (which processes leave the host no memory
+/// before its next beacon; `None` for a beacon from before the verdict, or
+/// one whose processes were not read).
 pub(super) async fn probe_beacon(
     store: &crate::queue::JobStorage,
     resolved: &ComputeTarget,
@@ -96,33 +99,42 @@ pub(super) async fn probe_beacon(
         crate::deploy::host_state::ping::BeaconSignal,
         Option<Value>,
         Option<Value>,
+        Option<Value>,
     ),
     CmdError,
 > {
     // The beacon half, aged by the one rule `host ping` ages every beacon in
     // this fleet with, and the `link` block the host published inside it.
     let now = chrono::Utc::now();
-    let (signal, published, scans) =
+    let (signal, published, scans, memory) =
         match crate::monitor::host_health::load_host_health(store, &resolved.name).await {
             Ok(report) => {
                 let published = crate::deploy::host_link::BeaconLink::from_beacon(&report.beacon)
                     .map(serde_json::to_value)
                     .transpose()?;
                 let scans = report.beacon.get("scans").cloned();
+                let memory = report
+                    .beacon
+                    .get("processes")
+                    .and_then(|processes| processes.get("memory"))
+                    .filter(|memory| !memory.is_null())
+                    .cloned();
                 (
                     crate::deploy::host_state::ping::grade_beacon(&report, now),
                     published,
                     scans,
+                    memory,
                 )
             }
             Err(exc) => (
                 crate::deploy::host_state::ping::BeaconSignal::unreadable(exc.to_string()),
                 None,
                 None,
+                None,
             ),
         };
 
-    Ok((signal, published, scans))
+    Ok((signal, published, scans, memory))
 }
 
 /// The silence half of [`super::report::link`]: the observation this command

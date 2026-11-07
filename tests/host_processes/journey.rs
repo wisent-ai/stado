@@ -24,8 +24,9 @@ use std::time::Instant;
 use crate::deployment::Deployment;
 use serde_json::{json, Value};
 
-/// The busy child, ended however the test ends.
-struct Busy(Child);
+/// A child the journey started, ended however the test ends; the memory
+/// journey (`memory.rs`) holds its children in it too.
+pub(crate) struct Busy(pub(crate) Child);
 
 impl Drop for Busy {
     fn drop(&mut self) {
@@ -41,7 +42,7 @@ impl Drop for Busy {
     }
 }
 
-fn reading(deployment: &mut Deployment, host: &str) -> Value {
+pub(crate) fn reading(deployment: &mut Deployment, host: &str) -> Value {
     serde_json::from_str(&deployment.cli(&["host", "processes", host, "--json"]))
         .expect("host processes answers its JSON report")
 }

@@ -98,12 +98,19 @@ pub(crate) enum HostStateCommands {
         json: bool,
     },
     /// What each process on TARGET spent since the reading before: CPU
-    /// seconds (its own and its reaped children's), resident memory and bytes
-    /// read from and written to storage, read from the kernel by the host's
-    /// own Stado. The first reading on a host says it has nothing to compare
+    /// seconds (its own and its reaped children's), resident memory and its
+    /// change, and bytes read from and written to storage, read from the
+    /// kernel by the host's own Stado; and the processes that, at the rate
+    /// their memory grew, leave the host no available memory before the next
+    /// reading. The first reading on a host says it has nothing to compare
     /// with yet.
     Processes {
         target: String,
+        /// Seconds until the next reading: name the processes whose growth
+        /// leaves no memory available within them. Without it, the interval
+        /// just measured stands for the next one.
+        #[arg(long, value_name = "SECONDS")]
+        within: Option<std::num::NonZeroU64>,
         /// Emit the report as JSON.
         #[arg(long)]
         json: bool,

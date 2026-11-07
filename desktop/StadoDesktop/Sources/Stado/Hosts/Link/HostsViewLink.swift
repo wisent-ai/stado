@@ -154,6 +154,14 @@ extension HostsView {
                 value: HostScans.description(of: link.scans),
                 tone: HostScans.tone(of: link.scans)
             )
+            // Which processes the host's last beacon named as leaving it no
+            // memory before its next beacon, worded as `stado host link`
+            // prints it.
+            WisentField(
+                label: "Memory",
+                value: HostMemory.description(of: link.memory),
+                tone: HostMemory.tone(of: link.memory)
+            )
             WisentField(
                 label: "Recorded silences",
                 value: silenceDescription(link),
@@ -172,6 +180,9 @@ extension HostsView {
             )
             // What the host ran, beside what it is now.
             HostActivitySection(host: link.host)
+            // What each of its processes spent, and which would run it out of
+            // memory first, read live as `stado host processes` reads it.
+            HostProcessesSection(host: link.host)
         } else if let failure = linkFailure(host) {
             WisentAlertPanel(
                 tone: .warning,

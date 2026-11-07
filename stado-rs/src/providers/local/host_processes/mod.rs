@@ -19,6 +19,11 @@
 //! commands: a program that lives a fraction of a second is in neither
 //! reading, but its CPU is added to its parent's children counter when the
 //! parent reaps it.
+//!
+//! Each process's resident growth between the readings is judged against the
+//! memory the kernel says is still available ([`report::runaway`]): the
+//! report names the processes that, at the rate they grew, leave the host
+//! none before the next reading is taken.
 
 #[cfg(target_os = "macos")]
 mod darwin;
@@ -37,6 +42,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+pub use report::runaway::Horizon;
 pub use report::{ProcessLoad, ProcessesReport};
 
 /// What one process had consumed in its lifetime when it was read.
@@ -121,20 +127,36 @@ pub fn read() -> Result<Reading, String> {
 }
 
 /// Read every process, report it against the reading this host kept last,
-/// and keep this one in its place.
+/// and keep this one in its place; judge each process's memory growth
+/// against what the kernel says is available now, the interval just
+/// measured standing for the next one (for the beacon pass, its period).
+pub fn read_and_compare() -> Result<ProcessesReport, String> {
+    read_and_compare_within(Horizon::Measured)
+}
+
+/// [`read_and_compare`] with the next reading `horizon` away.
 ///
 /// The first reading a host takes has nothing to be compared with; its
 /// report says so and lists no load, and the next one is measured from it.
 /// A kept reading whose CPU counters were converted another way, or by a
 /// build that did not say how, is no earlier reading of the same counters:
 /// this one is reported as a first reading naming why, and the next is
-/// measured from it.
-pub fn read_and_compare() -> Result<ProcessesReport, String> {
+/// measured from it, so no process is taken for new and judged to have
+/// grown by all it holds.
+pub fn read_and_compare_within(horizon: Horizon) -> Result<ProcessesReport, String> {
     let now = read()?;
     let previous = store::previous()?;
     store::keep(&now)?;
     match previous {
-        Some(previous) if previous.conversion == now.conversion => report::compare(&previous, &now),
+        Some(previous) if previous.conversion == now.conversion => {
+            let memory = crate::providers::local::host_memory::read_host_memory();
+            let available = memory.available_bytes.ok_or_else(|| {
+                memory.unread.unwrap_or_else(|| {
+                    "the host's memory reading states no available memory and no cause".to_string()
+                })
+            });
+            report::compare(&previous, &now, horizon, available)
+        }
         Some(previous) => Ok(report::first(&now, Some(not_compared(&previous, &now)))),
         None => Ok(report::first(&now, None)),
     }

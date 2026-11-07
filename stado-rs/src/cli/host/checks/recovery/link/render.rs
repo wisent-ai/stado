@@ -23,6 +23,7 @@ pub(super) fn render(
     session: crate::deploy::service::HostSession,
     published: Option<Value>,
     scans: Option<Value>,
+    memory: Option<Value>,
     path_kind: Value,
     changes: Vec<Value>,
     refused: bool,
@@ -117,6 +118,16 @@ pub(super) fn render(
         "scans:    {}",
         match scans.as_ref() {
             Some(scans) => crate::deploy::host_scan::record::line(scans),
+            None => crate::cli::reporting::NOT_REPORTED.to_string(),
+        }
+    );
+    // Which processes the host's last beacon named as running it out of
+    // memory before its next beacon; a beacon from before the verdict, or
+    // one whose processes were not read, has nothing to say here.
+    println!(
+        "memory:   {}",
+        match memory.as_ref() {
+            Some(memory) => crate::cli::host::checks::probes::processes::memory_line(memory),
             None => crate::cli::reporting::NOT_REPORTED.to_string(),
         }
     );
