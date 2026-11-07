@@ -24,23 +24,27 @@
 //! `not_session_checkout`. Below the home a checkout is never taken on a
 //! shared host (`shared_host_not_stado_owned`), and on macOS the folder is
 //! opened only when the host's entry declares the Documents grant for this
-//! program. This host's queue is asked only when a checkout below the home
-//! carries no clone marker.
+//! program. This host's queue is asked only about a checkout below the home
+//! that carries no clone marker and that it has not answered for already
+//! (`session-checkouts-answered.json` beside the janitor's state).
 //!
 //! A proven checkout is kept, the reason counted, when a registry service
 //! declaration or a launchd or systemd unit names a path in it, and when git
-//! reports anything in it that no remote has (`unpushed_work`, named with
-//! what it is among the pass's errors; git is asked with the settings that
-//! would hide an untracked file or a changed submodule overridden) or cannot
-//! answer (`git_state_unread`).
+//! reports anything in it or in a submodule checked out in it that no remote
+//! has (`unpushed_work`, named with what it is among the pass's errors;
+//! git is asked with the settings that would hide an untracked file or a
+//! changed submodule overridden) or cannot answer (`git_state_unread`).
 //! Otherwise it is taken whole under the janitor's exclusive cleanup lock for
 //! that one checkout, after reading what live processes hold right then
 //! (`held_by_process`): it is moved aside in one rename and then removed, so
 //! a removal that fails half way leaves a name no tool reads, which the next
-//! pass removes. Each removal is a line of the janitor's removal record.
+//! pass removes. Each removal is a line of the janitor's removal record,
+//! naming what went with it: the paths `.gitignore` named and their bytes,
+//! and the commits only its reflog reached.
 
 mod evidence;
 mod take;
+mod units;
 mod work;
 
 use std::collections::BTreeSet;
@@ -205,21 +209,29 @@ fn list(pass: &Pass<'_>, met: &mut Met, report: &mut CleanupReport) -> Found {
 }
 
 /// The sessions this host's queue records, asked only when a checkout below
-/// the home this pass may delete in carries no clone marker: that proof is
-/// the only one such a checkout can have. `None` when nothing needs them or
-/// they could not be read, the cause then among the pass's errors and every
-/// such checkout kept as `not_session_checkout`.
+/// the home this pass may delete in carries no clone marker and the queue
+/// has not answered for it ([`evidence::Answered`]): that proof is the only
+/// one such a checkout can have. `None` when nothing needs them or they
+/// could not be read, the cause then among the pass's errors and every such
+/// checkout kept as `not_session_checkout`.
 async fn session_jobs(
     pass: &Pass<'_>,
     found: &Found,
     report: &mut CleanupReport,
 ) -> Option<Vec<evidence::SessionJob>> {
-    let unmarked = found.checkouts.iter().any(|(path, place)| {
-        *place == Place::Home
-            && ownership::may_delete(pass.deletable, path)
-            && evidence::marker(path).is_none()
-    });
-    if !unmarked {
+    let unmarked: Vec<&Path> = found
+        .checkouts
+        .iter()
+        .filter(|(path, place)| {
+            *place == Place::Home
+                && ownership::may_delete(pass.deletable, path)
+                && evidence::marker(path).is_none()
+        })
+        .map(|(path, _)| path.as_path())
+        .collect();
+    let answered = evidence::Answered::read(pass.lock_dir, report);
+    let asking = answered.unanswered(&unmarked);
+    if asking.is_empty() {
         return None;
     }
     let Some(target) = pass.target else {
@@ -233,8 +245,13 @@ async fn session_jobs(
         );
         return None;
     };
-    match evidence::ask(target).await {
-        Ok(jobs) => Some(jobs),
+    match evidence::ask(target, pass.home, &asking).await {
+        Ok(jobs) => {
+            if pass.enforcing {
+                answered.remember(pass.home, &unmarked, &jobs, report);
+            }
+            Some(jobs)
+        }
         Err(cause) => {
             report.add_error(
                 CLEANER,

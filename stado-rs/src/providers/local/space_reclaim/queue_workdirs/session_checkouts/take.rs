@@ -3,12 +3,14 @@
 //! session cloned it, a service or unit naming it), its size only after
 //! them, then under the exclusive cleanup lock for that one checkout what
 //! live processes hold and what git says only it has, and last one rename
-//! aside and the removal.
+//! aside and the removal, recorded with what went with it.
 
 use std::path::Path;
 
+use serde_json::Value;
+
 use super::evidence::{self, Proof, SessionJob};
-use super::{work, Pass, Place, CLEANER};
+use super::{units, work, Pass, Place, CLEANER};
 use crate::providers::local::space_reclaim::candidates::ledger;
 use crate::providers::local::space_reclaim::holders::Holders;
 use crate::providers::local::space_reclaim::janitor::pass::lock::file::{ExclusiveLock, LockState};
@@ -82,21 +84,28 @@ fn cleanup_lock(
     }
 }
 
-/// Remove `aside`, the checkout `original` moved aside, and record it.
+/// Remove `aside`, the checkout `original` moved aside, and record it with
+/// `went`, what went with it ([`work::went_with`]), when that was read.
 fn remove(
     pass: &Pass<'_>,
     aside: &Path,
     original: &Path,
     bytes: i64,
+    went: Option<Value>,
     met: &mut Met,
     report: &mut CleanupReport,
 ) {
     match remove_tree(aside) {
         Ok(()) => {
             met.removed(Some(bytes.unsigned_abs()));
-            if let Err(error) =
-                ledger::record_tree(pass.lock_dir, CLEANER, pass.writer, original, bytes, bytes)
-            {
+            let (lock_dir, writer) = (pass.lock_dir, pass.writer);
+            let recorded = match went {
+                Some(went) => {
+                    ledger::record_tree_with(lock_dir, CLEANER, writer, original, bytes, went)
+                }
+                None => ledger::record_tree(lock_dir, CLEANER, writer, original, bytes, bytes),
+            };
+            if let Err(error) = recorded {
                 report.add_error("removal_record", &error);
             }
         }
@@ -136,7 +145,7 @@ pub(super) fn remove_aside(
     let Some(lock) = cleanup_lock(pass, size, met, report) else {
         return;
     };
-    remove(pass, aside, &original, bytes, met, report);
+    remove(pass, aside, &original, bytes, None, met, report);
     drop(lock);
 }
 
@@ -175,7 +184,7 @@ pub(super) fn take(
         met.skipped("declared_by_service");
         return;
     }
-    match work::unit_naming(pass.home, checkout) {
+    match units::unit_naming(pass.home, checkout) {
         Ok(None) => {}
         Ok(Some(_unit)) => {
             met.skipped("named_by_unit");
@@ -228,6 +237,8 @@ pub(super) fn take(
         return;
     }
     met.eligible(size);
+    // Read before the rename, while the checkout is still where git knows it.
+    let went = work::went_with(checkout);
     // One rename, right after the holders and git were read: a session that
     // starts from here on finds no checkout and clones a new one, and a
     // removal that fails half way leaves only the aside name.
@@ -245,6 +256,6 @@ pub(super) fn take(
         );
         return;
     }
-    remove(pass, &aside, checkout, bytes, met, report);
+    remove(pass, &aside, checkout, bytes, Some(went), met, report);
     drop(lock);
 }

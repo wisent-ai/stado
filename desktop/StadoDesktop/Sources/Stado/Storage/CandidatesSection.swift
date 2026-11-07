@@ -90,7 +90,11 @@ private struct CandidatesReport {
         removed = (document["removed"] as? [[String: Any]] ?? []).map { line in
             let what = (line["path"] as? String) ?? "\((line["items"] as? NSNumber)?.intValue ?? 0) item(s)"
             let bytes = ByteCountFormatter.string(fromByteCount: (line["bytes"] as? NSNumber)?.int64Value ?? 0, countStyle: .file)
-            return "\(line["removed_at"] as? String ?? "") \(line["cleaner"] as? String ?? "") \(bytes) \(what)"
+            let removal = "\(line["removed_at"] as? String ?? "") \(line["cleaner"] as? String ?? "") \(bytes) \(what)"
+            guard let went = (line["went_with_it"] as? [String: Any])?["said"] as? String else {
+                return removal
+            }
+            return "\(removal); with it: \(went)"
         }
         let needText = ByteCountFormatter.string(fromByteCount: need.int64Value, countStyle: .file)
         summary = need.int64Value > 0

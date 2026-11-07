@@ -23,7 +23,7 @@ use probe::place::{
 pub(crate) use attach::connect_jeden;
 pub(crate) use detached::{start_detached, DetachedRequest};
 pub(crate) use omp::{
-    collect_results, harness_status, install_harness, queued_batch as omp_session_batch,
+    collect_results, harness_status, install_harness, queued_batches as session_batches,
     start_omp, OmpRequest,
 };
 pub(crate) use sessions::list_sessions;

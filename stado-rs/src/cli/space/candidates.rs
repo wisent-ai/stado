@@ -249,5 +249,8 @@ fn print_text(
             line["cleaner"].as_str().unwrap_or_default(),
             gib(line["bytes"].as_i64().unwrap_or_default()),
         );
+        if let Some(went) = line["went_with_it"]["said"].as_str() {
+            println!("  with it: {went}");
+        }
     }
 }

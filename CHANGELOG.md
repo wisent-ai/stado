@@ -121,15 +121,20 @@ The version-bump commit moves them with `stado product changelog --version V`;
   (under the home on every pass, under the work root at the rule) only on that proof, or, for a
   checkout an older release cloned under
   `~/Documents/CodingProjects` on a host that is not shared, on this host's queue record of the
-  `omp-session` whose command names exactly that checkout and during which its `.git` was made;
-  every other checkout, however clean and pushed, is kept as `not_session_checkout`. A proven
-  checkout is kept while it holds an uncommitted change, no remote, a commit any ref reaches and
-  no remote has (a local tag included), a stash or another worktree (`unpushed_work`, named; git
-  is asked with `status.showUntrackedFiles` and submodule ignore settings overridden, so a
-  checkout's own configuration cannot hide an untracked file or a changed submodule), while
-  git cannot answer, a process works in it or a service or unit names it; otherwise it is moved
-  aside and removed. `lsof` or `ps` that cannot be read is now named among the errors of every
-  cleaner that reads them. Journeys `tests/space_reclaim/workdirs/session_checkouts.rs`,
+  `omp-session` whose command names exactly that checkout and during which its `.git` was made
+  (the queue's answer is kept beside the janitor's state, so it is listed again only for a
+  checkout it has not answered for, and the batch it looks for is read from the workload
+  catalog); every other checkout, however clean and pushed, is kept as `not_session_checkout`. A
+  proven checkout is kept while it or a submodule checked out in it holds an uncommitted change,
+  no remote, a commit any ref reaches and no remote has (a local tag included), a stash or another
+  worktree (`unpushed_work`, named; git is asked with `status.showUntrackedFiles` and submodule
+  ignore settings overridden, so a checkout's own configuration cannot hide an untracked file or a
+  changed submodule), while git cannot answer, a process works in it or a service or unit names
+  it; otherwise it is moved aside and removed, and its removal record line, `stado space
+  candidates` and Stado Desktop's cleanup candidates list name what went with it: the paths
+  `.gitignore` named and their bytes, and the commits only its reflog reached. `lsof` or `ps` that
+  cannot be read is now named among the errors of every cleaner that reads them. Journeys
+  `tests/space_reclaim/workdirs/session_checkouts.rs`,
   `tests/space_reclaim/workdirs/session_keeps.rs` and `tests/workload/omp_session_run.rs` (the
   refusal without a work root and the real worker, on darwin-arm64 and linux-amd64).
 - **A host whose work root is a roomy data disk is never full because its system disk is:** the

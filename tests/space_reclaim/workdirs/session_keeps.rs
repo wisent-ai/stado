@@ -1,10 +1,13 @@
 //! Every other reason the janitor keeps a checkout a session is proven to
 //! have cloned, each at the rule on the work root's session checkouts: a
 //! stash, a repository with no remote, another live worktree of it, an
-//! untracked file the checkout's own configuration hides from `git status`
-//! (all `unpushed_work`, named among the pass's errors), git that cannot
-//! answer (`git_state_unread`) and a launchd unit naming a path in it
-//! (`named_by_unit`). None is taken.
+//! untracked file the checkout's own configuration hides from `git status`,
+//! a commit only a submodule checked out in it holds (all `unpushed_work`,
+//! named among the pass's errors), git that cannot answer
+//! (`git_state_unread`) and a launchd unit naming a path in it
+//! (`named_by_unit`). None is taken. And what a taken one held that no keep
+//! covers, what `.gitignore` names and the commits only its reflog reaches,
+//! is named in its removal record.
 
 use std::fs;
 
@@ -60,15 +63,32 @@ fn a_stash_no_remote_another_worktree_unreadable_git_or_a_unit_keeps_a_proven_ch
     git(&hidden, &["config", "status.showUntrackedFiles", "no"]);
     fs::write(hidden.join("UNSEEN"), b"never committed\n").unwrap();
 
+    // A submodule commit no remote has, recorded and pushed in the checkout
+    // itself, so only the submodule's own history holds it.
+    let nested = sessions.join("nested-repository");
+    session_clone(&origin, &nested);
+    let source = origin.to_str().unwrap();
+    git(
+        &nested,
+        &["-c", "protocol.file.allow=always", "submodule", "add", "--quiet", source, "part"],
+    );
+    let part = nested.join("part");
+    fs::write(part.join("PART"), b"only in the submodule\n").unwrap();
+    git(&part, &["add", "PART"]);
+    git(&part, &["commit", "--quiet", "-m", "only in the submodule"]);
+    git(&nested, &["add", "part"]);
+    git(&nested, &["commit", "--quiet", "-m", "record the submodule"]);
+    git(&nested, &["push", "--quiet", "origin", "HEAD"]);
+
     native.fill_with_user_data();
     let report = cleanup_with_work_root(&native, &work_root);
     let cleaner = &report["cleaners"][CLEANER];
     assert_eq!(report["rule"]["triggered"], true, "{report}");
-    for kept in [&stashed, &unremoted, &branched, &broken, &served, &hidden] {
+    for kept in [&stashed, &unremoted, &branched, &broken, &served, &hidden, &nested] {
         assert!(kept.join(".git").is_dir(), "{} was taken: {report}", kept.display());
     }
     assert_eq!(cleaner["deleted_items"], 0, "{report}");
-    assert_eq!(cleaner["skipped"]["unpushed_work"], 4, "{report}");
+    assert_eq!(cleaner["skipped"]["unpushed_work"], 5, "{report}");
     assert_eq!(cleaner["skipped"]["git_state_unread"], 1, "{report}");
     assert_eq!(cleaner["skipped"]["named_by_unit"], 1, "{report}");
     let named = [
@@ -77,8 +97,46 @@ fn a_stash_no_remote_another_worktree_unreadable_git_or_a_unit_keeps_a_proven_ch
         "other worktrees",
         "broken-repository",
         "UNSEEN",
+        "in its submodule part",
     ];
     for named in named {
         assert!(errors_naming(&report, named), "{named} is not named: {report}");
     }
+}
+
+#[test]
+fn a_taken_checkout_is_recorded_with_its_ignored_files_and_reflog_only_commits() {
+    let native = Native::new("session-checkouts-went-with");
+    let origin = origin(&native);
+    let work_root = native.home.join("fleet-work");
+    let taken = work_root.join(SESSION_CHECKOUTS_LEAF).join("taken-repository");
+    session_clone(&origin, &taken);
+    fs::create_dir_all(taken.join(".git/info")).unwrap();
+    fs::write(taken.join(".git/info/exclude"), b"target/\n").unwrap();
+    let output = b"rebuildable output\n";
+    fs::create_dir_all(taken.join("target")).unwrap();
+    fs::write(taken.join("target/build.bin"), output).unwrap();
+    fs::write(taken.join("LEFT"), b"work a reset left behind\n").unwrap();
+    git(&taken, &["add", "LEFT"]);
+    git(&taken, &["commit", "--quiet", "-m", "left behind"]);
+    let left = git(&taken, &["rev-parse", "HEAD"]);
+    git(&taken, &["reset", "--quiet", "--hard", "@{upstream}"]);
+
+    native.fill_with_user_data();
+    let report = cleanup_with_work_root(&native, &work_root);
+    assert_eq!(report["rule"]["triggered"], true, "{report}");
+    assert!(!taken.exists(), "the checkout was kept: {report}");
+    let after = native.json(&["space", "candidates", "--json"]);
+    let line = after["removed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|line| line["cleaner"] == CLEANER && line["path"].as_str() == taken.to_str())
+        .unwrap_or_else(|| panic!("the removal is not recorded: {after}"));
+    let went = &line["went_with_it"];
+    assert_eq!(went["ignored_paths"], 1, "{line}");
+    assert_eq!(went["ignored_bytes"], output.len(), "{line}");
+    assert_eq!(went["reflog_only_commits"], 1, "{line}");
+    let said = went["said"].as_str().unwrap_or_default();
+    assert!(said.contains("target/") && said.contains(&left), "{line}");
 }

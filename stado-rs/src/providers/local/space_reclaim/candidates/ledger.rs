@@ -5,10 +5,12 @@
 //! went, not which. An operator who finds tens of GiB gone from a disk, or a
 //! user who wants to know what the janitor took while she was away, reads
 //! this file (`stado space candidates` prints its newest rows). Each
-//! build-cache tree a pass removes is one line naming its path and bytes;
-//! every other cleaner's deletions in one pass are one line with its item
-//! count and bytes, since those cleaners remove single files by the
-//! thousand.
+//! build-cache tree a pass removes is one line naming its path and bytes; a
+//! session checkout's line also says what went with it that no remote had
+//! (`went_with_it`: what `.gitignore` named, the commits only its reflog
+//! reached); every other cleaner's deletions in one pass are one line with
+//! its item count and bytes, since those cleaners remove single files by
+//! the thousand.
 //!
 //! Only the janitor appends; nothing rewrites a line. A line that is not one
 //! JSON object is refused when the file is read, naming the line.
@@ -85,18 +87,37 @@ pub(in crate::providers::local::space_reclaim) fn record_tree(
     bytes: i64,
     freed_bytes: i64,
 ) -> Result<(), JanitorError> {
-    append(
-        state_dir,
-        &json!({
-            "removed_at": utc_now(),
-            "writer": writer,
-            "cleaner": cleaner,
-            "class": Class::AgentOutput.word(),
-            "path": path,
-            "bytes": bytes,
-            "freed_bytes": freed_bytes,
-        }),
-    )
+    let row = tree_row(cleaner, writer, path, bytes, freed_bytes);
+    append(state_dir, &row)
+}
+
+/// [`record_tree`] for a tree that took with it what only it held and no
+/// keep covered: `went` names it under `went_with_it`, so a removal that was
+/// wrong is visible in the record.
+pub(in crate::providers::local::space_reclaim) fn record_tree_with(
+    state_dir: &Path,
+    cleaner: &str,
+    writer: &str,
+    path: &Path,
+    bytes: i64,
+    went: Value,
+) -> Result<(), JanitorError> {
+    let mut row = tree_row(cleaner, writer, path, bytes, bytes);
+    row["went_with_it"] = went;
+    append(state_dir, &row)
+}
+
+/// One line of [`record_tree`].
+fn tree_row(cleaner: &str, writer: &str, path: &Path, bytes: i64, freed_bytes: i64) -> Value {
+    json!({
+        "removed_at": utc_now(),
+        "writer": writer,
+        "cleaner": cleaner,
+        "class": Class::AgentOutput.word(),
+        "path": path,
+        "bytes": bytes,
+        "freed_bytes": freed_bytes,
+    })
 }
 
 /// Every cleaner that removes items by the file rather than trees

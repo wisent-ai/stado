@@ -36,13 +36,19 @@ use crate::queue::submit::{
     submit_batch, ResolvedHardwareProjection, SubmitOptions, CPU_MACHINE_TYPE,
 };
 
-/// The kind this module starts, as the workload catalog declares it.
-const KIND: &str = "omp-session";
-
-/// The batch every queued `omp-session` carries ([`batch_id`]); the janitor
-/// finds the sessions a host ran, and so the checkouts they cloned, by it.
-pub(crate) fn queued_batch() -> String {
-    batch_id(KIND)
+/// The batches queued harness sessions carry: [`batch_id`] of every kind the
+/// workload catalog declares a harness for, since [`start_omp`] queues each
+/// session under its own kind's batch and refuses a kind with no harness.
+/// The janitor finds the sessions a host ran, and so the checkouts they
+/// cloned, by them; read from the catalog, they cannot drift from the batch
+/// a start submits.
+pub(crate) fn queued_batches() -> Result<Vec<String>, CmdError> {
+    Ok(crate::cli::workload::catalog::catalog()?
+        .workloads
+        .iter()
+        .filter(|kind| kind.harness.is_some())
+        .map(|kind| batch_id(&kind.kind))
+        .collect())
 }
 
 /// Everything one `omp-session` start is asked for.

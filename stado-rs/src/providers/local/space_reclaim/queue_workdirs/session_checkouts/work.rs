@@ -1,22 +1,24 @@
 //! What decides whether one session checkout may go: the checkouts below a
-//! root, what git says exists only in one of them, and whether a launchd or
-//! systemd unit on this host names a path in it.
+//! root and what git says exists only in one of them; and what went with
+//! one that went, for its removal record.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde_json::{json, Value};
+
 use super::CLEANER;
-use crate::deploy::service::{LAUNCHD_UNIT_DIRECTORIES, SYSTEMD_UNIT_DIRECTORIES};
 use crate::providers::local::space_reclaim::janitor::state::report::{met::Met, CleanupReport};
+use crate::providers::local::space_reclaim::weles::dir_size;
 use crate::providers::local::space_reclaim::JanitorError;
 
 /// The entry that makes a directory a git checkout: a directory in a
 /// repository's own checkout, a file in a linked worktree.
 const GIT_ENTRY: &str = ".git";
 
-/// The word the unit directory lists spell the account's home with.
-const HOME_WORD: &str = "$HOME/";
+/// The mode a repository's index records a submodule's commit under.
+const SUBMODULE_MODE: &str = "160000";
 
 /// The directories directly below `directory`, sorted. A link is never
 /// followed and never listed.
@@ -74,10 +76,11 @@ fn git(checkout: &Path, args: &[&str]) -> Result<String, String> {
 /// file included; what `.gitignore` names is build output and does not
 /// count), a repository with no remote at all, a commit that some ref of
 /// the checkout reaches (`HEAD`, a branch, a tag, a note, the stash, any
-/// tool's ref) and no remote-tracking branch holds, a stash, and, in a
-/// repository's own checkout, another worktree of it that still exists,
-/// which taking the repository would break. `Err` when git cannot answer one
-/// of these, which keeps the checkout as surely as work would.
+/// tool's ref) and no remote-tracking branch holds, a stash, the same in
+/// each submodule checked out in it, and, in a repository's own checkout,
+/// another worktree of it that still exists, which taking the repository
+/// would break. `Err` when git cannot answer one of these, which keeps the
+/// checkout as surely as work would.
 pub(super) fn unpushed(checkout: &Path) -> Result<Option<String>, String> {
     let mut held = Vec::new();
     // Asked with the configuration that would hide work overridden: the
@@ -133,68 +136,94 @@ pub(super) fn unpushed(checkout: &Path) -> Result<Option<String>, String> {
             ));
         }
     }
+    for submodule in submodules(checkout)? {
+        if let Some(what) = unpushed(&checkout.join(&submodule))? {
+            held.push(format!("in its submodule {submodule}: {what}"));
+        }
+    }
     Ok((!held.is_empty()).then(|| held.join("; ")))
 }
 
-/// A launchd or systemd unit definition on this host that names a path in
-/// `checkout`: the unit starts that service again even while it is down, so
-/// the checkout stays. `Err` names a unit directory or file that could not
-/// be read, since absence was then never proven. Links in the unit
-/// directories point at definitions listed elsewhere and are not read.
-pub(super) fn unit_naming(home: &Path, checkout: &Path) -> Result<Option<PathBuf>, String> {
-    let needle = checkout.to_string_lossy();
-    for directory in LAUNCHD_UNIT_DIRECTORIES
-        .iter()
-        .chain(SYSTEMD_UNIT_DIRECTORIES.iter())
-    {
-        let directory = match directory.strip_prefix(HOME_WORD) {
-            Some(relative) => home.join(relative),
-            None => PathBuf::from(directory),
-        };
-        if let Some(unit) = naming_in(&directory, &needle)? {
-            return Ok(Some(unit));
-        }
-    }
-    Ok(None)
+/// The submodules checked out in `checkout`, by path: a commit made in one
+/// and never pushed is work the checkout's own history does not hold.
+fn submodules(checkout: &Path) -> Result<Vec<String>, String> {
+    let index = git(checkout, &["ls-files", "--stage", "-z"])?;
+    Ok(index
+        .split('\0')
+        .filter_map(|entry| {
+            let (fields, path) = entry.split_once('\t')?;
+            let gitlink = fields.split(' ').next() == Some(SUBMODULE_MODE);
+            (gitlink && is_checkout(&checkout.join(path))).then(|| path.to_string())
+        })
+        .collect())
 }
 
-/// The first unit definition at or below `directory` whose text holds
-/// `needle`.
-fn naming_in(directory: &Path, needle: &str) -> Result<Option<PathBuf>, String> {
-    let entries = match std::fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(format!(
-                "the unit directory {} cannot be read: {error}",
-                directory.display()
-            ))
-        }
-    };
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            format!(
-                "an entry of the unit directory {} cannot be read: {error}",
-                directory.display()
-            )
-        })?;
-        let path = entry.path();
-        let kind = entry.file_type().map_err(|error| {
-            format!("the unit entry {} cannot be read: {error}", path.display())
-        })?;
-        if kind.is_dir() {
-            if let Some(unit) = naming_in(&path, needle)? {
-                return Ok(Some(unit));
-            }
-        } else if kind.is_file() {
-            let text = std::fs::read(&path)
-                .map_err(|error| format!("the unit {} cannot be read: {error}", path.display()))?;
-            if String::from_utf8_lossy(&text).contains(needle) {
-                return Ok(Some(path));
-            }
-        }
+/// The bytes at `path`: a directory's whole tree, a file's length.
+fn bytes_at(path: &Path) -> i64 {
+    match std::fs::symlink_metadata(path) {
+        Ok(info) if info.is_dir() => dir_size(path),
+        Ok(info) => i64::try_from(info.len()).unwrap_or(i64::MAX),
+        Err(_) => i64::default(),
     }
-    Ok(None)
+}
+
+/// What `checkout`, about to be taken, holds that no remote has and no keep
+/// covers, for its removal record: what `.gitignore` names (build output,
+/// but also a `.env` or local state), and the commits only its reflog
+/// reaches (work a reset left behind). A wrong removal is then visible in
+/// the record. A question git cannot answer is recorded as its cause, so the
+/// record never reads as nothing for it.
+pub(super) fn went_with(checkout: &Path) -> Value {
+    let mut said = Vec::new();
+    let mut row = json!({});
+    let ignored = [
+        "ls-files",
+        "-z",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+    ];
+    match git(checkout, &ignored) {
+        Ok(listing) => {
+            let paths: Vec<&str> = listing
+                .split('\0')
+                .filter(|path| !path.is_empty())
+                .collect();
+            let bytes = paths
+                .iter()
+                .map(|path| bytes_at(&checkout.join(path)))
+                .fold(i64::default(), i64::saturating_add);
+            if let Some(first) = paths.first() {
+                said.push(format!(
+                    "{} paths .gitignore names ({bytes} bytes), the first `{first}`",
+                    paths.len()
+                ));
+            }
+            row["ignored_paths"] = json!(paths.len());
+            row["ignored_bytes"] = json!(bytes);
+        }
+        Err(cause) => said.push(format!("what .gitignore names was not listed: {cause}")),
+    }
+    let reflog_only = ["rev-list", "--reflog", "--not", "--remotes", "--all"];
+    match git(checkout, &reflog_only) {
+        Ok(commits) => {
+            if let Some(newest) = commits.lines().next() {
+                said.push(format!(
+                    "{} commits only its reflog reaches, the newest {newest}",
+                    commits.lines().count()
+                ));
+            }
+            row["reflog_only_commits"] = json!(commits.lines().count());
+        }
+        Err(cause) => said.push(format!(
+            "the commits only its reflog reaches were not listed: {cause}"
+        )),
+    }
+    if !said.is_empty() {
+        row["said"] = json!(said.join("; "));
+    }
+    row
 }
 
 /// Whether git says `checkout` holds work no remote has, or cannot say.
