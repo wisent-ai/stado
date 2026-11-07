@@ -637,3 +637,11 @@ path = "../tests/workload/browser_task_params.rs"
 [[test]]
 name = "wait-operations"
 path = "../tests/wait/operations.rs"
+
+[[test]]
+name = "host-channel-termin"
+path = "../tests/host_run/channel_end.rs"
+
+[[test]]
+name = "network-peer-close"
+path = "../tests/network/peer_close.rs"

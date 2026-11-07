@@ -205,7 +205,9 @@ pub(super) async fn deliver(
 }
 
 /// Run the delivered program on the host with `arguments`; its streams are
-/// captured when `capture`, else they pass through to this terminal.
+/// captured when `capture`, else they pass through to this terminal. The
+/// outcome's `judged` says whether the program succeeded, refused, or the
+/// host or its channel ended the run before the program reported its exit.
 pub(super) async fn attach(
     target: &ComputeTarget,
     delivered: &Delivered,
@@ -215,30 +217,6 @@ pub(super) async fn attach(
     crate::deploy::host_run::run_attached(target, &delivered.program, arguments, capture)
         .await
         .map_err(CmdError::from)
-}
-
-/// The outcome's exit status, or how it ended without one.
-pub(super) fn ended(outcome: &AttachedOutcome) -> Result<(), String> {
-    match outcome.exit_code {
-        Some(code) if code == nix::libc::EXIT_SUCCESS => Ok(()),
-        Some(code) => {
-            let said: Vec<&str> = [outcome.stdout.as_deref(), outcome.stderr.as_deref()]
-                .into_iter()
-                .flatten()
-                .flat_map(str::lines)
-                .filter(|line| !line.trim().is_empty())
-                .collect();
-            Err(if said.is_empty() {
-                format!("exited {code}")
-            } else {
-                format!("exited {code}: {}", said.join(" | "))
-            })
-        }
-        None => Err(format!(
-            "ended with {} and returned no exit code",
-            outcome.ended
-        )),
-    }
 }
 
 /// Remove the run the upgrade delivered; what stays is said.

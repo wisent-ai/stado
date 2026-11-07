@@ -50,6 +50,34 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado host upgrade` no longer calls a cut channel the incoming Stado refusing the host's
+  configuration, `stado host run attach` says the program's own status, and `stado network
+  connect` ends with its peer:** the attach learned the program's status only as the channel's,
+  after the wrapper's relays and its read of who still holds the output, so an ssh that failed
+  (255) read as the program refusing, and the upgrade answered a `config validate` that had
+  printed `config ok` with `the incoming Stado refuses <host>'s configuration`. The wrapper now
+  writes `stado host run attach: program exited <status>` the moment the program ends and
+  `stado host run attach: wrapper exiting <status>` as it exits; the JSON receipt carries them as
+  `program_exit` and `wrapper_exit` beside the channel's `exit_code`, and the program's captured
+  stderr no longer holds them. A run whose program reported nothing ends as the host's refusal
+  (`did not report its exit: the host's wrapper exited <n> first, …`) or the channel's
+  (`… the host channel to <host> ended (<how>) first, so whether it ran is not known; …`), which
+  `stado host run attach` exits 69 on and the upgrade refuses as `config validate on <host> …;
+  nothing was installed; run stado host upgrade <host> again once the host answers`; only the
+  program's own non-zero status is a configuration refusal, and a channel that ends badly after
+  the program reported 0 is said in the validate step and no longer stops the upgrade. The
+  stages are waits listed by `stado waits`: `the attached remote program to exit`, `which
+  processes on <host> still hold an attached program's output`, `the host channel of an attached
+  program to close after it exited`. On Linux the holder read lists only the `/proc/<pid>/fd`
+  links naming the run's relays instead of lsof over every open file of the host, which ran for
+  more than twenty minutes on a host with hundreds of containers and full swap; it is not cut
+  short, and macOS keeps lsof. Stderr is relayed chunk by chunk as before, partial lines
+  included. `stado network connect` returned only once its standard input closed too, so an ssh
+  whose remote side had ended stood on its proxy; it now ends when the peer ends, and reads
+  standard input on a thread of its own so the runtime does not wait for it. Journeys
+  `tests/host_run/channel_end.rs` (`host-channel-termin`) and `tests/network/peer_close.rs`
+  (`network-peer-close`), run on darwin-arm64 and linux-amd64.
+
 - **`stado host inventory TARGET` on a Linux host dates a service artefact and its installed
   program, and its answer parses:** the inventory read both ages with the BSD `stat -f %m` on every
   kernel; GNU stat read `-f` as file-system status, printed the file system's multi-line status

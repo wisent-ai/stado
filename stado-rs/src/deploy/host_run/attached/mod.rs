@@ -1,12 +1,17 @@
 //! Attached execution of one confined program: the host-side signal marker,
 //! the forwarding of HUP/INT/TERM to the remote child, and the outcome the
-//! caller sees. The scripts run on the host are in [`script`].
+//! caller sees. The scripts run on the host are in [`script`]; the read of
+//! who still holds the program's output once it exited is in [`holders`];
+//! what the channel's stderr says and the waits it marks are in [`channel`];
+//! the outcome and how its end is judged are in [`outcome`].
 
+mod channel;
+mod holders;
+mod outcome;
 mod script;
 
 use std::process::Stdio;
 
-use serde::Serialize;
 use tokio::io::AsyncReadExt;
 
 use crate::deploy::{
@@ -14,23 +19,7 @@ use crate::deploy::{
 };
 use crate::targets::ComputeTarget;
 
-#[derive(Debug, Serialize)]
-pub struct AttachedOutcome {
-    pub target: String,
-    pub program: String,
-    pub arguments: Vec<String>,
-    pub status: &'static str,
-    /// The channel's exit code; `None` when a signal ended it, which
-    /// `ended` names, so no code is invented for a run that returned none.
-    pub exit_code: Option<i32>,
-    /// How the channel ended, as the operating system states it.
-    pub ended: String,
-    pub forwarded_signals: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stdout: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stderr: Option<String>,
-}
+pub use outcome::{AttachedOutcome, Ending};
 
 async fn forward_signal(
     connection: Option<&str>,
@@ -118,24 +107,33 @@ pub async fn run_attached(
         .stdin(Stdio::inherit())
         .kill_on_drop(true);
     if capture_output {
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        command.stdout(Stdio::piped());
     } else {
-        command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+        command.stdout(Stdio::inherit());
     }
+    // Stderr is read here in both forms: the wrapper reports the program's
+    // status and the stages after it there ([`channel`]); without capture
+    // every chunk goes on to this process's stderr as it arrives.
+    command.stderr(Stdio::piped());
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn().map_err(DeployError::from)?;
+    let mut stages = channel::Stages::begin(&target.name);
+    let (exited, reported) = tokio::sync::oneshot::channel();
     let stdout_reader = child.stdout.take().map(|mut stdout| {
         tokio::spawn(async move {
             let mut bytes = Vec::new();
             stdout.read_to_end(&mut bytes).await.map(|_| bytes)
         })
     });
-    let stderr_reader = child.stderr.take().map(|mut stderr| {
-        tokio::spawn(async move {
-            let mut bytes = Vec::new();
-            stderr.read_to_end(&mut bytes).await.map(|_| bytes)
-        })
+    let stderr_reader = child.stderr.take().map(|stderr| {
+        tokio::spawn(channel::relay(
+            stderr,
+            capture_output,
+            holders::wait(&target.name),
+            target.name.clone(),
+            exited,
+        ))
     });
     let mut forwarded_signals = Vec::new();
 
@@ -145,16 +143,19 @@ pub async fn run_attached(
         let mut hangup = signal(SignalKind::hangup()).map_err(DeployError::from)?;
         let mut interrupt = signal(SignalKind::interrupt()).map_err(DeployError::from)?;
         let mut terminate = signal(SignalKind::terminate()).map_err(DeployError::from)?;
-        let waited = crate::wait::until(
-            crate::wait::Kind::Host,
-            "the attached remote program to exit",
-            "its SSH session",
-            child.wait(),
-        );
+        let waited = child.wait();
         tokio::pin!(waited);
+        tokio::pin!(reported);
+        let mut awaiting_report = true;
         loop {
             tokio::select! {
                 status = &mut waited => break status.map_err(DeployError::from)?,
+                said = &mut reported, if awaiting_report => {
+                    awaiting_report = false;
+                    if said.is_ok() {
+                        stages.program_exited();
+                    }
+                }
                 received = hangup.recv() => {
                     if received.is_some() {
                         forward_signal(connection.as_deref(), key.as_ref(), &token, "HUP").await?;
@@ -177,14 +178,10 @@ pub async fn run_attached(
         }
     };
     #[cfg(not(unix))]
-    let status = crate::wait::until(
-        crate::wait::Kind::Host,
-        "the attached remote program to exit",
-        "its SSH session",
-        child.wait(),
-    )
-    .await
-    .map_err(DeployError::from)?;
+    let status = {
+        drop(reported);
+        child.wait().await.map_err(DeployError::from)?
+    };
 
     let stdout = match stdout_reader {
         Some(reader) => Some(
@@ -198,29 +195,30 @@ pub async fn run_attached(
         ),
         None => None,
     };
-    let stderr = match stderr_reader {
-        Some(reader) => Some(
-            String::from_utf8_lossy(
-                &reader
-                    .await
-                    .map_err(|error| DeployError::unreachable(error.to_string()))?
-                    .map_err(DeployError::from)?,
-            )
-            .into_owned(),
-        ),
-        None => None,
+    let relayed = match stderr_reader {
+        Some(reader) => reader
+            .await
+            .map_err(|error| DeployError::unreachable(error.to_string()))?
+            .map_err(DeployError::from)?,
+        None => channel::Relayed::default(),
     };
+    stages.ended(relayed.program_exit, &status.to_string());
     drop(key);
-    let exit_code = status.code();
     Ok(AttachedOutcome {
         target: target.name.clone(),
         program: program.to_string(),
         arguments: arguments.to_vec(),
-        status: if status.success() { "exited" } else { "failed" },
-        exit_code,
+        status: if relayed.program_exit == Some(nix::libc::EXIT_SUCCESS) {
+            "exited"
+        } else {
+            "failed"
+        },
+        program_exit: relayed.program_exit,
+        wrapper_exit: relayed.wrapper_exit,
+        exit_code: status.code(),
         ended: status.to_string(),
         forwarded_signals,
         stdout,
-        stderr,
+        stderr: capture_output.then(|| String::from_utf8_lossy(&relayed.kept).into_owned()),
     })
 }

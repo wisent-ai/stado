@@ -8,15 +8,26 @@
 //! program exited and the attach waited until its caller killed it, ending
 //! with `attached process signal marker is unavailable`. Now a descendant can
 //! hold only a FIFO: once the program exits, the wrapper reads what is left,
-//! names each process still holding the FIFOs, stops relaying and exits with
-//! the program's status, and the session closes with it.
+//! names each process still holding the FIFOs ([`super::holders`]), stops
+//! relaying and exits with the program's status, and the session closes with
+//! it.
+//!
+//! The program's status reaches this machine on its own line, written the
+//! moment the program ended ([`super::channel::PROGRAM_EXITED`]), and the
+//! wrapper's own status on another as it exits
+//! ([`super::channel::WRAPPER_EXITING`]). Before them the status travelled
+//! only as the channel's, after the relays and the holder read: an ssh that
+//! failed (255) or a channel cut in that time read the same as a program
+//! that refused, and the upgrade called a validation that had printed
+//! `config ok` the incoming Stado refusing the host's configuration.
 
 use crate::deploy::shlex_quote;
 
 use super::super::{confined_file_prelude, SIGNAL_AREA};
+use super::channel::{PROGRAM_EXITED, WRAPPER_EXITING};
 
 /// The wrapper: confine the program, publish its pid to the signal marker,
-/// relay its output, and exit with its status once it has exited.
+/// relay its output, say its status, and exit with it once it has exited.
 pub(super) fn attached(program: &str, arguments: &[String], token: &str) -> String {
     let mut script = String::from("set -uo pipefail\numask 077\n");
     script.push_str(&confined_file_prelude(program, "-x", "program"));
@@ -32,10 +43,15 @@ marker="$signal_root/{token}"
 temporary="$marker.$$"
 out_fifo="$marker.out"
 err_fifo="$marker.err"
+holders_file="$marker.holders"
 child=''
 out_relay=''
 err_relay=''
-cleanup() {{ /bin/rm -f -- "$temporary" "$marker" "$out_fifo" "$err_fifo"; }}
+cleanup() {{
+  wrapper_status=$?
+  /bin/rm -f -- "$temporary" "$marker" "$out_fifo" "$err_fifo" "$holders_file"
+  printf '%s\n' "{WRAPPER_EXITING} $wrapper_status" >&2
+}}
 forward() {{ if [ -n "$child" ]; then /bin/kill "-$1" "$child" 2>/dev/null || :; fi; }}
 trap cleanup EXIT
 trap 'forward HUP' HUP
@@ -53,7 +69,7 @@ err_relay=$!
         script.push(' ');
         script.push_str(&shlex_quote(argument));
     }
-    script.push_str(
+    script.push_str(&format!(
         r#" <&0 >"$out_fifo" 2>"$err_fifo" &
 child=$!
 printf '%s\n' "$child" > "$temporary" || exit 73
@@ -65,29 +81,12 @@ while :; do
   status=$?
   if ! /bin/kill -0 "$child" 2>/dev/null; then break; fi
 done
-# Who still holds the relays, filtered outside any "$(...)": macOS /bin/bash
-# 3.2 misparses a `case` pattern's `)` inside a command substitution, and
-# lsof is looked for where each system keeps it, not on a non-login PATH.
-# macOS lsof names no holder of a FIFO asked for by its path (`lsof -t FIFO`
-# answers nothing while a process writes to it), so every open file is
-# listed and the relays are matched among the FIFOs by inode. A FIFO's lsof
-# record carries no device field (`D`), so a match on device and inode found
-# no holder at all and the attach still waited for the lingering child.
-holders=''
-lister=''
-for candidate in /usr/sbin/lsof /usr/bin/lsof; do
-  if [ -x "$candidate" ]; then lister=$candidate; break; fi
-done
-if [ -n "$lister" ] && inodes=$(/usr/bin/stat -f '%i' "$out_fifo" "$err_fifo" 2>/dev/null || /usr/bin/stat -c '%i' "$out_fifo" "$err_fifo" 2>/dev/null); then
-  wanted=" $(printf '%s' "$inodes" | /usr/bin/tr '\n' ' ') "
-  for pid in $("$lister" -nP -F pfti 2>/dev/null | /usr/bin/awk -v wanted="$wanted" '/^p/ { pid = substr($0, 2) } /^f/ { type = "" } /^t/ { type = substr($0, 2) } /^i/ { if (type == "FIFO" && index(wanted, " " substr($0, 2) " ")) print pid }' | /usr/bin/sort -u); do
-    if [ "$pid" = "$out_relay" ] || [ "$pid" = "$err_relay" ] || [ "$pid" = "$$" ]; then continue; fi
-    holders="$holders$pid ($(/bin/ps -o comm= -p "$pid" 2>/dev/null)) "
-  done
-else
-  holders_unread='no lsof on this host names them'
-fi
-if [ -n "$holders" ]; then
+printf '%s\n' "{PROGRAM_EXITED} $status" >&2
+"#
+    ));
+    script.push_str(&super::holders::script(token));
+    script.push_str(
+        r#"if [ -n "$holders" ]; then
   printf '%s\n' "stado host run attach: the attached program exited with status $status; $holders still hold its output, which is no longer relayed" >&2
   /bin/kill "$out_relay" "$err_relay" 2>/dev/null || :
 elif [ -n "${holders_unread:-}" ]; then

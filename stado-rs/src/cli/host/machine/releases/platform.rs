@@ -1,6 +1,6 @@
 use crate::cli::entry::spec::fleet::host::runs::HostCargoOperation;
 use crate::cli::CmdError;
-use crate::deploy::host_run::{CargoOperation, HostCargoReceipt, HostCargoRequest};
+use crate::deploy::host_run::{CargoOperation, Ending, HostCargoReceipt, HostCargoRequest};
 
 use crate::cli::host::checks::probes::print_json;
 
@@ -94,9 +94,19 @@ fn space_line(receipt: &HostCargoReceipt) -> String {
 ///
 /// Standard input is inherited rather than read into a string, so a credential
 /// body does not enter Stado's arguments, logs, or receipts. The non-JSON form
-/// also inherits both output streams byte-for-byte. The JSON form captures
-/// them only because a single machine-readable receipt cannot share stdout
-/// with an arbitrary program protocol.
+/// inherits stdout and relays stderr chunk by chunk as it arrives, partial
+/// lines included; stderr passes through Stado because the host's wrapper
+/// reports there the program's own status the moment it ends and the stages
+/// after it (the read of which processes still hold its output, the channel
+/// closing), each a wait Stado opens and settles as the lines pass. The JSON
+/// form captures both streams only because a single machine-readable receipt
+/// cannot share stdout with an arbitrary program protocol; its receipt keeps
+/// the program's status as `program_exit` beside the channel's `exit_code`.
+///
+/// The command exits with the program's own status. When the host's wrapper
+/// ended the run before the program reported one, it exits with the
+/// wrapper's status, whose words are on stderr; when the channel ended
+/// first, it fails saying so, since whether the program ran is not known.
 pub async fn run_attached(
     target: &str,
     program: &str,
@@ -127,13 +137,16 @@ pub async fn run_attached(
     if json_output {
         print_json(&serde_json::to_value(&outcome)?);
     }
-    match outcome.exit_code {
-        Some(code) if code == nix::libc::EXIT_SUCCESS => Ok(()),
-        Some(code) => Err(CmdError::silent(code)),
-        None => Err(CmdError::click(format!(
-            "{program} on {target} ended with {} and returned no exit code",
-            outcome.ended
-        ))
-        .machine_readable(json_output)),
+    match outcome.judged() {
+        Ok(()) => Ok(()),
+        Err(failure) => match (failure.ending, outcome.program_exit, outcome.exit_code) {
+            (Ending::Program, Some(code), _) | (Ending::Host, None, Some(code)) => {
+                Err(CmdError::silent(code))
+            }
+            _ => Err(
+                CmdError::unreachable(format!("{program} on {target} {}", failure.said))
+                    .machine_readable(json_output),
+            ),
+        },
     }
 }

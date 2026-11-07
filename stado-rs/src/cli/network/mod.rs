@@ -71,6 +71,13 @@ pub(crate) async fn up_host(host: &str) -> Result<(), CmdError> {
     up::up(up::UpArgs::for_host(host)).await
 }
 
+/// Carry standard input to the peer and the peer to standard output, and end
+/// when the peer has said everything. Joining both directions kept the proxy
+/// until its standard input closed too, so an `ssh` whose remote side had
+/// already ended saw no end of the connection from its proxy, and a command
+/// run over it stood with nothing running on the host. When standard input
+/// ends first, the peer is told (its half is shut down) and its answer is
+/// still carried to the end.
 async fn connect(host: &str, port: u16) -> Result<(), CmdError> {
     let name = match crate::network::network_host(host) {
         Some(name) => name,
@@ -80,21 +87,58 @@ async fn connect(host: &str, port: u16) -> Result<(), CmdError> {
         .await
         .map_err(CmdError::unreachable)?;
     let (mut from_peer, mut to_peer) = tokio::io::split(stream);
-    let sending = async {
-        tokio::io::copy(&mut tokio::io::stdin(), &mut to_peer).await?;
+    let mut input = standard_input();
+    let sending = async move {
+        while let Some(chunk) = input.recv().await {
+            tokio::io::AsyncWriteExt::write_all(&mut to_peer, &chunk?).await?;
+        }
         tokio::io::AsyncWriteExt::shutdown(&mut to_peer).await
     };
     let receiving = async {
         tokio::io::copy(&mut from_peer, &mut tokio::io::stdout()).await?;
         tokio::io::AsyncWriteExt::flush(&mut tokio::io::stdout()).await
     };
-    // The connection is over when the peer has said everything: OpenSSH
-    // ends the proxy after the session, and a half still open on our side
-    // only means its standard input was not closed.
-    let (_, received) = tokio::join!(sending, receiving);
-    received.map_err(|error| {
+    tokio::pin!(sending, receiving);
+    let ended = tokio::select! {
+        received = &mut receiving => received,
+        sent = &mut sending => match sent {
+            Ok(()) => (&mut receiving).await,
+            Err(error) => Err(error),
+        },
+    };
+    ended.map_err(|error| {
         CmdError::unreachable(format!("the connection to {host}:{port} broke: {error}"))
     })
+}
+
+/// This process's standard input, read on a thread of its own and handed
+/// over a chunk at a time, ending after its end or its read error. tokio's
+/// own standard input reads on the runtime's blocking pool, which the runtime
+/// waits for as it shuts down, so a connect whose peer had ended still stood
+/// until its standard input closed; a thread of its own ends with the
+/// process.
+fn standard_input() -> tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>> {
+    let (chunks, received) = tokio::sync::mpsc::channel(std::num::NonZeroUsize::MIN.get());
+    std::thread::spawn(move || {
+        use std::io::BufRead as _;
+        let mut input = std::io::stdin().lock();
+        loop {
+            let chunk = match input.fill_buf() {
+                Ok([]) => return,
+                Ok(chunk) => Ok(chunk.to_vec()),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => Err(error),
+            };
+            let failed = chunk.is_err();
+            if let Ok(read) = &chunk {
+                input.consume(read.len());
+            }
+            if chunks.blocking_send(chunk).is_err() || failed {
+                return;
+            }
+        }
+    });
+    received
 }
 
 /// The registry host `host` names when `copy`, this machine's registry read

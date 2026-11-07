@@ -20,7 +20,7 @@ mod cargo;
 mod remove;
 mod validate;
 
-pub use attached::{run_attached, AttachedOutcome};
+pub use attached::{run_attached, AttachedOutcome, Ending};
 pub use cargo::gate::{run as gate, validate as validate_gate, HostGateReceipt};
 pub use cargo::{
     run as cargo, validate as validate_cargo, Artifact, CargoOperation, HostCargoReceipt,

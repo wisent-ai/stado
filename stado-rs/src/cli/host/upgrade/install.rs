@@ -3,6 +3,7 @@
 //! again, and put the kept program back when one stopped answering.
 
 use crate::cli::CmdError;
+use crate::deploy::host_run::Ending;
 use crate::deploy::Runner;
 use crate::targets::ComputeTarget;
 
@@ -104,26 +105,46 @@ async fn install_and_check(
     // the incoming Stado cannot run with refuses. A release older than the
     // flag refuses the flag itself, and is asked the `config validate` it
     // answered every install with before.
-    let mut validated =
-        apply::attach(target, delivered, &words(&["config", "validate", "--install"]), true).await?;
+    let mut validated = apply::attach(
+        target,
+        delivered,
+        &words(&["config", "validate", "--install"]),
+        true,
+    )
+    .await?;
     let unknown = [validated.stdout.as_deref(), validated.stderr.as_deref()]
         .into_iter()
         .flatten()
         .any(|said| said.contains("unexpected argument '--install'"));
-    if apply::ended(&validated).is_err() && unknown {
+    if validated.judged().is_err() && unknown {
         validated = apply::attach(target, delivered, &words(&["config", "validate"]), true).await?;
     }
-    if let Err(why) = apply::ended(&validated) {
-        report.say("validate", State::Failed, why.clone());
-        return Err(CmdError::refused(format!(
-            "the incoming Stado refuses {}'s configuration ({why}); nothing was installed",
-            target.name
-        )));
+    // Only the program's own refusal is the configuration's; a run the host
+    // or its channel ended before the program reported its exit says so, as
+    // a failure that running the upgrade again may clear.
+    if let Err(failure) = validated.judged() {
+        report.say("validate", State::Failed, failure.said.clone());
+        return Err(if failure.ending == Ending::Program {
+            CmdError::refused(format!(
+                "the incoming Stado refuses {}'s configuration ({}); nothing was installed",
+                target.name, failure.said
+            ))
+        } else {
+            CmdError::unreachable(format!(
+                "config validate on {} {}; nothing was installed; run `stado host upgrade {}` \
+                 again once the host answers",
+                target.name, failure.said, target.name
+            ))
+        });
     }
+    let accepted = "the incoming Stado accepts the host's configuration";
     report.say(
         "validate",
         State::Ok,
-        "the incoming Stado accepts the host's configuration",
+        match validated.channel_after() {
+            Some(after) => format!("{accepted}; {after}"),
+            None => accepted.to_string(),
+        },
     );
     let mut arguments = words(&["release", "local", "install", "--archive"]);
     arguments.extend([
@@ -135,13 +156,23 @@ async fn install_and_check(
         arguments.extend(["--announced-identity".to_string(), requirement]);
     }
     let outcome = apply::attach(target, delivered, &arguments, capture).await?;
-    if let Err(why) = apply::ended(&outcome) {
-        report.say("install", State::Failed, why.clone());
-        return Err(CmdError::unreachable(format!(
-            "release local install on {} {why}; an install that fails after placing the program \
-             puts its predecessor back itself",
-            target.name
-        )));
+    if let Err(failure) = outcome.judged() {
+        report.say("install", State::Failed, failure.said.clone());
+        return Err(CmdError::unreachable(
+            if failure.ending == Ending::Program {
+                format!(
+                    "release local install on {} {}; an install that fails after placing the \
+                 program puts its predecessor back itself",
+                    target.name, failure.said
+                )
+            } else {
+                format!(
+                    "release local install on {} {}; `stado host upgrade {} --plan` reads which \
+                 revision it runs before the upgrade is run again",
+                    target.name, failure.said, target.name
+                )
+            },
+        ));
     }
     report.say(
         "install",
@@ -210,7 +241,7 @@ async fn roll_back(
     let mut arguments = words(&["release", "local", "restore", "--kept-previous"]);
     arguments.push(installed.program.sha256.clone());
     let restored = match apply::attach(target, delivered, &arguments, install.request.json).await {
-        Ok(outcome) => apply::ended(&outcome),
+        Ok(outcome) => outcome.judged().map_err(|failure| failure.said),
         Err(error) => Err(error.to_string()),
     };
     let detail = match (restored, installed::read(target, runner).await) {
