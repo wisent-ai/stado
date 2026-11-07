@@ -24,7 +24,16 @@ pub fn home_rooted_script(argv: &[&str]) -> String {
 /// restrictive mode and refuses every existing symlink or foreign owner.
 pub fn probierz_run_root_script() -> String {
     let mut script = String::from("set -eu\numask 077\ncd \"$HOME\"\n");
-    for path in [".stado", ".stado/work", ".stado/work/runs"] {
+    // Every ancestor of the register's run area, then the area itself.
+    let mut ancestors: Vec<String> = Vec::new();
+    for part in crate::host_trees::RUN_AREA.split('/') {
+        let next = match ancestors.last() {
+            Some(parent) => format!("{parent}/{part}"),
+            None => part.to_string(),
+        };
+        ancestors.push(next);
+    }
+    for path in &ancestors {
         let quoted = shlex_quote(path);
         script.push_str(&format!(
             "[ ! -L {quoted} ] || {{ printf '%s\\n' {}; exit 1; }}\n",
@@ -42,6 +51,10 @@ pub fn probierz_run_root_script() -> String {
             )),
         ));
     }
-    script.push_str("/bin/chmod 700 .stado/work/runs\nprintf '%s\\n' \"$HOME/.stado/work/runs\"\n");
+    let area = crate::host_trees::RUN_AREA;
+    script.push_str(&format!(
+        "/bin/chmod 700 {}\nprintf '%s\\n' \"$HOME/{area}\"\n",
+        shlex_quote(area)
+    ));
     script
 }

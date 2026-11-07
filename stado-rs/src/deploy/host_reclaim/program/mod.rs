@@ -20,6 +20,7 @@ use super::{BUILD_WORK_ROOT, CONTAINER_PREFIX, LOCAL_EVIDENCE_ROOT};
 pub(crate) mod guards;
 mod product_stages;
 mod rebuildable_stages;
+mod run_stages;
 
 /// Substitution points in [`REMOTE_SCRIPT_TEMPLATE`]. Every value spliced in is
 /// a crate constant, except the host's work root and the paths its registry
@@ -42,6 +43,13 @@ const BUILD_CACHE_ROOTS_MARK: &str = "@BUILD_CACHE_ROOTS@";
 const UNIT_DIRECTORIES_MARK: &str = "@UNIT_DIRECTORIES@";
 const DECLARED_PATHS_MARK: &str = "@DECLARED_PATHS@";
 const BACKUP_SHAPES_MARK: &str = "@BACKUP_SHAPES@";
+/// The host tree register's runner roots and runner scratch, the run area
+/// and the stage that takes its trees ([`crate::host_trees`]).
+const RUNNER_ROOTS_MARK: &str = "@RUNNER_ROOTS@";
+const RUNNER_SCRATCH_MARK: &str = "@RUNNER_SCRATCH@";
+const RUN_AREA_MARK: &str = "@RUN_AREA@";
+const SIGNAL_AREA_MARK: &str = "@SIGNAL_AREA@";
+const MANAGED_RUNS_STAGE_MARK: &str = "@MANAGED_RUNS_STAGE@";
 
 /// The fixed remote program.
 ///
@@ -56,6 +64,7 @@ static REMOTE_SCRIPT_TEMPLATE: LazyLock<String> = LazyLock::new(|| {
         guards::LSOF_HOLDS,
         product_stages::PRODUCT_STAGES,
         rebuildable_stages::REBUILDABLE_STAGES,
+        run_stages::RUN_STAGES,
     ]
     .concat()
 });
@@ -185,6 +194,17 @@ pub(super) fn remote_script_with_stado(
         None => String::new(),
     };
     let superseded = superseded_words()?;
+    let words = |values: &[String]| {
+        values
+            .iter()
+            .map(|value| shlex_quote(value))
+            .collect::<Vec<String>>()
+            .join(" ")
+    };
+    let scratch: Vec<String> = crate::host_trees::RUNNER_SCRATCH
+        .iter()
+        .map(|area| area.to_string())
+        .collect();
     Ok(REMOTE_SCRIPT_TEMPLATE
         .replace(APPLY_MARK, if apply { "1" } else { "0" })
         .replace(STAGES_MARK, &stages.join(" "))
@@ -210,6 +230,11 @@ pub(super) fn remote_script_with_stado(
         .replace(SUPERSEDED_ROOTS_MARK, &superseded)
         .replace(UNIT_DIRECTORIES_MARK, &unit_directory_words())
         .replace(BACKUP_SHAPES_MARK, &bin_backups::backup_case_patterns())
+        .replace(RUNNER_ROOTS_MARK, &words(crate::host_trees::runner_roots().as_slice()))
+        .replace(RUNNER_SCRATCH_MARK, &words(scratch.as_slice()))
+        .replace(RUN_AREA_MARK, crate::host_trees::RUN_AREA)
+        .replace(SIGNAL_AREA_MARK, crate::host_trees::SIGNAL_AREA)
+        .replace(MANAGED_RUNS_STAGE_MARK, crate::host_trees::MANAGED_RUNS_STAGE)
         .replace(
             DECLARED_PATHS_MARK,
             &declared_paths

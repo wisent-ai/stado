@@ -125,12 +125,15 @@ fi
 
 if stage_enabled runner_work_trees; then
 before=$(free_kb)
-# The `_work` trees of the host's GitHub runners. A runner clears its own
-# after each job it FINISHES; a cancelled job, a killed listener and a runner
-# whose repository stopped using it all leave theirs behind, and they are the
-# largest thing on a CI host. Only `_work` is touched: it holds checkouts and
-# build output the next job recreates. `_`-prefixed children are the runner's
-# own bookkeeping (`_temp`, `_tool`, `_actions`) and stay.
+# The scratch of the host's GitHub runners, every runner root the runner
+# profiles declare: `_work`, `.tmp` and `_diag` (the host tree register's
+# runner scratch). A runner clears `_work` after each job it FINISHES; a
+# cancelled job, a killed listener and a runner whose repository stopped
+# using it all leave theirs behind, and they are the largest thing on a CI
+# host. `.tmp` holds what its jobs staged and `_diag` the listener's and
+# workers' logs; both only grow. In `_work`, `_`-prefixed children are the
+# runner's own bookkeeping (`_temp`, `_tool`, `_actions`) and stay; a log the
+# listener holds open is held and stays.
 #
 # A job in flight owns the tree it is building in, so a live `Runner.Worker`
 # anywhere on the host stops this stage rather than racing it. The listener
@@ -138,14 +141,17 @@ before=$(free_kb)
 if /bin/ps -Ao comm= 2>/dev/null | /usr/bin/grep -q -x 'Runner.Worker'; then
   printf 'STADO_RECLAIM_UNAVAILABLE\trunner_work_trees\t%s\n' 'a runner job is in flight on this host'
 else
-  for runner_root in /Users/Shared/*-runner /opt/wisent/*-runner; do
-    [ -d "$runner_root/_work" ] || continue
-    for entry in "$runner_root"/_work/*; do
-      [ -e "$entry" ] || continue
-      case "$(basename "$entry")" in
-        _*) continue ;;
-      esac
-      reclaim "$entry" runner_work_trees
+  for runner_root in @RUNNER_ROOTS@; do
+    [ -d "$runner_root" ] || continue
+    for area in @RUNNER_SCRATCH@; do
+      [ -d "$runner_root/$area" ] || continue
+      for entry in "$runner_root/$area"/* "$runner_root/$area"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        case "$area/$(basename "$entry")" in
+          _work/_*) continue ;;
+        esac
+        reclaim "$entry" runner_work_trees
+      done
     done
   done
 fi

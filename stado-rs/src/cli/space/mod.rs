@@ -12,18 +12,18 @@ mod volume;
 mod work_root;
 
 use ops::{reclaim, relocate, remove_file, retire_file};
-use report::{print_json, report};
+use report::print_json;
+pub use report::ReportArgs;
 pub use scratch::SpaceScratchCommands;
 pub use volume::SpaceVolumeCommands;
 
 #[derive(Subcommand)]
 pub enum SpaceCommands {
     /// Read disk, memory, inventory, build caches, and janitor state as one report.
-    Report {
-        target: String,
-        #[arg(long)]
-        json: bool,
-    },
+    ///
+    /// With `--unregistered --revision REV`, list instead every tree, on
+    /// TARGET or on every local host, that no host tree register entry holds.
+    Report(ReportArgs),
     /// Rank what holds this machine's disk as the next cleanup candidates, and list what the janitor removed.
     ///
     /// Reads only; nothing is deleted. Agent output comes first (tagged build
@@ -185,7 +185,7 @@ pub enum SpaceFileLocalCommands {
 
 pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
     match command {
-        SpaceCommands::Report { target, json } => report(&target, json).await,
+        SpaceCommands::Report(args) => report::dispatch(args).await,
         SpaceCommands::Candidates { min_bytes, json } => {
             candidates::candidates(min_bytes, json).await
         }

@@ -18,8 +18,8 @@ use crate::cli::CmdError;
 use crate::deploy::{host_channel, host_delivery, shlex_quote};
 use crate::primitives::failure::FailureCode;
 
-/// The managed run area deliveries are made into.
-const RUN_AREA: &str = ".stado/work/runs";
+/// The managed run area deliveries are made into (the host tree register's).
+const RUN_AREA: &str = crate::host_trees::RUN_AREA;
 
 /// The harness program on this machine's `PATH`, and what it says its
 /// version is.

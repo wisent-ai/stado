@@ -1,5 +1,7 @@
 //! `stado space report TARGET`: disk, memory, inventory, build caches, the
-//! disk-full rule's verdict and the janitor's last pass as one document.
+//! disk-full rule's verdict and the janitor's last pass as one document; with
+//! `--unregistered`, the trees no host tree register entry holds
+//! ([`crate::host_trees::inventory`]).
 
 mod accelerators;
 mod lines;
@@ -11,6 +13,43 @@ use super::*;
 pub(super) fn print_json(value: &Value) -> Result<(), CmdError> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+/// What `stado space report` is asked.
+#[derive(clap::Args)]
+pub struct ReportArgs {
+    /// The host to report; with --unregistered, omit it for every host.
+    target: Option<String>,
+    /// List the trees no host tree register entry holds, on TARGET or on
+    /// every local host the registry names.
+    #[arg(long, requires = "revision")]
+    unregistered: bool,
+    /// The commit the installed stado was built from; any other is refused.
+    #[arg(long, requires = "unregistered")]
+    revision: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+/// `space report` body: the inventory of unregistered trees, or one host's
+/// report.
+pub(super) async fn dispatch(args: ReportArgs) -> Result<(), CmdError> {
+    if args.unregistered {
+        let revision = args.revision.unwrap_or_default();
+        return crate::host_trees::inventory::unregistered(
+            args.target.as_deref(),
+            &revision,
+            args.json,
+        )
+        .await;
+    }
+    match args.target {
+        Some(target) => report(&target, args.json).await,
+        None => Err(CmdError::usage(
+            "space report requires TARGET, or --unregistered --revision REV for every host",
+        )
+        .machine_readable(args.json)),
+    }
 }
 
 pub(super) fn cache_json(

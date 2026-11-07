@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::deploy::DeployError;
 
-const MANAGED_RUNS_ROOT: &str = ".stado/work/runs";
+const MANAGED_RUNS_ROOT: &str = crate::host_trees::RUN_AREA;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SourceKind {

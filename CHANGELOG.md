@@ -47,6 +47,16 @@ The version-bump commit moves them with `stado product changelog --version V`;
   `gates: not-run`, the risk is classified again from the gates that ran, and the review is
   held for a recorded round whose wait names the gates that never ran. Journey
   `tests/change/left_out/`.
+- **`stado space report --unregistered [TARGET] --revision REV [--json]` lists every tree no
+  host tree register entry holds:** on every local host of the registry (or the one named) it
+  lists the top of the home of a host the fleet owns, `~/.stado`, `~/.stado/work`, the declared
+  work root and every runner root the runner profiles declare, and names each directory no entry
+  of the new register (`stado-rs/src/host_trees`: each tree a fleet writer makes, its writer and
+  reader verbs, and the cleaner or stage that takes it or why nothing does) holds. A binary not
+  built from REV is refused naming both revisions, and a host whose listing cannot be read is
+  named under `unread` with exit non-zero. The release gate `host-trees-register` runs the writer
+  verbs in an isolated home and work root and fails on any tree no entry holds. Journey
+  `tests/space_reclaim/host_trees.rs`.
 
 ### Fixed
 
@@ -102,3 +112,13 @@ The version-bump commit moves them with `stado product changelog --version V`;
   tree. A host that declares no work root is refused naming `stado space root <host> --path
   <directory>`. On a host with a work root every job's pip, uv and npm caches are
   `<work root>/package-caches/<manager>`, taken by the `package_caches` cleaner.
+- **The trees the fleet writes beside its runners and runs are reclaimed, not counted as the
+  user's:** the `runner_work_trees` stage takes each runner's `.tmp` and `_diag` beside `_work`,
+  for every runner root the runner profiles declare; the new `managed_runs` stage takes a run tree
+  under `~/.stado/work/runs` once no process holds it and an earlier apply found it so and
+  unchanged, and the signal marker of an attached program that is no longer alive. `stado space
+  report` covers both areas.
+- **`stado workload results` reads the job tree the worker made:** it named `<jobs>/<job>` where the
+  worker makes `<jobs>/wc-<job>`, read the absent tree as no results and answered `appended {}`
+  with exit 0; it now reads the job's tree through the register and refuses an absent results
+  directory naming the host, the path and `stado results JOB DIR` for an ended job's upload.

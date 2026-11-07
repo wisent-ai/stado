@@ -72,8 +72,17 @@
     },
     {
       "name": "runner_work_trees",
-      "description": "Inactive GitHub runner _work trees outside runner bookkeeping directories.",
-      "roots": ["/Users/Shared/*-runner/_work", "/opt/wisent/*-runner/_work"]
+      "description": "The scratch of every runner the runner profiles declare, as the host tree register lists it: inactive _work trees outside runner bookkeeping directories, what jobs staged in .tmp and the diagnostic logs in _diag, each while no runner job is in flight and no process holds it.",
+      "roots": [
+        "/Users/Shared/*-runner/_work", "/opt/wisent/*-runner/_work",
+        "/Users/Shared/*-runner/.tmp", "/opt/wisent/*-runner/.tmp",
+        "/Users/Shared/*-runner/_diag", "/opt/wisent/*-runner/_diag"
+      ]
+    },
+    {
+      "name": "managed_runs",
+      "description": "Run trees stado host run, deliveries, harness installs and host upgrades left below the managed run area: each whole once no process holds or names it and an earlier apply found it so and unchanged; a live run is kept and said. A signal marker whose attached program is no longer alive goes with its output relays.",
+      "roots": ["~/.stado/work/runs", "~/.stado/work/run-signals"]
     }
   ]
 }
