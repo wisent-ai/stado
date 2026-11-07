@@ -424,8 +424,9 @@ pub fn waits(candidate: &Candidate) -> Option<String> {
             Some(WaitsOn::Admission) => format!(
                 "waits on: Oko's admission of its gates; Oko gave no admission decision for \
                  the gates of {product}, so whether the operator's rulings allow them was \
-                 never read (the refusal names why); a gate the rulings rule out is left out \
-                 and never holds a candidate; unblock: make {} answer, then `{run}` from no \
+                 never read (the refusal names why); a gate the rulings rule out is left out, \
+                 never waited on here (such a candidate waits on a review round instead); \
+                 unblock: make {} answer, then `{run}` from no \
                  agent session",
                 super::run::gates::asks(product, &candidate.defects, candidate.session.as_deref())
             ),
