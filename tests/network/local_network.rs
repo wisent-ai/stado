@@ -1,6 +1,8 @@
 //! A Stado connection to a peer on this machine's local network reaches the
 //! peer or, refused, names what macOS decided for the binary, and is also
-//! asked of this host's own network node, which opens it for the process.
+//! asked of this host's own network node, which opens it for the process. A
+//! `service verify --local` of a `tcp` service declared at that peer observes
+//! it or names the same decision, never a bare missing route.
 //!
 //! The built stado runs `network connect` against an isolated local store
 //! whose registry declares this host, `example-host`, and one peer,
@@ -88,6 +90,17 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str, endpoint: &str) -> Self {
+        Self::declaring(
+            name,
+            endpoint,
+            "example-host.invalid",
+            serde_json::Value::Null,
+        )
+    }
+
+    /// The fixture with `alias` among this host's names and `directory` as
+    /// the registry's service directory.
+    fn declaring(name: &str, endpoint: &str, alias: &str, directory: serde_json::Value) -> Self {
         let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
             "network-local-network-{name}-{}",
             std::process::id()
@@ -115,7 +128,7 @@ impl Fixture {
                     "kind": "local",
                     "ssh": "operator@example-host.invalid",
                     "release_platform": "darwin-arm64",
-                    "hostnames": ["example-host.invalid"],
+                    "hostnames": [alias],
                     "network": {"public_key": public}
                 },
                 {
@@ -127,7 +140,8 @@ impl Fixture {
                     "network": {"public_key": engine.encode([9u8; 32]), "endpoints": [endpoint]}
                 }
             ],
-            "coordinators": []
+            "coordinators": [],
+            "service_directory": directory
         });
         std::fs::write(root.join("store/registry.json"), registry.to_string())
             .expect("seed the registry");
@@ -226,6 +240,59 @@ fn a_listening_lan_peer_is_reached_or_the_denial_is_named() {
                 && (stderr.contains(DENIAL) || stderr.contains("cannot be read"))
                 && !stderr.contains(PEER_SILENT),
             "the listener saw no connection, so the failure names macOS's decision for the binary: {stderr}"
+        ),
+    }
+}
+
+/// `stado service verify --local --json` probes a `tcp` service this host is
+/// declared to reach at the LAN listener: it is observed, or refused with
+/// macOS's decision for the binary named, never left as a bare "No route to
+/// host" that reads like a service that is down. The fixture names this
+/// machine's own hostname among example-host's, so the verify runs as it.
+#[test]
+fn a_service_verify_of_a_lan_endpoint_observes_it_or_names_the_denial() {
+    let (endpoint, seen) = peer_listener();
+    let hostname = nix::unistd::gethostname()
+        .expect("this machine's hostname")
+        .to_string_lossy()
+        .into_owned();
+    let directory = serde_json::json!({
+        "authority": {"target": "example-host", "command": env!("CARGO_BIN_EXE_stado")},
+        "generation": 1,
+        "services": {
+            "example-socket": {
+                "managed_service": "example-socket",
+                "active_host": "example-host",
+                "endpoints": {"example-host": {"url": format!("tcp://{endpoint}")}},
+                "verify": {"kind": "tcp"}
+            }
+        }
+    });
+    let fixture = Fixture::declaring("verify", &endpoint, &hostname, directory);
+    let output = fixture
+        .stado(&["service", "verify", "--local", "--json"])
+        .output()
+        .expect("the stado binary runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&stdout)
+        .unwrap_or_else(|error| panic!("verify printed no JSON rows ({error}): {stdout} {stderr}"));
+    let row = rows
+        .iter()
+        .find(|row| row["service"] == "example-socket")
+        .unwrap_or_else(|| panic!("no row for the declared service: {stdout} {stderr}"));
+    let detail = row["detail"].as_str().unwrap_or_default();
+    match seen.try_recv() {
+        Ok(_) => assert_eq!(
+            row["state"], "observed",
+            "the listener was reached, so the service is observed: {row}"
+        ),
+        Err(_) => assert!(
+            row["state"] == "unreachable"
+                && detail.contains(&format!("{endpoint} is on this machine's local network"))
+                && (detail.contains(DENIAL) || detail.contains("cannot be read"))
+                && !detail.contains(PEER_SILENT),
+            "the listener saw no connection, so the row names macOS's decision for the binary: {row}"
         ),
     }
 }
