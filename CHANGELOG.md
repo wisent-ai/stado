@@ -50,6 +50,12 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The release gates run the memory verdict's journey:** `stado host processes` naming the
+  process that runs a host out of memory before the next reading was proven only by a journey
+  compiled into the `scheduler` test binary, which no release gate ran, so no release recorded
+  it passing. The darwin-arm64 and linux-amd64 gate `host-processes-memory` runs
+  `tests/host_processes/memory.rs`.
+
 - **Stado compiles again, and the submit queue compiles the whole workspace for linux-amd64
   before a candidate lands:** the product CLI re-exported `route::run` twice (`E0252`), and the
   workspace origin scan applied `?` to the git runner's error inside a function that returns an

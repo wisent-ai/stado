@@ -78,6 +78,13 @@
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
             "--test", "host-silence-refused-dependency"
           ]
+        },
+        {
+          "name": "host-processes-memory",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "scheduler", "--", "host_processes_memory::"
+          ]
         }
       ],
       "stage": {
@@ -137,6 +144,13 @@
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
             "--test", "host-silence-silent-authority"
+          ]
+        },
+        {
+          "name": "host-processes-memory",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "scheduler", "--", "host_processes_memory::"
           ]
         }
       ],
