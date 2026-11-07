@@ -46,9 +46,9 @@ fn local_identity(consumer: &str) -> &str {
 /// Pin one job to a live host of `platform`.
 ///
 /// `scratch` is what the last build of the product being placed wrote to
-/// disk, when a measuring builder has recorded it: a host that publishes less
-/// free disk than that above its own low watermark is refused with
-/// [`crate::deploy::host_gates::RELEASE_SCRATCH_SHORT`]. Delivery jobs pass
+/// disk, when a measuring builder has recorded it: a host whose published
+/// free bytes are not above that plus the janitor's margin it publishes is
+/// refused with [`crate::deploy::host_gates::RELEASE_SCRATCH_SHORT`]. Delivery jobs pass
 /// `None`; they write an archive, not a build tree.
 ///
 /// Among the hosts that may take the job, the one publishing the most free

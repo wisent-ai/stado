@@ -250,10 +250,22 @@ fn standing(host: &str, publication: Option<&Publication>, work: &str) -> Standi
         (Some(false), Some(reason)) if BUSY.contains(&reason) => {
             Standing::Waiting(format!("{host} is busy ({reason})"))
         }
-        (Some(false), reason) => Standing::Refused(format!(
-            "{host} is not accepting placements ({})",
-            reason.unwrap_or("its agent published no reason")
-        )),
+        (Some(false), reason) => {
+            // The agent's own sentence beside its word: a room refusal names
+            // the free bytes and the room work there needs.
+            let detail = match payload
+                .get("diag")
+                .and_then(|diag| diag.get("admission_detail"))
+                .and_then(Value::as_str)
+            {
+                Some(detail) => format!(": {detail}"),
+                None => String::new(),
+            };
+            Standing::Refused(format!(
+                "{host} is not accepting placements ({}{detail})",
+                reason.unwrap_or("its agent published no reason")
+            ))
+        }
         (None, _) => Standing::Refused(format!(
             "{host}'s capacity publication names no accepting_jobs, so whether it accepts \
              placements is not known"

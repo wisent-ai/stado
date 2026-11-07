@@ -123,8 +123,9 @@ pub(crate) async fn start_candidate(
             Some(lock) => Some(lock),
             // A host that cannot get under its disk watermark runs janitor
             // passes back to back, each holding the lock for its whole length,
-            // and the one job admitted under pressure — the signed Stado
-            // release delivery — would wait for a gap it never finds. It starts
+            // and the one job admitted whatever room the volume has — the
+            // signed Stado release delivery — would wait for a gap it never
+            // finds. It starts
             // beside the pass. Nothing a cleaner takes is the delivery's: its
             // work tree belongs to a job the queue does not report terminal,
             // and `delivered_releases` keeps each product's newest version.

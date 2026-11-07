@@ -45,6 +45,13 @@
           ]
         },
         {
+          "name": "room-admission",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "space-reclaim", "room_admission::"
+          ]
+        },
+        {
           "name": "probierz-evidence-reclaim",
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",

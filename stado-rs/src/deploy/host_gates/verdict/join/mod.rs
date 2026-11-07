@@ -16,7 +16,7 @@ use crate::deploy::host_gates::words::{
     DISK_PRESSURE_UNRESOLVED, LOCAL_SNAPSHOTS_UNRECLAIMABLE, NO_CAPACITY_PUBLICATION, PINNED_ONLY,
     QUEUE_PAUSED, SPACE_RECLAIM_LOCK_HELD, SPACE_RECLAIM_STALLED,
 };
-use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
+use crate::deploy::host_gates::{DISK_PRESSURE_ACTIVE, DISK_ROOM_SHORT};
 use crate::providers::local::host_memory::constants::GIB;
 use crate::queue::capacity::Publication;
 use crate::targets::ComputeTarget;
@@ -45,6 +45,9 @@ pub fn assemble(
         publication_current,
         disk_pressure_unresolved,
         disk_full,
+        room_short,
+        pressure_refuses,
+        room,
         pressure_source,
         local_disk_unread,
         cleanup_success_age_seconds,
@@ -67,24 +70,33 @@ pub fn assemble(
     } else if stale {
         blockers.push(CAPACITY_PUBLICATION_STALE.to_string());
     }
-    if disk_full {
+    // Admission's measure: the free bytes against the room work there needs,
+    // in the agent's own word. An agent from before the room was judged
+    // refuses at the rule, and its word for that is `disk_pressure_active`.
+    // Otherwise the rule is a note below: it decides what the janitor
+    // deletes, not whether work fits.
+    if room_short {
+        blockers.push(DISK_ROOM_SHORT.to_string());
+    }
+    if pressure_refuses {
         blockers.push(DISK_PRESSURE_ACTIVE.to_string());
     }
+    let short = room_short || pressure_refuses;
     // Unresolved when the agent says so, and when neither its live
     // publication nor this command's own reading measured the disk: a disk
     // nobody measured is not a disk with room.
     if disk_pressure_unresolved || pressure_source.is_none() {
         blockers.push(DISK_PRESSURE_UNRESOLVED.to_string());
     }
-    // Explain cleanup immediately after disk pressure. A stalled or held
-    // janitor blocks admission only while the volume is full; withholding a
+    // Explain cleanup immediately after the room. A stalled or held janitor
+    // blocks admission only while the volume is short of room; withholding a
     // host with room would not reclaim anything. The janitor condition stays
     // visible in diagnostic fields regardless of whether it currently blocks
     // placement.
-    if janitor.stalled && disk_full {
+    if janitor.stalled && short {
         blockers.push(SPACE_RECLAIM_STALLED.to_string());
     }
-    if janitor.lock_held && disk_full {
+    if janitor.lock_held && short {
         blockers.push(SPACE_RECLAIM_LOCK_HELD.to_string());
     }
     if diag_flag(payload, QUEUE_PAUSED) == Some(true) {
@@ -103,20 +115,25 @@ pub fn assemble(
     if diag_flag(payload, PINNED_ONLY) == Some(true) || target.pinned_only {
         notes.push(PINNED_ONLY.to_string());
     }
-    if disk_full && reading.snapshots.supported && !reading.snapshots.names.is_empty() {
+    // The janitor's rule holds: it deletes everything the fleet put on the
+    // host, and the host still takes the work that fits the room it has.
+    if disk_full && !pressure_refuses {
+        notes.push(DISK_PRESSURE_ACTIVE.to_string());
+    }
+    if short && reading.snapshots.supported && !reading.snapshots.names.is_empty() {
         notes.push(LOCAL_SNAPSHOTS_UNRECLAIMABLE.to_string());
     }
-    // A janitor that is late on a host that still has its headroom. Not a
-    // blocker (see the pressure gate above) and not silence either: an
-    // operator has to be told that the mechanism which maintains this host's
-    // free space is not running, before the day it matters.
-    if janitor.stalled && !disk_full {
+    // A janitor that is late on a host that still has its room. Not a
+    // blocker (see the room gate above) and not silence either: an operator
+    // has to be told that the mechanism which maintains this host's free
+    // space is not running, before the day it matters.
+    if janitor.stalled && !short {
         notes.push(SPACE_RECLAIM_STALLED.to_string());
     }
     // The same finding for a lock that is held rather than a janitor that is
-    // silent, and a note for the same reason: a host with headroom that cannot
+    // silent, and a note for the same reason: a host with room that cannot
     // clean is a host to go fix, not a host to close.
-    if janitor.lock_held && !disk_full {
+    if janitor.lock_held && !short {
         notes.push(SPACE_RECLAIM_LOCK_HELD.to_string());
     }
     if agent_store.is_none() {
@@ -161,6 +178,7 @@ pub fn assemble(
         used_percent: volume.map(|volume| volume.used_percent()),
         // The headroom as measured; the report rounds it where it prints it.
         headroom_gb: volume.map(|volume| volume.headroom_bytes() as f64 / GIB as f64),
+        room,
         published_at,
         age_seconds,
         accepting_jobs: payload

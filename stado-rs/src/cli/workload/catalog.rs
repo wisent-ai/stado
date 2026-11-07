@@ -49,8 +49,8 @@ pub struct WorkloadKind {
     /// True when the kind repairs the host rather than consuming it.
     ///
     /// A capacity hold is right for work that competes for a machine and
-    /// wrong for work that puts one back: a host below its disk watermark
-    /// refuses every placement with `disk_pressure_active`, and if that
+    /// wrong for work that puts one back: a host short of the room work needs
+    /// refuses every placement with `disk_room_short`, and if that
     /// refusal covers the deployment that would repair it, the host cannot
     /// be repaired because it needs repairing. A maintenance kind runs on the
     /// host it names and

@@ -154,13 +154,41 @@ pub(super) fn measure_scratch(
     })
 }
 
+/// Write the scratch receipt beside the build's receipt, and keep it on this
+/// host too ([`keep_on_host`]).
 pub(super) fn write_scratch(scratch: &ScratchReceipt) -> Result<(), CmdError> {
     std::fs::create_dir_all("output")?;
     std::fs::write(
         Path::new("output").join(SCRATCH_LEAF),
         serde_json::to_vec(scratch)?,
     )?;
+    keep_on_host(scratch);
     Ok(())
+}
+
+/// Keep `scratch` as this host's newest of its product and platform, where
+/// the agent here reads the largest recent one as part of the room work needs
+/// before it claims ([`crate::providers::local::space_reclaim::margin::Room`]).
+/// A record that cannot be kept is said in the build's log and the build goes
+/// on: the receipt beside its output still carries the measurement.
+fn keep_on_host(scratch: &ScratchReceipt) {
+    use crate::providers::local::space_reclaim::{ensure_state_dir, margin::RECENT_DAYS};
+    let kept = crate::config_file::home().and_then(|home| {
+        let state_dir = ensure_state_dir(&home).map_err(|error| {
+            format!(
+                "the janitor's state directory under {} cannot be made: {error}",
+                home.display()
+            )
+        })?;
+        let since = chrono::Utc::now() - chrono::Duration::days(RECENT_DAYS);
+        crate::release_pipeline::record_on_host(&state_dir, scratch, since)
+    });
+    if let Err(cause) = kept {
+        println!(
+            "[release-worker] this host's release scratch record was not updated: {cause}; its \
+             agent judges the room work needs from the receipts it already keeps"
+        );
+    }
 }
 
 /// The sentence a failed build's receipt and exit carry about the disk it

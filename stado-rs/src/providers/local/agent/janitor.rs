@@ -83,6 +83,27 @@ impl JanitorReports {
         }
     }
 
+    /// The latest completed report's `margin` and `outcome` alone, in the
+    /// shapes [`latest`](Self::latest) gives them: what admission's room reads
+    /// every tick ([`crate::providers::local::space_reclaim::margin::Room`]),
+    /// without copying the rest of a report that can run to every error a
+    /// pass met. Never awaits, as `latest`.
+    pub fn margin(&self) -> Value {
+        match self.latest.lock() {
+            Ok(latest) => match latest.as_ref() {
+                Some(report) => serde_json::json!({
+                    "margin": report["margin"].clone(),
+                    "outcome": report["outcome"].clone(),
+                }),
+                None => serde_json::json!({"outcome": "no_pass_completed_yet"}),
+            },
+            Err(poisoned) => serde_json::json!({
+                "outcome": "unreadable",
+                "error": format!("a janitor pass panicked while recording its report: {poisoned}"),
+            }),
+        }
+    }
+
     /// Tell the janitor how many jobs are active for the next pass it starts.
     pub fn set_active_jobs(&self, count: i64) {
         self.active_jobs.store(count, Ordering::Relaxed);

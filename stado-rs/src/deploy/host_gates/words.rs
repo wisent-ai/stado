@@ -12,12 +12,25 @@ pub const DISK_PRESSURE_UNRESOLVED: &str = "disk_pressure_unresolved";
 
 /// The agent's exact word for "the volume is at the disk-full threshold".
 ///
-/// Unlike [`DISK_PRESSURE_UNRESOLVED`], this is a measured condition rather
-/// than a missing reading. The janitor deletes everything the fleet put on
-/// the host while it holds; the agent remains alive and accepts signed Stado
-/// release deliveries so a newer binary can recover the host, but it refuses
-/// release builds and ordinary queue work because those consume more disk.
+/// The janitor's rule, in the operator's words: while it holds, a pass
+/// deletes everything the fleet put on the host. It decides deletion, never
+/// admission, so it is a NOTE here: a host at 80% of a large disk with
+/// hundreds of GiB free still takes the work that fits them. Whether work
+/// fits is [`DISK_ROOM_SHORT`].
 pub const DISK_PRESSURE_ACTIVE: &str = "disk_pressure_active";
+
+/// The agent's exact word for "the free bytes of the volume the fleet writes
+/// to do not cover the room work here needs": the largest scratch a release
+/// build on this host recorded in the last week plus the janitor's margin
+/// ([`crate::providers::local::space_reclaim::margin::Room`]). Published as a
+/// `diag` flag and as `admission_reason`, with `admission_detail` naming
+/// both figures and `diag.disk_room` carrying them. While it holds the agent
+/// claims only a signed Stado release delivery and pinned jobs that stage
+/// nothing on its disk. Where the room cannot be judged (no completed janitor
+/// pass has reported its margin, the scratch record is unreadable) the
+/// janitor's rule decides as it did before the room was measured, and the
+/// detail says why.
+pub const DISK_ROOM_SHORT: &str = "disk_room_short";
 
 /// The agent's exact word for "this host's swap is above the ceiling it
 /// declares (`host.swap_ceiling_pct`)": it claims no new work, because work
@@ -115,19 +128,19 @@ pub const DISK_ATTACHED_UNMOUNTED: &str = "disk_attached_unmounted";
 /// `stado space report`) has passed or was never stated, no pass has ever
 /// succeeded, or the last pass ran and did not succeed.
 ///
-/// A BLOCKER while the volume is also full, and a note otherwise, and its own
-/// condition rather than a shade of [`DISK_PRESSURE_ACTIVE`]: those two are
-/// the disk being full and the mechanism that empties it being dead, they
-/// fail at different times, and the second one is the one nothing else in
-/// this product sees.
+/// A BLOCKER while the volume is also short of the room work needs
+/// ([`DISK_ROOM_SHORT`]), and a note otherwise, and its own condition rather
+/// than a shade of it: those two are the disk lacking room and the mechanism
+/// that empties it being dead, they fail at different times, and the second
+/// one is the one nothing else in this product sees.
 ///
 /// Two things this deliberately is not. It is not a pass that was PREVENTED:
 /// a workload holds the run lock in shared mode for its whole duration and
 /// every pass meanwhile answers `lock_busy`, which is the modelled answer and
 /// not a fault, and a janitor that keeps promising passes while being turned
 /// away is [`SPACE_RECLAIM_LOCK_HELD`]. And it does not refuse work on a host
-/// that still has room: on a full volume a stalled janitor must block,
-/// because nothing is bringing the space back; under the threshold, refusing
+/// that still has room: on a volume short of room a stalled janitor must
+/// block, because nothing is bringing the space back; with room, refusing
 /// work creates no space and only removes capacity.
 ///
 /// It has no exemption: every host runs the rule.
@@ -151,8 +164,8 @@ pub const SPACE_RECLAIM_STALLED: &str = "space_reclaim_stalled";
 /// read as a lock and not as a full disk.
 ///
 /// Blocks on the same rule as [`SPACE_RECLAIM_STALLED`] and for the same
-/// reason: under pressure a janitor that cannot run must refuse work, and
-/// under the threshold refusing work creates no space. It is a note there.
+/// reason: short of room a janitor that cannot run must refuse work, and with
+/// room refusing work creates no space. It is a note there.
 pub const SPACE_RECLAIM_LOCK_HELD: &str = "space_reclaim_lock_held";
 
 /// This host's agent cannot take the shared workload hold on the cleanup
@@ -184,14 +197,14 @@ pub const CLEANUP_IN_PROGRESS: &str = crate::providers::local::space_reclaim::CL
 /// unit no launchd or systemd on that host is running.
 pub const AGENT_DECLARED_NOT_LOADED: &str = "agent_declared_not_loaded";
 
-/// This host publishes less headroom than the last build of the product and
-/// platform being placed wrote as scratch: the build would take the volume to
-/// the disk-full threshold, where the janitor deletes everything the fleet
-/// put there — the build's own cache with it.
+/// This host publishes fewer free bytes than the last build of the product
+/// and platform being placed wrote as scratch plus the janitor's margin the
+/// host published: the build would run out of disk, or take the volume to
+/// where the janitor deletes the build's own cache under it.
 ///
-/// Not the agent's word: a host does not know what a build it has not run
-/// will write. The coordinator reads the previous build's measured scratch
-/// from the run store and judges the publication against it, because a build
-/// pinned to a host with too little room dies of a full disk after half an
-/// hour of compiling.
+/// Not the agent's word: a host does not know what a build of a product it
+/// has not built will write. The coordinator reads the previous build's
+/// measured scratch from the run store and judges the publication against
+/// it, because a build pinned to a host with too little room dies of a full
+/// disk after half an hour of compiling.
 pub const RELEASE_SCRATCH_SHORT: &str = "release_scratch_short";

@@ -29,7 +29,9 @@ pub use records::run::{
     BuildRun, BuildRunState, DeliveryRun, DeliveryRunState, PlatformRun, PlatformRunState,
     ReleaseRun, ReleaseRunState,
 };
-pub use records::scratch::{tree_bytes, ScratchReceipt, SCRATCH_LEAF};
+pub use records::scratch::{
+    largest_on_host, record_on_host, tree_bytes, ScratchReceipt, HOST_RECORD_DIR, SCRATCH_LEAF,
+};
 pub use records::worker::{WorkerInput, WorkerRequest};
 pub use validate::manifest::{
     parse_product_manifest, parse_worker_manifest, validate_product_manifest,

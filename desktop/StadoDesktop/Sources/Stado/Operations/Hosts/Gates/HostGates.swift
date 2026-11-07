@@ -135,9 +135,10 @@ struct HostGatesWaitingJob: Decodable, Sendable, Identifiable {
     }
 }
 
-/// The disk half of `stado host gates <host> --json`, measured against the
-/// one disk-full rule: how full the volume holding the agent's home is, how
-/// far that is from the threshold, and whether the threshold has been reached.
+/// The disk half of `stado host gates <host> --json`: the volume against the
+/// janitor's disk-full rule (how full it is, how far from the threshold, and
+/// whether the threshold has been reached), and the room the agent admits
+/// work by.
 struct HostGatesDisk: Decodable, Sendable {
     let freeGB: Double?
     let usedPercent: Double?
@@ -149,15 +150,25 @@ struct HostGatesDisk: Decodable, Sendable {
     let readState: String?
     let pressureSource: String?
     let pressureUnresolved: Bool?
+    let room: HostGatesRoom?
 
     enum CodingKeys: String, CodingKey {
         case freeGB = "free_gb"
         case usedPercent = "used_percent"
         case headroomGB = "headroom_gb"
         case fullPercent = "full_percent"
-        case full
+        case full, room
         case freeBytes = "free_bytes", observedAt = "observed_at", readState = "read_state"
         case pressureSource = "pressure_source", pressureUnresolved = "pressure_unresolved"
+    }
+
+    /// Whether the agent refuses work because the free bytes do not cover
+    /// the room work there needs.
+    var roomShort: Bool { room?.fits == false }
+
+    /// The room line, in the shape the CLI prints.
+    var roomSummary: String {
+        room?.summary ?? "Not published: no live capacity publication carries the agent's room"
     }
 
     /// The operator's sentence, in the shape the CLI prints.
@@ -171,6 +182,44 @@ struct HostGatesDisk: Decodable, Sendable {
                 : " · past the threshold by \(StadoFormat.decimal(-headroomGB)) GB"
         }
         return text
+    }
+}
+
+/// Admission's measure as the agent judged it (`disk.room`): the free bytes
+/// against the room work on the host needs — the largest release scratch
+/// recorded there plus the janitor's margin — or why it could not be judged.
+/// The disk-full rule decides only what the janitor deletes.
+struct HostGatesRoom: Decodable, Sendable {
+    let fits: Bool?
+    let freeBytes: Int64?
+    let needBytes: Int64?
+    let releaseScratchBytes: Int64?
+    let releaseScratchSource: String?
+    let marginBytes: Int64?
+    let marginSource: String?
+    let unread: String?
+
+    enum CodingKeys: String, CodingKey {
+        case fits, unread
+        case freeBytes = "free_bytes", needBytes = "need_bytes"
+        case releaseScratchBytes = "release_scratch_bytes"
+        case releaseScratchSource = "release_scratch_source"
+        case marginBytes = "margin_bytes", marginSource = "margin_source"
+    }
+
+    private static func size(_ bytes: Int64?) -> String {
+        guard let bytes else { return "not reported" }
+        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .binary)
+    }
+
+    /// Both figures and where each part of the need was measured.
+    var summary: String {
+        if let unread { return "Not judged by the agent: \(unread)" }
+        let verdict = fits == true ? "Work fits" : "disk_room_short"
+        return "\(verdict): \(Self.size(freeBytes)) free against \(Self.size(needBytes)) needed — "
+            + "\(Self.size(releaseScratchBytes)) the largest release scratch recorded here "
+            + "(\(releaseScratchSource ?? "source not reported")) and \(Self.size(marginBytes)) "
+            + "the janitor's margin (\(marginSource ?? "source not reported"))"
     }
 }
 

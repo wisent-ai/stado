@@ -73,6 +73,23 @@ The version-bump commit moves them with `stado product changelog --version V`;
   stages take on the apply it confirms and which only on a later look. Journey
   `tests/space_reclaim/scratch.rs`.
 
+- **A host past the janitor's 80% rule takes the work that fits the room it has:** the agent
+  reused the rule (at 80% used the janitor deletes everything the fleet put there) as its claim
+  refusal, so a host just past 80% of a large disk, with hundreds of GiB free, refused every
+  job and every gate placed on it. The rule still decides what the janitor deletes and is
+  published as the note `disk_pressure_active`; admission now compares the volume's free bytes
+  with the room work there needs, `diag.disk_room`: the largest scratch a release build on that
+  host recorded in the last 7 days (each release worker keeps its newest per product and platform in
+  `~/.cache/wisent-compute/release-scratch/`) plus the margin the janitor's latest pass
+  reported. A host above it claims at any percentage used; one at or below it refuses with
+  `disk_room_short`, its `admission_detail` naming the free bytes and the need with where each
+  part was measured. Where the room cannot be judged, the rule decides as before and the
+  detail says why. `stado host gates` (blocker, `disk.room`, a `room:` line), Stado Desktop's
+  host panel (Room for work), the change queue's host verdict, workload holds, release
+  placement (`release_scratch_short` is now scratch plus the published margin against free
+  bytes) and `stado host cargo` read the same room. Journey
+  `tests/agent_capacity/room_admission.rs`, release gate `room-admission`.
+
 - **`stado space reclaim TARGET --apply` reaches the second look on Linux, and says why and how
   to repair it when a look cannot be recorded:** the reclaim program asked for a modification
   time with `stat -f %m PATH || stat -c %Y PATH`; GNU stat reads `-f` as "the file system", so on
