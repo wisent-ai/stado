@@ -14,3 +14,6 @@ mod unmet;
 pub use catalog::workload as declared;
 pub use catalog::{WorkloadKind, WorkloadReservation, DECLARATION_PATH};
 pub use commands::{dispatch, WorkloadCommands};
+/// The batch every queued `omp-session` carries: the janitor reads a host's
+/// sessions by it to prove which checkouts they cloned.
+pub(crate) use runners::omp_session_batch;

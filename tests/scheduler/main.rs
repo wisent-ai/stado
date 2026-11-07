@@ -30,3 +30,5 @@ mod schedule_overdue;
 mod sizing;
 #[path = "../space_reclaim/workdirs/second_look.rs"]
 mod space_reclaim_second_look;
+#[path = "../workload/omp_session_run.rs"]
+mod workload_omp_session;

@@ -45,6 +45,20 @@
           ]
         },
         {
+          "name": "session-checkouts-reclaim",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "space-reclaim", "session_checkouts::"
+          ]
+        },
+        {
+          "name": "omp-session-run",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "scheduler", "workload_omp_session::"
+          ]
+        },
+        {
           "name": "probierz-evidence-reclaim",
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
@@ -144,6 +158,13 @@
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
             "--test", "scheduler", "--", "space_reclaim_second_look::"
+          ]
+        },
+        {
+          "name": "omp-session-run",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "scheduler", "workload_omp_session::"
           ]
         },
         {

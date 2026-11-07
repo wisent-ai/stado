@@ -11,6 +11,7 @@ use crate::providers::local::space_reclaim::janitor::state::report::{
     CleanerReport, CleanupReport,
 };
 use crate::providers::local::space_reclaim::janitor::STATE_VERSION;
+use crate::providers::local::space_reclaim::queue_workdirs::session_checkouts;
 use crate::providers::local::space_reclaim::rule::{self, VolumeReading};
 use crate::providers::local::space_reclaim::{
     agent_logs, backup_twins, bin_backups, build_caches, chromium_clones, compiler_cache,
@@ -58,6 +59,7 @@ impl CleanupReport {
             compiler_cache: CleanerReport::default(),
             registered_scratch: CleanerReport::default(),
             xcode_derived_data: CleanerReport::default(),
+            session_checkouts: CleanerReport::default(),
             package_caches: CleanerReport::default(),
             docker: CleanerReport::default(),
             source_snapshots: CleanerReport::default(),
@@ -219,6 +221,7 @@ impl CleanupReport {
                 compiler_cache::CLEANER: cleaner(&self.compiler_cache),
                 registered_scratch::CLEANER: cleaner(&self.registered_scratch),
                 xcode_derived_data::CLEANER: cleaner(&self.xcode_derived_data),
+                session_checkouts::CLEANER: cleaner(&self.session_checkouts),
                 package_caches::CLEANER: cleaner(&self.package_caches),
                 docker::CLEANER: cleaner(&self.docker),
                 source_snapshots::CLEANER: cleaner(&self.source_snapshots),

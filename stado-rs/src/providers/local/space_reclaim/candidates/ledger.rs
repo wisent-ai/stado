@@ -72,7 +72,11 @@ fn append(state_dir: &Path, row: &Value) -> Result<(), JanitorError> {
 }
 
 /// One tree an enforcing pass removed whole: a tagged build tree
-/// (`build_caches`) or a Cargo build directory (`cargo_build_dirs`).
+/// (`build_caches`), a Cargo build directory (`cargo_build_dirs`), a package
+/// cache (`package_caches`), one project's Xcode build directory
+/// (`xcode_derived_data`) or a git checkout a fleet session cloned
+/// (`session_checkouts`). Each is filed as `agent_output`: what a fleet
+/// writer made, never the user's; the `cleaner` field says which it was.
 pub(in crate::providers::local::space_reclaim) fn record_tree(
     state_dir: &Path,
     cleaner: &str,

@@ -97,3 +97,27 @@ pub(in crate::providers::local::space_reclaim) fn remove_tree(path: &Path) -> io
     }
     std::fs::remove_dir(path)
 }
+
+/// The ending of the name a tree is moved aside to before it is removed.
+const ASIDE_SUFFIX: &str = ".stado-removing";
+
+/// Where a tree is moved in one rename before [`remove_tree`] takes it:
+/// beside it, so on the same volume, under a name no tool reads
+/// (`.<name>.stado-removing`). A removal that fails half way leaves that one
+/// name, which the next pass removes, instead of a half-removed tree under
+/// the name a tool or a cleaner reads.
+pub(in crate::providers::local::space_reclaim) fn aside_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    path.with_file_name(format!(".{name}{ASIDE_SUFFIX}"))
+}
+
+/// The tree `aside` was moved aside from, or `None` when its name is no
+/// [`aside_path`] name.
+pub(in crate::providers::local::space_reclaim) fn aside_origin(aside: &Path) -> Option<PathBuf> {
+    let name = aside.file_name()?.to_str()?;
+    let original = name.strip_prefix('.')?.strip_suffix(ASIDE_SUFFIX)?;
+    (!original.is_empty()).then(|| aside.with_file_name(original))
+}

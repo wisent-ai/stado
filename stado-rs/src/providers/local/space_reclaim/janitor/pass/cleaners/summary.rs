@@ -23,6 +23,7 @@ fn deleted_items(report: &CleanupReport) -> i64 {
         &report.compiler_cache,
         &report.registered_scratch,
         &report.xcode_derived_data,
+        &report.session_checkouts,
         &report.package_caches,
         &report.docker,
         &report.source_snapshots,

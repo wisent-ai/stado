@@ -147,9 +147,16 @@ pub(in crate::providers::local::space_reclaim) fn scan_xcode_derived_data(
         }
         // Read under the lock, for this directory alone: a build that
         // started after the pass began is seen before anything is removed.
-        let Some(holders) = Holders::read(CLEANER) else {
-            met.kept("process_table_unread", size);
-            continue;
+        let holders = match Holders::read() {
+            Ok(holders) => holders,
+            Err(cause) => {
+                met.kept("process_table_unread", size);
+                report.add_error(
+                    CLEANER,
+                    &JanitorError::os(&format!("{} is kept: {cause}", path.display())),
+                );
+                continue;
+            }
         };
         if holders.hold(&path) {
             met.kept("held_by_process", size);

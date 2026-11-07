@@ -1,5 +1,6 @@
 //! What a pass may delete on this host, from the ownership its registry
-//! entry declares.
+//! entry declares, and which consent-gated folders it may open, from the
+//! grants that entry declares for this program.
 //!
 //! On a dedicated host every candidate is the fleet's to reclaim. On a
 //! shared host (a person's own computer that also runs fleet work) the
@@ -10,6 +11,7 @@
 //! cannot be read, or declares an ownership no word names, is treated as
 //! shared: whose files they are is then not known.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
@@ -56,4 +58,23 @@ pub(crate) fn deletable_root(
 /// Whether a candidate at `path` may be deleted under `root`.
 pub(crate) fn may_delete(root: Option<&Path>, path: &Path) -> bool {
     root.is_none_or(|root| path.starts_with(root))
+}
+
+/// The consent-gated folders a pass may open: only those this host's entry
+/// declares for this program. A host whose entry cannot be read declares
+/// none, and its walk opens none; grants the entry spells wrongly open none
+/// either, the reason recorded on `report`.
+pub(crate) fn walked_folders(
+    target: Option<&ComputeTarget>,
+    home: &Path,
+    report: &mut CleanupReport,
+) -> BTreeSet<String> {
+    match target.map(ComputeTarget::privacy_grants) {
+        Some(Ok(grants)) => crate::targets::folders_for_this_program(&grants, home),
+        Some(Err(error)) => {
+            report.add_error("build_caches", &JanitorError::value(&error.to_string()));
+            BTreeSet::new()
+        }
+        None => BTreeSet::new(),
+    }
 }

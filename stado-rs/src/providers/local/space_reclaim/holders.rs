@@ -17,26 +17,27 @@ pub(in crate::providers::local::space_reclaim) struct Holders {
 }
 
 impl Holders {
-    /// Read both tables. `None` when either cannot be read, said on stderr
-    /// under `cleaner` with the cause, so the caller removes nothing.
-    pub(in crate::providers::local::space_reclaim) fn read(cleaner: &str) -> Option<Self> {
+    /// Read both tables, or the sentence saying which could not be read and
+    /// why; the caller then removes nothing and adds that sentence to its
+    /// pass's errors, where `stado space reclaim` shows it.
+    pub(in crate::providers::local::space_reclaim) fn read() -> Result<Self, String> {
         let lsof = LSOF
             .iter()
             .find(|program| Path::new(program).is_file())
-            .or_else(|| {
-                eprintln!(
-                    "{cleaner}: no lsof at {}; nothing is removed this pass",
+            .ok_or_else(|| {
+                format!(
+                    "no lsof at {}, so what live processes hold is not known; install lsof \
+                     there and the next pass reads it",
                     LSOF.join(" or ")
-                );
-                None
+                )
             })?;
-        let open = output(cleaner, lsof, &["-n", "-P", "-w", "-F", "n"])?
+        let open = output(lsof, &["-n", "-P", "-w", "-F", "n"])?
             .lines()
             .filter_map(|line| line.strip_prefix('n'))
             .map(str::to_string)
             .collect();
-        let argv = output(cleaner, "/bin/ps", &["-Ao", "args="])?;
-        Some(Self { open, argv })
+        let argv = output("/bin/ps", &["-Ao", "args="])?;
+        Ok(Self { open, argv })
     }
 
     /// Whether a live process has a file under `tree` open, works in it, or
@@ -66,29 +67,25 @@ impl Holders {
     }
 }
 
-/// One command's standard output, or why it could not be read, on stderr.
-fn output(cleaner: &str, program: &str, args: &[&str]) -> Option<String> {
+/// One command's standard output, or why it could not be read.
+fn output(program: &str, args: &[&str]) -> Result<String, String> {
     match crate::wait::output(Command::new(program).args(args)) {
         // `lsof` exits 1 when one of the processes it lists vanished while
         // it read, and when it may not read another account's processes;
         // what it printed is still every file this account's processes have
         // open, and the trees it guards are this account's.
         Ok(output) if output.status.success() || !output.stdout.is_empty() => {
-            Some(String::from_utf8_lossy(&output.stdout).into_owned())
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
-        Ok(output) => {
-            eprintln!(
-                "{cleaner}: {program} answered {} ({}); nothing is removed this pass",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-            None
-        }
-        Err(error) => {
-            eprintln!(
-                "{cleaner}: {program} could not be run ({error}); nothing is removed this pass"
-            );
-            None
-        }
+        Ok(output) => Err(format!(
+            "{program} answered {} ({}), so what live processes hold is not known; once it \
+             answers, the next pass reads it",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(error) => Err(format!(
+            "{program} could not be run ({error}), so what live processes hold is not known; \
+             once it runs, the next pass reads it"
+        )),
     }
 }

@@ -16,4 +16,4 @@ mod tree_ops;
 
 pub use scan::{scan_weles, CLEANER};
 
-pub(super) use tree_ops::{dir_size, remove_tree};
+pub(super) use tree_ops::{aside_origin, aside_path, dir_size, remove_tree};

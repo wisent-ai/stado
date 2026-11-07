@@ -141,6 +141,11 @@ pub const CLEANERS: &[Cleaner] = &[
         sweeps: "published release versions no host declares and this host has not installed",
     },
     Cleaner {
+        name: super::queue_workdirs::session_checkouts::CLEANER,
+        root: "",
+        sweeps: "git checkouts a fleet session is proven to have cloned (its clone marker, or this host's queue record of the session that cloned it), under <work root>/session-checkouts and, on a dedicated host, under ~/Documents/CodingProjects; each whole once no process works in it and git reports nothing in it that no remote has; every other checkout there stays",
+    },
+    Cleaner {
         name: super::xcode_derived_data::CLEANER,
         root: super::xcode_derived_data::ROOT,
         sweeps: "Xcode's per-project build directories (DerivedData/<project>-<hash>), each whole unless a running process has a file in it open or names it; archives and device support are never touched",

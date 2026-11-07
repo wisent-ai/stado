@@ -24,7 +24,9 @@ use crate::providers::local::space_reclaim::janitor::pass::once::finish::{
     finish, preserve_previous_report,
 };
 use crate::providers::local::space_reclaim::janitor::pass::run_with_lock;
-use crate::providers::local::space_reclaim::janitor::policy::ownership::deletable_root;
+use crate::providers::local::space_reclaim::janitor::policy::ownership::{
+    deletable_root, walked_folders,
+};
 use crate::providers::local::space_reclaim::janitor::policy::{
     fetch_canonical_registry, resolve_target,
 };
@@ -32,6 +34,7 @@ use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 use crate::providers::local::space_reclaim::janitor::state::report::build::epoch_now;
 use crate::providers::local::space_reclaim::janitor::state::report::CleanupReport;
 use crate::providers::local::space_reclaim::margin::Margin;
+use crate::providers::local::space_reclaim::queue_workdirs::session_checkouts;
 use crate::providers::local::space_reclaim::rule::read_fleet_volume;
 
 /// The shared body of [`run_cleanup_once`] and [`preview_cleanup_once`].
@@ -133,20 +136,7 @@ pub(crate) async fn cleanup_once(
         }
     };
     let deletable = deletable_root(target.as_ref(), &home, &mut report);
-    // The consent-gated folders the walk may open: only those this host's
-    // entry declares for this program. A host whose entry cannot be read
-    // declares none, and its walk opens none.
-    let walked_folders = match target
-        .as_ref()
-        .map(crate::targets::ComputeTarget::privacy_grants)
-    {
-        Some(Ok(grants)) => crate::targets::folders_for_this_program(&grants, &home),
-        Some(Err(error)) => {
-            report.add_error("build_caches", &JanitorError::value(&error.to_string()));
-            std::collections::BTreeSet::new()
-        }
-        None => std::collections::BTreeSet::new(),
-    };
+    let walked_folders = walked_folders(target.as_ref(), &home, &mut report);
     // The build-cache walk reads the whole home, for minutes on a full
     // developer host. Run under the exclusive lock it refused every running
     // workload's hold for as long as it read, so a host whose pressure the
@@ -184,8 +174,10 @@ pub(crate) async fn cleanup_once(
         &mut report,
     );
     if tier_one {
-        // Xcode's per-project build directories, each taken whole unless a
-        // running process holds it.
+        // Xcode's per-project build directories, then the checkouts fleet
+        // sessions are proven to have cloned, each taken whole unless a
+        // running process holds it. The session cleaner asks this host's
+        // queue, when it must, before it takes any lock.
         crate::providers::local::space_reclaim::xcode_derived_data::scan_xcode_derived_data(
             &home,
             !preview,
@@ -194,6 +186,19 @@ pub(crate) async fn cleanup_once(
             writer.as_str(),
             &mut report,
         );
+        session_checkouts::scan_session_checkouts(
+            &session_checkouts::Pass {
+                home: &home,
+                enforcing: !preview,
+                deletable: deletable.as_deref(),
+                target: target.as_ref(),
+                walked_folders: &walked_folders,
+                lock_dir: &state_dir,
+                writer: writer.as_str(),
+            },
+            &mut report,
+        )
+        .await;
         build_caches::scan_build_caches(
             &home,
             !preview,
