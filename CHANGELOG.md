@@ -50,6 +50,18 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado host inventory TARGET` on a Linux host dates a service artefact and its installed
+  program, and its answer parses:** the inventory read both ages with the BSD `stat -f %m` on every
+  kernel; GNU stat read `-f` as file-system status, printed the file system's multi-line status
+  and failed, and that text went unchecked into the report's JSON, so a Linux host with a service
+  artefact answered an inventory no reader could parse. Both ages are now read by the one
+  modification-time reader the reclaim program's second look already used, now a fragment both
+  remote programs splice, in the kernel's own `stat` dialect and kept only when they are an
+  integer; otherwise the epoch is empty and `artefact_epoch_error` or `installed_epoch_error`
+  carries stat's answer, which the fleet shape check's note names. Journey
+  `tests/host_inventory/artefact_epochs.rs`, run on darwin-arm64 and linux-amd64 by the release
+  gate `inventory-artefact-epochs`.
+
 - **`stado space scratch register` refuses an owner PID no process on the host is running, and
   its own:** it refused only a PID below 1, so a tree registered under a PID no process ever had,
   or under the registering command's own, was handed to the janitor at once and removed at its

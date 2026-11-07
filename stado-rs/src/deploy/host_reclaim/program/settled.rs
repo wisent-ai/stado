@@ -3,8 +3,9 @@
 //! newest-of choice every keep-the-newest stage makes, and the queue work
 //! trees' local evidence.
 
-/// `one_line`, `settled`, `mtime_seconds`, `newest_by_age` and
-/// `local_evidence`, the segment after the guards.
+/// `one_line`, `settled`, `newest_by_age` and `local_evidence`, the segment
+/// after the guards and the shared `mtime_seconds`
+/// (`host_inventory/reads/filesystem/mtime.sh`).
 pub(super) const SETTLED: &str = r#"
 # TEXT on one line, so a refusal that carries an answer of the operating
 # system stays one tab-separated record of four fields.
@@ -66,28 +67,6 @@ settled() {
   fi
   printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" 'unheld on this look; the next apply takes it if no process holds it and it is unchanged'
   return 1
-}
-
-# A path's modification time in seconds, asked of the host's own stat and
-# left in $mtime_read. The platform, read once as $platform, decides the
-# spelling: GNU stat reads -f as "the file system", so `stat -f %m PATH`
-# answers several lines about the file system holding PATH. Spelled that way
-# everywhere, the recorded look was that block and the record's first line,
-# read back, never equalled it, so no candidate ever settled on Linux.
-# Anything but one integer, signed for a time before 1970, answers 1 with
-# stat's own answer in $mtime_read.
-mtime_seconds() {
-  if [ "$platform" = Darwin ]; then
-    mtime_read=$(/usr/bin/stat -f %m -- "$1" 2>&1) || return 1
-  else
-    mtime_read=$(/usr/bin/stat -c %Y -- "$1" 2>&1) || return 1
-  fi
-  case "${mtime_read#-}" in
-    '' | *[!0-9]*)
-      mtime_read="stat answered no time: $mtime_read"
-      return 1
-      ;;
-  esac
 }
 
 # The newest of the given entries that PREDICATE accepts, by modification

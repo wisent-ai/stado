@@ -34,6 +34,13 @@ pub struct ServiceArtifact {
     pub artefact_version: String,
     #[serde(default)]
     pub installed_version: String,
+    /// The host's `stat` answer when the artefact's modification time could
+    /// not be read; empty when it was, or from a host before this field.
+    #[serde(default)]
+    pub artefact_epoch_error: String,
+    /// The same, for the installed program's.
+    #[serde(default)]
+    pub installed_epoch_error: String,
 }
 
 impl ServiceArtifact {
@@ -53,6 +60,28 @@ impl ServiceArtifact {
     /// How many seconds older than the installed program this artefact is.
     pub fn seconds_behind_installed(&self) -> Option<i64> {
         Some(Self::epoch(&self.installed_epoch)? - Self::epoch(&self.artefact_epoch)?)
+    }
+
+    /// Which modification times the host could not read, each with the
+    /// file it belongs to and the host's `stat` answer. `None` exactly when
+    /// no read failed: both times were read, or a side was never looked for
+    /// (no installed program of that name).
+    pub fn unread_epoch(&self) -> Option<String> {
+        match (
+            self.artefact_epoch_error.as_str(),
+            self.installed_epoch_error.as_str(),
+        ) {
+            ("", "") => None,
+            (artefact, "") => Some(format!("the artefact's modification time: {artefact}")),
+            ("", installed) => Some(format!(
+                "the installed {}'s modification time: {installed}",
+                self.program
+            )),
+            (artefact, installed) => Some(format!(
+                "the artefact's modification time: {artefact}; the installed {}'s: {installed}",
+                self.program
+            )),
+        }
     }
 }
 

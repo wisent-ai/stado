@@ -2,10 +2,11 @@
 //! script.
 //!
 //! The program is assembled from four ordered segments — the guards every
-//! stage asks, the second look they take before removing anything, the
-//! stages that sweep what this product wrote, and the stages that sweep what
-//! the host can make again — so the concatenation below is the whole program
-//! and its order is the execution order.
+//! stage asks, the second look they take before removing anything (opened by
+//! the modification-time reader the inventory splices too), the stages that
+//! sweep what this product wrote, and the stages that sweep what the host
+//! can make again — so the concatenation below is the whole program and its
+//! order is the execution order.
 
 use std::sync::LazyLock;
 
@@ -56,6 +57,7 @@ static REMOTE_SCRIPT_TEMPLATE: LazyLock<String> = LazyLock::new(|| {
     [
         guards::GUARDS,
         guards::LSOF_HOLDS,
+        include_str!("../../host_inventory/reads/filesystem/mtime.sh"),
         settled::SETTLED,
         product_stages::PRODUCT_STAGES,
         rebuildable_stages::REBUILDABLE_STAGES,

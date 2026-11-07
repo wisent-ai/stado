@@ -21,6 +21,8 @@ if [ -d "$services_root" ]; then
     program_name=""
     resolved_program=""
     installed_epoch=""
+    artefact_epoch_error=""
+    installed_epoch_error=""
     resolved="$link"
     case "$target" in
       /*) resolved="$target" ;;
@@ -33,7 +35,11 @@ if [ -d "$services_root" ]; then
         [ -f "$candidate" ] && [ -x "$candidate" ] || continue
         program_name=${candidate##*/}
         resolved_program="$candidate"
-        artefact_epoch=$(/usr/bin/stat -f %m "$candidate" 2>/dev/null || true)
+        if mtime_seconds "$candidate"; then
+          artefact_epoch=$mtime_read
+        else
+          artefact_epoch_error=$mtime_read
+        fi
         break
       done
     fi
@@ -52,7 +58,11 @@ if [ -d "$services_root" ]; then
         ;;
     esac
     if [ -n "$program_name" ] && [ -f "$HOME/.stado/bin/$program_name" ]; then
-      installed_epoch=$(/usr/bin/stat -f %m "$HOME/.stado/bin/$program_name" 2>/dev/null || true)
+      if mtime_seconds "$HOME/.stado/bin/$program_name"; then
+        installed_epoch=$mtime_read
+      else
+        installed_epoch_error=$mtime_read
+      fi
       case "$program_name" in
         stado|skarbiec-cli|brama)
           installed_version=$("$HOME/.stado/bin/$program_name" --version 2>/dev/null | /usr/bin/head -n 1 || true)
@@ -69,9 +79,14 @@ if [ -d "$services_root" ]; then
     artefact_version_safe=$sanitized
     sanitize "$installed_version"
     installed_version_safe=$sanitized
-    printf '%s{"label":"%s","current_target":"%s","program":"%s","artefact_epoch":"%s","installed_epoch":"%s","artefact_version":"%s","installed_version":"%s"}' \
+    sanitize "$artefact_epoch_error"
+    artefact_epoch_error_safe=$sanitized
+    sanitize "$installed_epoch_error"
+    installed_epoch_error_safe=$sanitized
+    printf '%s{"label":"%s","current_target":"%s","program":"%s","artefact_epoch":"%s","installed_epoch":"%s","artefact_version":"%s","installed_version":"%s","artefact_epoch_error":"%s","installed_epoch_error":"%s"}' \
       "$separator" "$label_safe" "$target_safe" "$program_safe" "$artefact_epoch" "$installed_epoch" \
-      "$artefact_version_safe" "$installed_version_safe"
+      "$artefact_version_safe" "$installed_version_safe" "$artefact_epoch_error_safe" \
+      "$installed_epoch_error_safe"
     separator=,
   done
 fi

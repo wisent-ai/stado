@@ -13,6 +13,8 @@ mod fenced_store;
 mod host_activity;
 #[path = "../host_gates/publication_attempt.rs"]
 mod host_gates_publication_attempt;
+#[path = "../host_inventory/artefact_epochs.rs"]
+mod host_inventory_artefact_epochs;
 #[path = "../host_processes/journey.rs"]
 mod host_processes;
 #[path = "../host_processes/memory.rs"]

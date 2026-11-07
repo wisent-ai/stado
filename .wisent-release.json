@@ -99,6 +99,13 @@
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
             "--test", "scheduler", "--", "host_processes_memory::"
           ]
+        },
+        {
+          "name": "inventory-artefact-epochs",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "scheduler", "--", "host_inventory_artefact_epochs::"
+          ]
         }
       ],
       "stage": {
@@ -172,6 +179,13 @@
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
             "--test", "scheduler", "--", "host_processes_memory::"
+          ]
+        },
+        {
+          "name": "inventory-artefact-epochs",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "scheduler", "--", "host_inventory_artefact_epochs::"
           ]
         }
       ],

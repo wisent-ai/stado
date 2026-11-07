@@ -39,6 +39,7 @@ pub use software::{reported_version, version_verdict, ManagedBinary, Subcommand,
 /// emits them.
 pub const REMOTE_INVENTORY_BODY: &str = concat!(
     include_str!("filesystem/stat.sh"),
+    include_str!("filesystem/mtime.sh"),
     include_str!("software/binaries.sh"),
     include_str!("services/artifacts.sh"),
     include_str!("caches/cargo.sh"),

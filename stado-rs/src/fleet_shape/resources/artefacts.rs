@@ -105,8 +105,15 @@ pub(in crate::fleet_shape) fn service_artefacts(
             Some(_) => compared.push(&artefact.label),
             // No mtime for one side: nothing was proven, and saying so is the
             // difference between "every artefact is current" and "no artefact
-            // was read".
-            None => {}
+            // was read". A time the host could not read says why.
+            None => {
+                if let Some(cause) = artefact.unread_epoch() {
+                    notes.push(format!(
+                        "{}:{}: not compared, because the host could not read {cause}",
+                        target.name, artefact.label
+                    ));
+                }
+            }
         }
     }
     notes.push(format!(
