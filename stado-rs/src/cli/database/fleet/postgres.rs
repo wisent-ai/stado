@@ -59,7 +59,9 @@ pub(super) async fn place(
     let postgres = program("postgres", version)?;
     let address = crate::cli::directory::routable_address(&target).ok_or_else(|| {
         CmdError::click(format!(
-            "{here} declares no routable address (its ssh connection), so no consumer could reach a database placed on it"
+            "{here} declares no SSH destination a resolver answers (a name on Stado's network is carried only by \
+             Stado's node), so no consumer could reach a database placed on it: add one with \
+             `stado registry host path set {here} <path> --ssh <user@address>`"
         ))
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
@@ -140,25 +142,7 @@ pub(super) async fn place(
     owner.store(&unit, "bundle", &fields, &context).await?;
 
     let data_text = data.display().to_string();
-    let args = vec![
-        "-D".to_string(),
-        data_text.clone(),
-        "-p".to_string(),
-        port.to_string(),
-    ];
-    crate::cli::service::lifecycle::deploy::deploy(
-        crate::cli::service::lifecycle::deploy::DeployOptions {
-            name: &unit,
-            host: Some(here),
-            host_heuristic: None,
-            from: Some(postgres.display().to_string()),
-            from_artifact: None,
-            args: &args,
-            launchd_label: None,
-            as_launch_agent: false,
-            as_json: true,
-        },
-    )
+    serve(&unit, here, &postgres, &data, port)
     .await
     .map_err(|error| {
         let handed_note = match handed {
@@ -188,6 +172,39 @@ pub(super) async fn place(
         "item_vault": owner.name(),
         "tls_policy": policy,
     }))
+}
+
+/// Install the managed unit `unit` on `here` that serves the cluster in
+/// `data` on `port` with `postgres`: what `place` installs after the item is
+/// stored, and what `stado database tls reissue` installs for a placement
+/// whose unit is gone while its data and item stand.
+pub(super) async fn serve(
+    unit: &str,
+    here: &str,
+    postgres: &Path,
+    data: &Path,
+    port: u16,
+) -> Result<(), CmdError> {
+    let args = vec![
+        "-D".to_string(),
+        data.display().to_string(),
+        "-p".to_string(),
+        port.to_string(),
+    ];
+    crate::cli::service::lifecycle::deploy::deploy(
+        crate::cli::service::lifecycle::deploy::DeployOptions {
+            name: unit,
+            host: Some(here),
+            host_heuristic: None,
+            from: Some(postgres.display().to_string()),
+            from_artifact: None,
+            args: &args,
+            launchd_label: None,
+            as_launch_agent: false,
+            as_json: true,
+        },
+    )
+    .await
 }
 
 fn run(command: &mut Command, step: &str) -> Result<(), CmdError> {

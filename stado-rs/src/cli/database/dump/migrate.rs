@@ -15,7 +15,10 @@
 //! into the same server instead of placing another, and the command refuses
 //! naming each table. A second run that names another host or port refuses
 //! while that pending server stands, unless `--discard-pending` retires it
-//! first ([`pending`]). The declaration (engine, consumers) never changes: a
+//! first ([`pending`]); a run that reuses it first makes it reachable
+//! (`fleet::reissue::reachable`: an address on Stado's network becomes the
+//! host's resolvable one, a unit gone is installed again). The declaration
+//! (engine, consumers) never changes: a
 //! consumer that opens the database through `stado_database::connect` reads
 //! the new item on its next connection. The source is left as it was;
 //! `stado database destroy` is a separate decision.
@@ -176,7 +179,10 @@ pub(in crate::cli::database) async fn migrate(
     // leaves the pending placement as it stood for the next run.
     let (pending_kept, discarded) = match decision {
         pending::Decision::Place => (None, Value::Null),
-        pending::Decision::Reuse(kept) => (Some(kept), Value::Null),
+        pending::Decision::Reuse(kept) => (
+            Some(super::super::fleet::reissue::reachable(name, &pending, kept, &owner).await?),
+            Value::Null,
+        ),
         pending::Decision::Discard(at) => {
             (None, pending::discard(name, &pending, &at, &owner).await?)
         }
@@ -192,9 +198,9 @@ pub(in crate::cli::database) async fn migrate(
 
     let from_pending = pending_kept.is_some();
     let (placed_on, placement, target_document) = match pending_kept {
-        Some(kept) => (
+        Some((kept, readdressed)) => (
             kept["fields"]["host"].clone(),
-            json!({ "reused": pending }),
+            json!({ "reused": pending, "readdressed": readdressed }),
             kept,
         ),
         None => {

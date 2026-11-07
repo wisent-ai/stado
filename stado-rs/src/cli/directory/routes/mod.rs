@@ -16,16 +16,22 @@ pub(in crate::cli::directory) mod endpoints;
 /// The address a host is reachable at from off-box, taken from its own record.
 ///
 /// `ssh` carries `user@address` for the channel Stado already trusts, so its
-/// address half is the one this fleet has agreed on. A declared hostname is
-/// accepted after it, for hosts reached by name rather than by number.
+/// address half is the one this fleet has agreed on, and the declared
+/// alternates follow it in their order. A destination on Stado's own network
+/// (`<host>.stado.internal`) is passed over: only Stado's node carries it
+/// (`stado network connect`), so a server bound to it, or a program such as
+/// `psql` or a consumer's driver given it, asks the system resolver and is
+/// answered by nothing. `None` when the host declares no other destination.
 pub(crate) fn routable_address(target: &targets::ComputeTarget) -> Option<String> {
-    let (_, ssh) = target.ssh_connections().next()?;
-    // `user@address`, or a bare address when the record names no user.
-    let address = match ssh.rsplit_once('@') {
-        Some((_user, address)) => address.trim(),
-        None => ssh.trim(),
-    };
-    (!address.is_empty()).then(|| address.to_string())
+    target.ssh_connections().find_map(|(_, ssh)| {
+        // `user@address`, or a bare address when the record names no user.
+        let address = match ssh.rsplit_once('@') {
+            Some((_user, address)) => address.trim(),
+            None => ssh.trim(),
+        };
+        let resolvable = !address.is_empty() && crate::network::network_host(address).is_none();
+        resolvable.then(|| address.to_string())
+    })
 }
 
 /// The port the service listens on.

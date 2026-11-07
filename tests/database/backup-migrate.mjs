@@ -7,6 +7,7 @@ import { pinnedGit } from '../native/home.mjs';
 import { fileURLToPath } from 'node:url';
 import { assertKeptCopy } from './kept-copy.mjs';
 import { pendingLeg } from './pending/leg.mjs';
+import { networkLeg } from './pending/network.mjs';
 
 // Real journey of `stado database backup` and `stado database migrate`
 // against a dedicated, already provisioned profile: its home, config, owner
@@ -229,6 +230,8 @@ try {
   assert.deepEqual(counted(item), before, 'The fleet copy must hold every row the source held');
   assert.deepEqual(configuration().database_api.databases[name], declaration, 'The declaration must not change');
   report.migrated = moved;
+  report.readdressed = networkLeg({ run, success, field, put, payloadOf, counted, before, stado, skarbiec, item, name,
+    here: success(run(stado, ['registry', 'self', '--name-only'])) });
 
   refused(run(stado, ['database', 'migrate', name, '--to', 'fleet', '--port', port, '--json']), 'is already a fleet database');
   const restPort = required('STADO_DATABASE_TEST_REST_PORT');

@@ -36,6 +36,21 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A fleet database is placed at an address a resolver answers:** `place` took the host's
+  first SSH destination as its address, and on a host joined to Stado's network that is
+  `<host>.stado.internal`, which only Stado's node carries; `psql`, `pg_restore` and every
+  consumer's driver ask the system resolver, so `migrate` stopped after placing the server
+  (`could not translate host name`). The routable address is now the first declared destination
+  outside Stado's network, refused naming `stado registry host path set` when there is none; the
+  same address is what `stado service directory bind` answers as `bind_address` and lists as
+  `encrypted_peers`, so a host whose only destination is its network name is refused there and
+  left out of its peers' lists. `stado database tls reissue` and a `migrate` run that reuses a
+  pending placement re-address a server placed at a network name (item `address`, `pooler_url`,
+  `session_url`, certificate) and install its unit again when the host no longer manages it;
+  reissue answers its usual fields with a `readdressed` report beside them, whose `stale` rows
+  name the `rest` and `auth` placement commands, with their recorded ports, that move a REST API
+  or sign-in server still at the old name. Journey `tests/database/pending/network.mjs`.
+
 - **The App Store Connect bearer lifetime is read from Apple's stated limit, kept with its
   source:** `stado credentials signing profile ensure --provider apple` signed its bearer for a
   lifetime written into the code as 20 × 60 seconds. The lifetime now comes from the provider
