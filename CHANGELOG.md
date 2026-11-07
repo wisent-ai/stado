@@ -36,6 +36,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado database client` grants a client the addresses its item holds after the database moved onto the fleet:** a consumer on the hosted provider's client library reads `provider`, then a fleet item's `rest_url`, `auth_url` and `realtime_url`, or a hosted item's `url`, with its keys. `client` granted only `rest_url`, `anon_key` and `service_role_key`, so after `stado database migrate` a consumer such as Oko was refused its item's `provider` with Skarbiec's 403 (`consumer not authorized to read item field`) and could not learn that its database had moved. It now grants, by the provider the item records, every one of those fields the item holds, names each missing one with the command that writes it (`rest place`, `auth place`, `adopt`), and refuses an item recording a provider Stado does not know. Journey: `tests/database/client_grant/journey.rs`.
+
 - **A fleet database is placed at an address a resolver answers:** `place` took the host's
   first SSH destination as its address, and on a host joined to Stado's network that is
   `<host>.stado.internal`, which only Stado's node carries; `psql`, `pg_restore` and every

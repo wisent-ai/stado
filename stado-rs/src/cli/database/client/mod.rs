@@ -6,24 +6,29 @@
 //! keeps in `~/.stado/<name>-database-client-skarbiec-token` and every host
 //! running the product holds a copy of. The crate reads `pooler_url` and, for
 //! a server, `ca_certificate`; a Postgres database is opened on its
-//! `session_url`; a consumer on the provider's client library reads
-//! `rest_url` and a key. A field the client may not read answers 403 and the
-//! product cannot start. This widens the client's grant on the vault owner to
-//! exactly those fields, keeping its bearer, so no host's copy has to be
-//! synced again.
+//! `session_url`. A consumer on the hosted provider's client library reads
+//! instead where the provider's services answer and a key: `provider`, then
+//! `url` for a hosted item, or `rest_url`, `auth_url` and `realtime_url` for
+//! an item `stado database migrate` moved onto the fleet, with `anon_key` and
+//! `service_role_key`. A field the client may not read answers 403 and the
+//! product cannot start, so a consumer whose item moved to the fleet would be
+//! refused its new addresses. This widens the client's grant on the vault
+//! owner to exactly those fields, keeping its bearer, so no host's copy has
+//! to be synced again.
 //!
 //! Skarbiec refuses a capability for a field its item does not hold, so the
 //! item is read on the vault owner first and only the fields it holds are
 //! granted. Each field it lacks is reported with what writes it (the REST
-//! API's fields exist once `stado database rest place` ran); an item without
-//! `pooler_url`, which every engine's client reads to connect, is refused by
-//! name beside the vault host that answered, and nothing is granted.
+//! API's fields once `stado database rest place` ran, sign-in's once
+//! `stado database auth place` ran); an item without `pooler_url`, which
+//! every engine's client reads to connect, is refused by name beside the
+//! vault host that answered, and nothing is granted.
 
 use serde_json::{json, Value};
 
 use super::supabase::owner_vault;
 use super::writes::report_mutation;
-use super::CmdError;
+use super::{CmdError, DatabaseProvider};
 
 /// The field every engine's library client reads to connect: an item
 /// without it cannot be opened at all.
@@ -38,15 +43,40 @@ fn connection_fields(engine: &str) -> &'static [&'static str] {
     }
 }
 
-/// The REST API's coordinates a consumer built on the hosted provider's
-/// client library reads instead, which `stado database rest place` writes
-/// onto a Postgres item; no other engine has them.
-fn rest_fields(engine: &str) -> &'static [&'static str] {
-    if engine == "postgres" {
-        &["rest_url", "anon_key", "service_role_key"]
-    } else {
-        &[]
-    }
+/// One field a consumer on the hosted provider's client library reads, and
+/// what writes it when the item does not hold it yet; `None` for a field the
+/// consumer reads only when it is there, so its absence is no gap.
+struct ProviderField {
+    field: &'static str,
+    written_by: Option<&'static str>,
+}
+
+const REST_PLACE: &str = "`stado database rest place {name} --port <port> --key-valid-days <days>`";
+const AUTH_PLACE: &str = "`stado database auth place {name} --port <port> --ready-within <seconds>`";
+const ADOPT: &str = "`stado database adopt {name}`";
+
+/// What a consumer on the hosted provider's client library reads for a
+/// Postgres item, by the provider the item records (`None`: it records none,
+/// so it was written by a hosted provider before the field existed): which
+/// provider serves it, where that provider's services answer and the keys
+/// they take. An external server has none of them; no other engine either.
+fn provider_fields(engine: &str, provider: Option<DatabaseProvider>) -> Vec<ProviderField> {
+    let field = |field, written_by| ProviderField { field, written_by };
+    let addresses = match (engine, provider) {
+        ("postgres", Some(DatabaseProvider::Fleet)) => vec![
+            field("rest_url", Some(REST_PLACE)),
+            field("auth_url", Some(AUTH_PLACE)),
+            field("realtime_url", None),
+        ],
+        ("postgres", Some(DatabaseProvider::Supabase) | None) => vec![field("url", Some(ADOPT))],
+        _ => return Vec::new(),
+    };
+    let keys = [field("anon_key", Some(REST_PLACE)), field("service_role_key", Some(REST_PLACE))];
+    let keys = keys.into_iter().map(|key| match provider {
+        Some(DatabaseProvider::Fleet) => key,
+        _ => ProviderField { written_by: Some(ADOPT), ..key },
+    });
+    std::iter::once(field("provider", None)).chain(addresses).chain(keys).collect()
 }
 
 /// Whether the item's `fields` object holds `field` with a value.
@@ -98,14 +128,17 @@ pub(super) async fn client(name: &str, json_output: bool) -> Result<(), CmdError
             }));
         }
     }
-    for field in rest_fields(engine) {
-        if holds(fields, field) {
-            granted.push(field);
-        } else {
+    let provider = super::dump::migrate::provider(item, fields)?;
+    for wanted in provider_fields(engine, provider) {
+        if holds(fields, wanted.field) {
+            granted.push(wanted.field);
+        } else if let Some(writer) = wanted.written_by {
             not_granted.push(json!({
-                "field": field,
+                "field": wanted.field,
                 "why": format!(
-                    "{item} holds no REST API yet; `stado database rest place {name} --port <port> --key-valid-days <days>` writes it, and running this command again grants it"
+                    "{item} holds no {} yet; {} writes it, and running this command again grants it",
+                    wanted.field,
+                    writer.replace("{name}", name)
                 ),
             }));
         }
