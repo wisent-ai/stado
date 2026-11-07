@@ -35,7 +35,7 @@ use super::janitor::policy::ownership;
 use super::janitor::state::report::{met::Met, CleanupReport};
 use super::margin::Margin;
 use super::rule::read_fleet_volume;
-use super::weles::{dir_size, remove_tree};
+use super::weles::{aside_path, dir_size, remove_tree};
 use super::JanitorError;
 
 /// The name this cleaner's report is filed under.
@@ -107,16 +107,6 @@ pub fn cache_path(home: &Path, cache: &PackageCache) -> PathBuf {
         Some(root) => home.join(root),
         None => cargo_home(home).join("git").join("checkouts"),
     }
-}
-
-/// Where a cache is moved in one rename before it is removed: beside it, so
-/// on the same volume, under a name no tool reads.
-fn aside_path(path: &Path) -> PathBuf {
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    path.with_file_name(format!(".{name}.stado-removing"))
 }
 
 /// Cargo's package-cache lock: free (this pass holds it, or no Cargo made
@@ -283,10 +273,14 @@ pub(in crate::providers::local::space_reclaim) fn scan_package_caches(
         }
         // Read again for this cache alone, just before it goes: a tool
         // started while an earlier cache was removed is seen.
-        let holders = match Holders::read(CLEANER) {
-            Some(holders) => holders,
-            None => {
+        let holders = match Holders::read() {
+            Ok(holders) => holders,
+            Err(cause) => {
                 met.kept("process_table_unread", size);
+                report.add_error(
+                    CLEANER,
+                    &JanitorError::os(&format!("{} is kept: {cause}", path.display())),
+                );
                 continue;
             }
         };

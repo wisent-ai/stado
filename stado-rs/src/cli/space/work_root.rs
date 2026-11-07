@@ -141,16 +141,18 @@ pub async fn dispatch(target: &str, path: Option<&str>, json: bool) -> Result<()
                 "work_root": declared,
                 "jobs": declared.as_deref().map(|root| format!("{root}/{}", work_base::JOBS_LEAF)),
                 "build_cache": declared.as_deref().map(|root| format!("{root}/{}", work_base::BUILD_CACHE_LEAF)),
+                "session_checkouts": declared.as_deref().map(|root| format!("{root}/{}", work_base::SESSION_CHECKOUTS_LEAF)),
             }));
         }
         match declared {
             Some(root) => println!(
-                "{target}: work root {root} (job trees under {root}/{}, build caches under {root}/{})",
+                "{target}: work root {root} (job trees under {root}/{}, build caches under {root}/{}, session checkouts under {root}/{})",
                 work_base::JOBS_LEAF,
-                work_base::BUILD_CACHE_LEAF
+                work_base::BUILD_CACHE_LEAF,
+                work_base::SESSION_CHECKOUTS_LEAF
             ),
             None => println!(
-                "{target}: no work root declared; the agent keeps job trees under ~/{} and build caches under ~/.stado/{}",
+                "{target}: no work root declared; the agent keeps job trees under ~/{} and build caches under ~/.stado/{}, and no omp-session can start there until `stado space root {target} --path <directory>` declares one",
                 crate::providers::local::space_reclaim::queue_workdirs::WORK_ROOT,
                 work_base::BUILD_CACHE_LEAF
             ),

@@ -32,6 +32,7 @@ use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 use crate::providers::local::space_reclaim::janitor::state::report::build::epoch_now;
 use crate::providers::local::space_reclaim::janitor::state::report::CleanupReport;
 use crate::providers::local::space_reclaim::margin::Margin;
+use crate::providers::local::space_reclaim::queue_workdirs::session_checkouts;
 use crate::providers::local::space_reclaim::rule::read_fleet_volume;
 
 /// The shared body of [`run_cleanup_once`] and [`preview_cleanup_once`].
@@ -184,8 +185,10 @@ pub(crate) async fn cleanup_once(
         &mut report,
     );
     if tier_one {
-        // Xcode's per-project build directories, each taken whole unless a
-        // running process holds it.
+        // Xcode's per-project build directories, then the checkouts fleet
+        // sessions are proven to have cloned, each taken whole unless a
+        // running process holds it. The session cleaner asks this host's
+        // queue, when it must, before it takes any lock.
         crate::providers::local::space_reclaim::xcode_derived_data::scan_xcode_derived_data(
             &home,
             !preview,
@@ -194,6 +197,19 @@ pub(crate) async fn cleanup_once(
             writer.as_str(),
             &mut report,
         );
+        session_checkouts::scan_session_checkouts(
+            &session_checkouts::Pass {
+                home: &home,
+                enforcing: !preview,
+                deletable: deletable.as_deref(),
+                target: target.as_ref(),
+                walked_folders: &walked_folders,
+                lock_dir: &state_dir,
+                writer: writer.as_str(),
+            },
+            &mut report,
+        )
+        .await;
         build_caches::scan_build_caches(
             &home,
             !preview,

@@ -70,7 +70,7 @@ mod session;
 
 pub use declaration::{declared_stages, select_stages, StageDeclaration, DECLARATION_PATH};
 pub use outcome::{to_report, Reclamation, Stage};
-pub(crate) use program::guards::LSOF_HOLDS;
+pub(crate) use program::{declared_paths, guards::LSOF_HOLDS};
 pub use session::{reclaim_host, record_audit};
 
 /// The release build scratch tree, relative to the target account's home.

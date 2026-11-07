@@ -105,6 +105,9 @@ pub struct CleanupReport {
     pub registered_scratch: CleanerReport,
     /// Xcode's per-project build directories under DerivedData.
     pub xcode_derived_data: CleanerReport,
+    /// The git checkouts fleet sessions cloned under the home and the work
+    /// root.
+    pub session_checkouts: CleanerReport,
     /// The package managers' download caches, taken only when agent output
     /// left the volume at the rule.
     pub package_caches: CleanerReport,

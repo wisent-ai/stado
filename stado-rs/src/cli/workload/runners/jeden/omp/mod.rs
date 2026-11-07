@@ -6,9 +6,16 @@
 //! and differs in what runs: the harness the kind declares, at the managed
 //! path the fleet delivers it to (`stado workload harness`), signed into the
 //! pool's accounts by Brama's hand-over on that host. The workspace is the
-//! host's one checkout of the repository, cloned from this machine's origin
-//! when the host has none. The session writes its result lines below the
-//! job's output directory, where `stado workload results` reads them.
+//! host's one checkout of the repository below its declared work root
+//! (`<work root>/session-checkouts/<repository>`), cloned from this
+//! machine's origin when the host has none; the session that clones it
+//! writes the clone marker into its `.git`, the proof on which the janitor
+//! takes it back once nothing in it is unpushed. A host that declares no work
+//! root is refused, since the clone and its builds would fill the home
+//! volume whose rule decides whether the host claims work. The session's
+//! Cargo target and temporary directories are in the job's own work tree.
+//! The session writes its result lines below the job's output directory,
+//! where `stado workload results` reads them.
 
 mod command;
 mod context;
@@ -22,12 +29,22 @@ use serde_json::json;
 
 use super::capacity::{admission_refusal, live_capacity};
 use super::detached::{batch_id, run_id, RECORD_SCHEMA_VERSION};
-use super::{candidates, checkout_path, validate_component, CHECKOUT_ROOT, HOME_WORKSPACE};
+use super::{candidates, validate_component, CHECKOUT_ROOT, HOME_WORKSPACE};
 use crate::cli::workload::catalog::WorkloadKind;
 use crate::cli::CmdError;
+use crate::providers::local::work_base;
 use crate::queue::submit::{
     submit_batch, ResolvedHardwareProjection, SubmitOptions, CPU_MACHINE_TYPE,
 };
+
+/// The kind this module starts, as the workload catalog declares it.
+const KIND: &str = "omp-session";
+
+/// The batch every queued `omp-session` carries ([`batch_id`]); the janitor
+/// finds the sessions a host ran, and so the checkouts they cloned, by it.
+pub(crate) fn queued_batch() -> String {
+    batch_id(KIND)
+}
 
 /// Everything one `omp-session` start is asked for.
 pub(crate) struct OmpRequest<'a> {
@@ -119,16 +136,32 @@ pub(crate) async fn start_omp(request: OmpRequest<'_>) -> Result<(), CmdError> {
     let reservation = request.kind.reservation()?;
     let secrets = job_secrets(kind, harness)?;
     let origin = origin(request.workspace).await?;
-    let checkout = checkout_path(request.workspace);
     let capacity = live_capacity().await?;
     let mut refusals = Vec::new();
     for target in candidates(request.target).await? {
+        // The clone, the clones the session adds and its builds go where
+        // the host keeps the fleet's work. Without a declared work root they
+        // would fill the home volume, whose rule decides whether the host
+        // claims work at all.
+        let Some(work_root) = target.work_root.as_deref() else {
+            refusals.push(format!(
+                "{} declares no work root, so the session's clone and builds would land on its \
+                 home volume; declare one on a data volume with `stado space root {} --path \
+                 <directory>`",
+                target.name, target.name
+            ));
+            continue;
+        };
         if let Some(refusal) = admission_refusal(&target, &capacity) {
             refusals.push(refusal);
             continue;
         }
+        let checkouts = format!("{work_root}/{}", work_base::SESSION_CHECKOUTS_LEAF);
+        let checkout = format!("{checkouts}/{}", request.workspace);
         let command = command::session_command(&command::Session {
+            checkouts: &checkouts,
             checkout: &checkout,
+            target: &target.name,
             origin: &origin,
             harness,
             task: request.task,
@@ -180,7 +213,7 @@ pub(crate) async fn start_omp(request: OmpRequest<'_>) -> Result<(), CmdError> {
             "kind": kind,
             "target": target.name,
             "workspace": request.workspace,
-            "cwd": format!("~/{checkout}"),
+            "cwd": checkout,
             "origin": origin,
             "job_id": job.job_id,
             "batch_id": options.batch_id,
@@ -198,7 +231,7 @@ pub(crate) async fn start_omp(request: OmpRequest<'_>) -> Result<(), CmdError> {
             crate::cli::workload::plan::print_json(&record);
         } else {
             println!(
-                "{kind} queued on {} as job {} in ~/{checkout}",
+                "{kind} queued on {} as job {} in {checkout}",
                 target.name, job.job_id
             );
             println!(

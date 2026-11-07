@@ -62,3 +62,23 @@ The version-bump commit moves them with `stado product changelog --version V`;
   library, binaries, tests or examples do not compile for Linux is refused with the compiler's
   report instead of landing. Where the operator's rulings leave test gates out, `stado change
   status` names this gate as left out and the candidate waits for its review round.
+- **The checkouts fleet sessions clone no longer fill a host's home volume, and the janitor takes
+  back only those a session is proven to have cloned:** an `omp-session` cloned its repository
+  into `~/Documents/CodingProjects/Wisent/<repository>` on the host's home volume, whose 80% rule
+  stops the host from claiming work, and no cleaner owned those trees. It now clones into
+  `<work root>/session-checkouts/<repository>` and writes the clone marker
+  `.git/stado-session-clone` naming its job; its `CARGO_TARGET_DIR` and `TMPDIR` are in the job's
+  work tree, its log names where it works, a host that declares no work root is refused naming
+  `stado space root <host> --path <directory>`, and an unwritable session checkouts directory
+  fails the job naming the same verb. The janitor's `session_checkouts` cleaner takes a checkout
+  at the rule only on that proof, or, for a checkout an older release cloned under
+  `~/Documents/CodingProjects` on a host that is not shared, on this host's queue record of the
+  `omp-session` whose command names exactly that checkout and during which its `.git` was made;
+  every other checkout, however clean and pushed, is kept as `not_session_checkout`. A proven
+  checkout is kept while it holds an uncommitted change, no remote, a commit any ref reaches and
+  no remote has (a local tag included), a stash or another worktree (`unpushed_work`, named), while
+  git cannot answer, a process works in it or a service or unit names it; otherwise it is moved
+  aside and removed. `lsof` or `ps` that cannot be read is now named among the errors of every
+  cleaner that reads them. Journeys `tests/space_reclaim/workdirs/session_checkouts.rs`,
+  `tests/space_reclaim/workdirs/session_keeps.rs` and `tests/workload/omp_session_run.rs` (the
+  refusal without a work root and the real worker, on darwin-arm64 and linux-amd64).

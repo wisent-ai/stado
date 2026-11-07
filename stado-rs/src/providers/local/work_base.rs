@@ -30,6 +30,20 @@ pub const JOBS_LEAF: &str = "jobs";
 /// same leaf below `~/.stado` when nothing is declared.
 pub const BUILD_CACHE_LEAF: &str = "build-cache";
 
+/// The session checkouts below a declared work root: one clone per
+/// repository, `<work root>/session-checkouts/<repository>`, that an
+/// `omp-session` works in. The janitor's `session_checkouts` cleaner takes
+/// one the clone marker proves a session cloned, once no session works in it
+/// and nothing in it is unpushed.
+pub const SESSION_CHECKOUTS_LEAF: &str = "session-checkouts";
+
+/// The clone marker: the file an `omp-session` writes into its checkout's
+/// `.git` right after it cloned the repository there, holding the job's id.
+/// It is the proof on which the janitor's `session_checkouts` cleaner takes
+/// a checkout; a checkout without it was not cloned by a session (or by an
+/// older release, whose queue record is then the proof).
+pub const SESSION_CLONE_MARKER: &str = "stado-session-clone";
+
 /// Components of the queue root below an undeclared host's home. Each is
 /// opened separately with `O_DIRECTORY|O_NOFOLLOW`; no component symlink is
 /// supported.

@@ -20,6 +20,8 @@ mod retirement;
 #[path = "guards/rollback_target.rs"]
 mod rollback_target;
 mod scratch;
+#[path = "workdirs/session_checkouts.rs"]
+mod session_checkouts;
 mod source_snapshots;
 mod sourcekit;
 mod space;

@@ -26,11 +26,14 @@
 //! non-following tree deletion, the canonical pass that spends the budget and
 //! writes the report, and the legacy `/tmp` bridge that pass ends with. This
 //! module owns the cleaner's name, the workdir name prefix and the
-//! compatibility root all three share.
+//! compatibility root all three share. `session_checkouts` is the other tree
+//! a fleet job leaves on the work root: the checkout a session cloned, its
+//! own cleaner with its own name and report.
 
 mod inventory;
 mod reclaim;
 mod roots;
+pub mod session_checkouts;
 
 pub use inventory::candidate_job_ids;
 pub use reclaim::pass::scan_queue_workdirs;

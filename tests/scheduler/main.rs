@@ -28,3 +28,5 @@ mod restart;
 #[path = "../schedule_overdue/journey.rs"]
 mod schedule_overdue;
 mod sizing;
+#[path = "../workload/omp_session_run.rs"]
+mod workload_omp_session;
