@@ -379,9 +379,9 @@ async fn collect_document(
             super::privacy::measure(&home, &target),
         );
         // What each process spent since the reading before, so a saturated
-        // host's beacon names its causes; a failed read is published as the
-        // cause instead of an empty list.
-        let processes = match crate::providers::local::host_processes::read_and_compare() {
+        // host's beacon names its causes, judged against `cadence` when the
+        // pass repeats; a failed read is published as its cause.
+        let processes = match crate::providers::local::host_processes::read_and_compare(cadence) {
             Ok(report) => serde_json::to_value(report)?,
             Err(cause) => json!({ "unread": cause }),
         };

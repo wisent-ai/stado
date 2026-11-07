@@ -8,6 +8,7 @@
 //! memory setting.
 
 pub mod constants;
+mod kernel;
 pub mod reading;
 
 use serde_json::{Map, Value};

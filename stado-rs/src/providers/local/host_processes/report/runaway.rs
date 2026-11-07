@@ -12,9 +12,12 @@
 //! The answer names the fewest processes, largest growth first, whose growth
 //! together exhausts the available memory within the horizon: one process
 //! when it does so alone, several when many each grow a little. The horizon
-//! is when the next reading comes: the seconds an operator gives, or else the
-//! interval just measured, which for the beacon pass is its own period since
-//! every pass takes a reading. No rate, size or share is invented here.
+//! is when the next reading comes: the seconds an operator gives, the
+//! beacon's own period for its repeating pass, or else the interval just
+//! measured. The beacon is not judged over its measured interval: the first
+//! pass after a restart or a reboot measures hours, and every process new
+//! since would be judged against hours while the next beacon is one period
+//! away. No rate, size or share is invented here.
 
 use std::time::Duration;
 
@@ -25,18 +28,21 @@ use super::ProcessLoad;
 /// When the next reading is taken, and who said so.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Horizon {
-    /// The interval just measured: the last gap between readings stands for
-    /// the next one, which for the beacon pass is its own period.
+    /// The interval just measured: the last gap between one reader's
+    /// readings stands for the next one (`stado host processes`, a one-off
+    /// `stado host beacon collect`).
     Measured,
     /// The seconds an operator gave (`stado host processes --within`).
     Within(Duration),
+    /// The period the beacon's repeating pass takes its next reading after.
+    BeaconPeriod(Duration),
 }
 
 impl Horizon {
     fn seconds(self, interval: Duration) -> f64 {
         match self {
             Horizon::Measured => interval.as_secs_f64(),
-            Horizon::Within(within) => within.as_secs_f64(),
+            Horizon::Within(within) | Horizon::BeaconPeriod(within) => within.as_secs_f64(),
         }
     }
 
@@ -44,6 +50,7 @@ impl Horizon {
         match self {
             Horizon::Measured => "measured_interval",
             Horizon::Within(_) => "within",
+            Horizon::BeaconPeriod(_) => "beacon_period",
         }
     }
 }

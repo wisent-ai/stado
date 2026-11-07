@@ -212,7 +212,7 @@ struct HostForwardMarker: Decodable, Identifiable, Sendable {
 /// the one `stado host link` prints as `memory:`.
 struct HostMemory: Decodable, Sendable {
     let horizonSeconds: Double
-    /// `measured_interval` or `within`.
+    /// `beacon_period` for a beacon, `measured_interval` or `within` otherwise.
     let horizonSource: String
     /// `nil` with `availableUnread` naming why, and then nothing was judged.
     let availableBytes: Int64?
@@ -232,19 +232,21 @@ struct HostMemory: Decodable, Sendable {
         case exhaustsAvailableInSeconds = "exhausts_available_in_seconds"
     }
 
+    /// Numbers are printed as the JSON carries them (`\(value)`), not by
+    /// locale, so the line reads as `stado host link` prints it.
     var line: String {
-        let horizon = "the next reading in \(horizonSeconds.formatted()) s (\(horizonSource))"
+        let horizon = "the next reading in \(horizonSeconds) s (\(horizonSource))"
         if let availableUnread {
             return "not judged, since the available memory was not read: \(availableUnread)"
         }
         let available = availableBytes.map { "\($0)" } ?? "not reported"
         if !processes.isEmpty {
             let named = processes.map { "pid \($0.pid) (\($0.program))" }.joined(separator: ", ")
-            let seconds = exhaustsAvailableInSeconds.map { $0.formatted() } ?? "not reported"
+            let seconds = exhaustsAvailableInSeconds.map { "\($0)" } ?? "not reported"
             return "RUNAWAY: \(named) use up the \(available) available byte(s) in \(seconds) s at this interval's growth, before \(horizon)"
         }
         if let exhaustsAvailableInSeconds {
-            return "\(available) byte(s) available; all growth of the interval together (\(grownBytes) byte(s)) would use it up in \(exhaustsAvailableInSeconds.formatted()) s, past \(horizon)"
+            return "\(available) byte(s) available; all growth of the interval together (\(grownBytes) byte(s)) would use it up in \(exhaustsAvailableInSeconds) s, past \(horizon)"
         }
         return "\(available) byte(s) available; no process grew in the interval"
     }

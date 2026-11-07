@@ -10,9 +10,11 @@
 //! seconds, CPU seconds of children reaped in between (where the kernel
 //! keeps them), resident memory, and bytes read from and written to storage.
 //!
-//! Nothing here waits. The interval is the time between two readings that
-//! were each taken because something asked: the host's beacon collection,
-//! or an operator's `stado host processes`. The report states that interval
+//! Nothing here waits. The interval is the time between two readings of one
+//! reader, each taken because something asked: the host's beacon pass keeps
+//! its readings, an operator's `stado host processes` (and Stado Desktop's
+//! Processes section, which runs it) keeps its own (`store::Keeper`), so
+//! neither shortens the other's interval. The report states that interval
 //! as measured.
 //!
 //! The reaped-children figure is what names a process that runs many short
@@ -21,9 +23,9 @@
 //! parent reaps it.
 //!
 //! Each process's resident growth between the readings is judged against the
-//! memory the kernel says is still available ([`report::runaway`]): the
-//! report names the processes that, at the rate they grew, leave the host
-//! none before the next reading is taken.
+//! memory the kernel says is still available ([`report::runaway`]), read in
+//! this process like the counters: the report names the processes that, at
+//! the rate they grew, leave the host none before the next reading is taken.
 
 #[cfg(target_os = "macos")]
 mod darwin;
@@ -38,7 +40,7 @@ use darwin as platform;
 use linux as platform;
 
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -126,35 +128,45 @@ pub fn read() -> Result<Reading, String> {
     Ok(reading)
 }
 
-/// Read every process, report it against the reading this host kept last,
-/// and keep this one in its place; judge each process's memory growth
-/// against what the kernel says is available now, the interval just
-/// measured standing for the next one (for the beacon pass, its period).
-pub fn read_and_compare() -> Result<ProcessesReport, String> {
-    read_and_compare_within(Horizon::Measured)
+/// The beacon's reading, every process reported against the reading before
+/// and kept in its place. The repeating health role (`cadence` its period)
+/// keeps the beacon's own reading and judges memory growth against its
+/// period, when its next reading comes. A one-off `stado host beacon collect`
+/// (no cadence) is measured as an operator's run is, from the operator's
+/// reading, so a collection by hand never shortens the beacon's interval.
+pub fn read_and_compare(cadence: Option<Duration>) -> Result<ProcessesReport, String> {
+    match cadence {
+        Some(period) => compare_kept(store::Keeper::Beacon, Horizon::BeaconPeriod(period)),
+        None => compare_kept(store::Keeper::Operator, Horizon::Measured),
+    }
 }
 
-/// [`read_and_compare`] with the next reading `horizon` away.
-///
-/// The first reading a host takes has nothing to be compared with; its
+/// An operator's reading (`stado host processes`): reported against the
+/// operator's reading before, never the beacon's, with the next reading
+/// `horizon` away.
+pub fn read_and_compare_within(horizon: Horizon) -> Result<ProcessesReport, String> {
+    compare_kept(store::Keeper::Operator, horizon)
+}
+
+/// The first reading a keeper takes has nothing to be compared with; its
 /// report says so and lists no load, and the next one is measured from it.
 /// A kept reading whose CPU counters were converted another way, or by a
 /// build that did not say how, is no earlier reading of the same counters:
 /// this one is reported as a first reading naming why, and the next is
 /// measured from it, so no process is taken for new and judged to have
 /// grown by all it holds.
-pub fn read_and_compare_within(horizon: Horizon) -> Result<ProcessesReport, String> {
+fn compare_kept(keeper: store::Keeper, horizon: Horizon) -> Result<ProcessesReport, String> {
     let now = read()?;
-    let previous = store::previous()?;
-    store::keep(&now)?;
+    let previous = store::previous(keeper)?;
+    store::keep(keeper, &now)?;
     match previous {
         Some(previous) if previous.conversion == now.conversion => {
-            let memory = crate::providers::local::host_memory::read_host_memory();
-            let available = memory.available_bytes.ok_or_else(|| {
-                memory.unread.unwrap_or_else(|| {
-                    "the host's memory reading states no available memory and no cause".to_string()
-                })
-            });
+            // Only what a new allocation can obtain is judged against, read
+            // as the capacity publication reads it, by this process: no
+            // other program runs for it.
+            let available =
+                crate::providers::local::host_memory::reading::read_available_and_total()
+                    .map(|(available, _)| available);
             report::compare(&previous, &now, horizon, available)
         }
         Some(previous) => Ok(report::first(&now, Some(not_compared(&previous, &now)))),

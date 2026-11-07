@@ -158,9 +158,13 @@ fn load(pid: i32, now: &Counters, earlier: Option<&Counters>) -> ProcessLoad {
 /// started in the interval, saturated at the bounds of `i64`.
 fn resident_change(now: u64, earlier: Option<&Counters>) -> i64 {
     let before = earlier.map_or(0, |before| before.resident_bytes);
-    let now = i128::from(now);
-    let before = i128::from(before);
-    i64::try_from(now - before).unwrap_or(if now > before { i64::MAX } else { i64::MIN })
+    let change = i128::from(now) - i128::from(before);
+    match i64::try_from(change) {
+        Ok(change) => change,
+        // Past what `i64` holds: the furthest it can say, in the change's direction.
+        Err(_) if change > 0 => i64::MAX,
+        Err(_) => i64::MIN,
+    }
 }
 
 /// Did the process spend nothing and move nothing between the readings?

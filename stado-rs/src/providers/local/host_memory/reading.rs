@@ -1,8 +1,9 @@
 //! What this host has left of its memory, read from its own kernel.
 //!
 //! Two readers, one per platform, and neither of them guesses. macOS answers
-//! through `sysctl` (`hw.memsize`, `kern.memorystatus_level`, `vm.swapusage`)
-//! and `vm_stat`; Linux answers through `/proc/meminfo`. A figure the host did
+//! through its kernel's named integers (`hw.memsize`,
+//! `kern.memorystatus_level`, read in this process by [`super::kernel`]),
+//! `vm.swapusage` and `vm_stat`; Linux answers through `/proc/meminfo`. A figure the host did
 //! not answer is absent, and why is kept in `unread`, never a number nothing
 //! measured.
 //!
@@ -25,6 +26,7 @@
 use std::process::Command;
 
 use super::constants;
+use super::kernel::sysctl;
 
 /// One host's memory state at one instant.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -135,17 +137,6 @@ fn command_stdout(program: &str, args: &[&str]) -> Result<String, String> {
     }
     String::from_utf8(output.stdout)
         .map_err(|error| format!("{shown} printed text that is not UTF-8: {error}"))
-}
-
-/// One integer `sysctl -n` states.
-fn sysctl(name: &str) -> Result<i64, String> {
-    let text = command_stdout("/usr/sbin/sysctl", &["-n", name])?;
-    text.trim().parse::<i64>().map_err(|error| {
-        format!(
-            "sysctl {name} printed {:?}, not an integer: {error}",
-            text.trim()
-        )
-    })
 }
 
 /// The `sysctl` that states, as a whole percentage of physical memory, what

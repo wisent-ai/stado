@@ -197,3 +197,102 @@ fn the_host_process_stays_up_when_its_fleet_store_cannot_be_opened() {
     deployment.report["skipped_beacons"] = json!(skipped);
     deployment.pass();
 }
+
+/// The beacon keeps its own process reading: neither `stado host processes`
+/// nor a one-off `stado host beacon collect` reads or replaces it. The next
+/// beacon judges memory against its one-second period, and `stado host link`
+/// carries that verdict as `memory` and prints a `memory:` line.
+#[test]
+fn the_beacon_keeps_its_own_reading_and_host_link_carries_its_memory_verdict() {
+    let mut deployment = Deployment::start();
+    let host = deployment
+        .cli(&["registry", "self", "--name-only"])
+        .trim()
+        .to_string();
+    let slug = deployment.serve();
+
+    let operator: Value =
+        serde_json::from_str(&deployment.cli(&["host", "processes", &host, "--json"]))
+            .expect("host processes answers JSON");
+    assert_eq!(
+        operator["state"], "first_reading",
+        "an operator's first run is not measured from the beacon's reading: {operator}"
+    );
+    deployment.report["operator_reading"] = operator;
+
+    let operator_kept = deployment.home.join(".stado/state/host-processes.json");
+    let before = fs::read(&operator_kept).expect("the operator's kept reading");
+    let collected: Value = serde_json::from_str(&deployment.cli(&["host", "beacon", "collect"]))
+        .expect("a one-off collect prints its document as JSON");
+    let processes = &collected["processes"];
+    assert_eq!(
+        processes["state"], "compared",
+        "measured from the operator's run: {processes}"
+    );
+    assert_eq!(
+        processes["memory"]["horizon_source"], "measured_interval",
+        "a one-off collect judges over the interval it measured, not a period: {processes}"
+    );
+    assert_ne!(
+        fs::read(&operator_kept).expect("the operator's kept reading"),
+        before,
+        "a one-off collect keeps its reading as the operator's, not the beacon's"
+    );
+    deployment.report["one_off_collect"] = processes.clone();
+
+    assert_eq!(deployment.next_publication(), slug);
+    // The beacon is held still from here, so the one `host link` reads is
+    // the one read below.
+    if let Some(mut child) = deployment.child.take() {
+        child.kill().expect("stop the host process");
+        child.wait().expect("the host process ends");
+    }
+    let path = deployment
+        .store()
+        .join("host_health")
+        .join(format!("{slug}.json"));
+    let beacon: Value = serde_json::from_slice(&fs::read(&path).expect("the stored beacon"))
+        .expect("the stored beacon is JSON");
+    let processes = &beacon["processes"];
+    assert_eq!(
+        processes["state"], "compared",
+        "the second pass is compared with the first, past the operator's run: {processes}"
+    );
+    let memory = &processes["memory"];
+    assert_eq!(memory["horizon_source"], "beacon_period", "{memory}");
+    assert_eq!(
+        memory["horizon_seconds"].as_f64(),
+        Some(1.0),
+        "the beacon's horizon is its declared one-second period: {processes}"
+    );
+    assert!(
+        memory["available_bytes"]
+            .as_i64()
+            .is_some_and(|bytes| bytes > 0),
+        "Stado read the available memory itself: {memory}"
+    );
+    let state = deployment.home.join(".stado").join("state");
+    for kept in ["host-processes.json", "host-processes-beacon.json"] {
+        assert!(
+            state.join(kept).is_file(),
+            "{kept} is kept apart in {}",
+            state.display()
+        );
+    }
+    deployment.report["beacon_processes"] = processes.clone();
+
+    let link: Value = serde_json::from_str(&deployment.cli(&["host", "link", &host, "--json"]))
+        .expect("host link answers JSON");
+    assert_eq!(
+        &link["memory"], memory,
+        "host link carries the stored beacon's verdict: {link}"
+    );
+    let text = deployment.cli(&["host", "link", &host]);
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("memory:") && line.contains("available")),
+        "host link prints the verdict as a memory: line: {text}"
+    );
+    deployment.report["link"] = link;
+    deployment.pass();
+}

@@ -12,7 +12,9 @@ struct HostProcesses: Decodable, Sendable {
         let startedInInterval: Bool
         let cpuSeconds: Double
         let residentBytes: UInt64
-        let residentChangeBytes: Int64
+        /// Absent from a host whose installed Stado predates the field; the
+        /// row then says it is not reported, as the CLI's column does.
+        let residentChangeBytes: Int64?
         let diskWrittenBytes: UInt64?
 
         var id: Int32 { pid }
@@ -137,7 +139,7 @@ struct HostProcessesSection: View {
                 ForEach(report.processes) { load in
                     Text(
                         "pid \(load.pid) · CPU \(load.cpuSeconds.formatted()) s · RSS \(load.residentBytes) B "
-                            + "(\(load.residentChangeBytes >= 0 ? "+" : "")\(load.residentChangeBytes)) · \(load.program)"
+                            + "(\(Self.change(load.residentChangeBytes))) · \(load.program)"
                     )
                     .font(WisentTypeScale.identifier())
                     .textSelection(.enabled)
@@ -148,5 +150,12 @@ struct HostProcessesSection: View {
             }
         }
         .task(id: host) { await store.read(host: host, within: nil) }
+    }
+
+    /// A process's resident change, signed as the CLI prints it, or
+    /// `not reported` from a host whose Stado does not state it.
+    static func change(_ bytes: Int64?) -> String {
+        guard let bytes else { return "not reported" }
+        return bytes >= 0 ? "+\(bytes)" : "\(bytes)"
     }
 }

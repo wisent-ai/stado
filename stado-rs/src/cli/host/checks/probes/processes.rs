@@ -2,7 +2,10 @@
 //! process on TARGET spent since the reading before, read by the host's own
 //! Stado from the kernel (`crate::providers::local::host_processes`), and
 //! which processes grow fast enough to leave it no memory before the next
-//! reading.
+//! reading. The reading before is the one this command or a one-off `stado
+//! host beacon collect` kept last on that host, never the beacon pass's, so
+//! the interval is the time since the later of the two and no run shortens
+//! the beacon's.
 //!
 //! `top` and `ps` are other programs, and an agent session, a sandbox or the
 //! host-exec allowlist can be refused them; this reading needs only the Stado

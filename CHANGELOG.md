@@ -36,6 +36,12 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The beacon's memory verdict is judged against its own period:** it shared one kept reading
+  with `stado host processes` and judged over the interval since, which a run, a restart or a
+  reboot changed; it keeps its own (`beacon_period`), and a one-off `stado host beacon collect`
+  is measured from and replaces the command's. `hw.memsize` and `kern.memorystatus_level` use
+  `sysctlbyname` (swap, `vm_stat` still run); Desktop prints numbers as the CLI, reads old hosts.
+
 - **`stado host processes` on a Mac measures each process from the reading before instead of its
   whole life:** the CPU counters `proc_pid_rusage` returns in Mach units were converted by a ratio
   measured afresh against `getrusage` for every reading; it moved by parts per million between
